@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobMode {
+  auto
+  manual
+}
+
+enum JobStatus {
+  queued
+  running
+  done
+  failed
+}
+
+model Job {
+  id                String    @id @default(uuid())
+  url               String
+  mode              JobMode
+  clipCount         Int
+  targetDurationSec Int
+  ranges            Json?
+  status            JobStatus @default(queued)
+  stage             String?
+  progress          Int       @default(0)
+  message           String?
+  error             String?
+  createdAt         DateTime  @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+
+  clips Clip[]
+
+  @@map("jobs")
+}
+
+model Clip {
+  id           String    @id @default(uuid())
+  jobId        String
+  job          Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  title        String
+  startSec     Float
+  endSec       Float
+  filePath     String
+  downloadedAt DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([jobId])
+  @@map("clips")
+}

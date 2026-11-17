@@ -1,0 +1,254 @@
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnApplicationShutdown,
+  OnModuleInit,
+} from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { JobStatus, Prisma } from '@prisma/client';
+import { Queue, QueueEvents } from 'bullmq';
+import type { JobData, JobProgress, JobResult } from '@clipper/shared';
+import { PrismaService } from '../prisma/prisma.service';
+import { JobEventsService } from './job-events.service';
+import { QUEUE_EVENTS, QUEUE_NAME } from './queue.constants';
+
+/**
+ * Satu-satunya penulis status job selain endpoint create. Setiap update menulis
+ * ke database lalu mem-publish snapshot, jadi kolom DB dan SSE tidak pernah
+ * berbeda.
+ */
+@Injectable()
+export class QueueListener implements OnModuleInit, OnApplicationShutdown {
+  private readonly logger = new Logger(QueueListener.name);
+
+  constructor(
+    @Inject(QUEUE_EVENTS) private readonly events: QueueEvents,
+    @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
+    private readonly prisma: PrismaService,
+    private readonly jobEvents: JobEventsService,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.events.waitUntilReady();
+
+    this.events.on('progress', ({ jobId, data }) => {
+      void this.onProgress(jobId, data).catch((error) =>
+        this.logger.error(`progress ${jobId}: ${errorMessage(error)}`),
+      );
+    });
+
+    this.events.on('completed', ({ jobId, returnvalue }) => {
+      void this.onCompleted(jobId, returnvalue).catch((error) =>
+        this.logger.error(`completed ${jobId}: ${errorMessage(error)}`),
+      );
+    });
+
+    this.events.on('failed', ({ jobId, failedReason }) => {
+      void this.onFailed(jobId, failedReason).catch((error) =>
+        this.logger.error(`failed ${jobId}: ${errorMessage(error)}`),
+      );
+    });
+
+    this.events.on('error', (error) =>
+      this.logger.warn(`queue events: ${errorMessage(error)}`),
+    );
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    await this.events.close();
+    await this.queue.close();
+  }
+
+  private async onProgress(jobId: string, data: unknown): Promise<void> {
+    const progress = parseJobProgress(data);
+    if (!progress) return;
+
+    await this.prisma.job.updateMany({
+      where: { id: jobId, startedAt: null },
+      data: { startedAt: new Date() },
+    });
+
+    await this.prisma.job.updateMany({
+      where: { id: jobId },
+      data: {
+        status: JobStatus.running,
+        stage: progress.stage,
+        progress: Math.min(100, Math.max(0, Math.round(progress.percent))),
+        message: progress.message ?? null,
+      },
+    });
+
+    await this.emit(jobId);
+  }
+
+  private async onCompleted(
+    jobId: string,
+    returnvalue: unknown,
+  ): Promise<void> {
+    let result = parseJobResult(returnvalue);
+
+    if (!result) {
+      const job = await this.queue.getJob(jobId);
+      result = parseJobResult(job?.returnvalue);
+    }
+
+    if (!result) {
+      await this.fail(jobId, 'Worker selesai tanpa hasil clip yang valid.');
+      return;
+    }
+
+    const clips = result.clips.flatMap((clip) => {
+      const filePath = clipFilePath(jobId, clip.file);
+      return filePath
+        ? [{ title: clip.title, startSec: clip.start, endSec: clip.end, filePath }]
+        : [];
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      if (clips.length > 0) {
+        await tx.clip.createMany({ data: clips.map((clip) => ({ ...clip, jobId })) });
+      }
+
+      await tx.job.update({
+        where: { id: jobId },
+        data: {
+          status: JobStatus.done,
+          stage: 'save',
+          progress: 100,
+          message: null,
+          error: null,
+          finishedAt: new Date(),
+        },
+      });
+    });
+
+    await this.emit(jobId);
+    this.jobEvents.close(jobId);
+  }
+
+  private async onFailed(jobId: string, failedReason: string): Promise<void> {
+    await this.fail(jobId, humanizeError(failedReason));
+  }
+
+  private async fail(jobId: string, message: string): Promise<void> {
+    await this.prisma.job.updateMany({
+      where: { id: jobId },
+      data: {
+        status: JobStatus.failed,
+        error: message,
+        finishedAt: new Date(),
+      },
+    });
+
+    await this.emit(jobId);
+    this.jobEvents.close(jobId);
+  }
+
+  private async emit(jobId: string): Promise<void> {
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      include: {
+        clips: {
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            title: true,
+            startSec: true,
+            endSec: true,
+            downloadedAt: true,
+            deletedAt: true,
+          },
+        },
+      },
+    });
+
+    if (!job) return;
+
+    this.jobEvents.publish({
+      id: job.id,
+      url: job.url,
+      mode: job.mode,
+      status: job.status,
+      stage: job.stage,
+      progress: job.progress,
+      message: job.message,
+      error: job.error,
+      clips: job.clips,
+    });
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function parseJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseJobProgress(data: unknown): JobProgress | null {
+  const parsed = parseJson(data);
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const candidate = parsed as Partial<JobProgress>;
+  if (typeof candidate.stage !== 'string') return null;
+  if (typeof candidate.percent !== 'number') return null;
+
+  return {
+    stage: candidate.stage,
+    percent: candidate.percent,
+    message: typeof candidate.message === 'string' ? candidate.message : undefined,
+  };
+}
+
+function parseJobResult(value: unknown): JobResult | null {
+  const parsed = parseJson(value);
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const clips = (parsed as Partial<JobResult>).clips;
+  if (!Array.isArray(clips)) return null;
+
+  const valid = clips.filter(
+    (clip) =>
+      clip &&
+      typeof clip.title === 'string' &&
+      typeof clip.start === 'number' &&
+      typeof clip.end === 'number' &&
+      typeof clip.file === 'string',
+  );
+
+  if (valid.length === 0) return null;
+
+  return { clips: valid };
+}
+
+/** Path disimpan relatif terhadap CLIPS_DIR: <jobId>/<file>. */
+function clipFilePath(jobId: string, file: string): string | null {
+  const relative = file.replace(/^[/\\]+/, '');
+  const normalized = relative.split(/[/\\]+/).filter((part) => part && part !== '.');
+
+  if (normalized.length === 0 || normalized.includes('..')) return null;
+
+  return [jobId, ...normalized].join('/');
+}
+
+/** failedReason BullMQ bisa berupa stack trace atau JSON; ambil bagian yang terbaca. */
+function humanizeError(failedReason: string): string {
+  const parsed = parseJson(failedReason);
+  if (parsed && typeof parsed === 'object' && 'message' in parsed) {
+    const message = (parsed as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim().slice(0, 1000);
+    }
+  }
+
+  const firstLine = failedReason.split('\n')[0]?.trim();
+  return (firstLine || 'Job gagal tanpa alasan yang dilaporkan.').slice(0, 1000);
+}

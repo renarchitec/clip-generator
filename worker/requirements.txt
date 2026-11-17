@@ -1,0 +1,9 @@
+bullmq>=3.0
+openai>=1.30
+yt-dlp>=2024.4.9
+faster-whisper>=1.0
+redis>=5.0
+python-dotenv>=1.0
+
+# dev / test
+pytest>=8.0
