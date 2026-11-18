@@ -12,10 +12,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt /app/requirements.txt
+COPY worker/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY clipper/ /app/clipper/
+COPY worker/clipper/ /app/clipper/
 
 # Model Whisper diunduh ke HF_HOME. Mount volume `whisper-cache` di
 # /root/.cache/huggingface supaya model tidak diunduh ulang tiap deploy.
