@@ -8,6 +8,12 @@ export const QUEUE_EVENTS = 'QUEUE_EVENTS';
 export const QUEUE_NAME = 'clip-jobs';
 
 /**
+ * Antrean terpisah untuk pratinjau momen. Harus sama dengan PREVIEW_QUEUE_NAME
+ * di packages/shared/src/index.ts dan worker/clipper/models.py.
+ */
+export const PREVIEW_QUEUE_NAME = 'previews';
+
+/**
  * Kunci Redis untuk sinyal pembatalan; worker memeriksanya di batas tahap.
  * Harus sama dengan CANCEL_KEY di worker/clipper/models.py.
  */

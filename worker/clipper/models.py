@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
 QUEUE_NAME = "clip-jobs"
+# Antrean pratinjau momen; harus sama dengan PREVIEW_QUEUE_NAME di versi TypeScript.
+PREVIEW_QUEUE_NAME = "previews"
 
 # Kunci Redis sinyal pembatalan; harus sama dengan cancelKey() di
 # apps/api/src/queue/queue.constants.ts.

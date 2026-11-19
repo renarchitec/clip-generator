@@ -5,6 +5,7 @@ import { ClipsModule } from './clips/clips.module';
 import { AppConfigModule } from './config/app-config.module';
 import { validateEnv } from './config/env.validation';
 import { JobsModule } from './jobs/jobs.module';
+import { PreviewsModule } from './previews/previews.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SystemModule } from './system/system.module';
 
@@ -15,6 +16,7 @@ import { SystemModule } from './system/system.module';
     PrismaModule,
     AuthModule,
     JobsModule,
+    PreviewsModule,
     ClipsModule,
     SystemModule,
   ],

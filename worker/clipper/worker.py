@@ -1,4 +1,4 @@
-"""Konsumen BullMQ: satu job = satu video.
+"""Konsumen BullMQ: job render `clip-jobs` dan job pratinjau `previews`.
 
 Kontrak data mengikuti packages/shared/src/index.ts.
 """
@@ -21,6 +21,9 @@ log = logging.getLogger("clipper.worker")
 
 QUEUE_NAME = models.QUEUE_NAME
 CONCURRENCY = 1
+# Antrean preview punya worker sendiri supaya tidak menunggu render.
+PREVIEW_QUEUE_NAME = models.PREVIEW_QUEUE_NAME
+PREVIEW_CONCURRENCY = 2
 
 # Kunci status LLM untuk UI. Harus sama dengan apps/api/src/system/llm-status.constants.ts.
 LLM_STATUS_KEY = "worker:status:llm"
@@ -103,6 +106,25 @@ async def handle_job(job, token: str | None = None, redis_client: redis.Redis | 
         await write_llm_status(redis_client)
 
 
+async def handle_preview_job(job, token: str | None = None, redis_client: redis.Redis | None = None):
+    job_id = getattr(job, "id", None) or getattr(job, "jobId", None) or "preview"
+    log.info("preview job %s mulai", job_id)
+    try:
+        result = await pipeline.run_preview(
+            job.data or {},
+            temp_root=os.getenv("TEMP_ROOT") or None,
+        )
+        log.info(
+            "preview job %s selesai: %s kandidat, %s cue",
+            job_id,
+            len(result.get("candidates") or []),
+            len(result.get("cues") or []),
+        )
+        return result
+    finally:
+        await write_llm_status(redis_client)
+
+
 async def main() -> None:
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
@@ -113,13 +135,25 @@ async def main() -> None:
     async def _handle(job, token: str | None = None):
         return await handle_job(job, token, redis_client=redis_client)
 
-    worker = Worker(
+    async def _handle_preview(job, token: str | None = None):
+        return await handle_preview_job(job, token, redis_client=redis_client)
+
+    render_worker = Worker(
         QUEUE_NAME,
         _handle,
         {
             # decode_responses=True: sama seperti client internal bullmq.
             "connection": redis_client,
             "concurrency": CONCURRENCY,
+        },
+    )
+
+    preview_worker = Worker(
+        PREVIEW_QUEUE_NAME,
+        _handle_preview,
+        {
+            "connection": redis_client,
+            "concurrency": PREVIEW_CONCURRENCY,
         },
     )
 
@@ -144,7 +178,8 @@ async def main() -> None:
             # Windows tidak mendukung add_signal_handler.
             signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
 
-    log.info("worker menunggu job di antrean %s", QUEUE_NAME)
+    log.info("worker menunggu job di antrean %s (concurrency=%s) dan %s (concurrency=%s)",
+             QUEUE_NAME, CONCURRENCY, PREVIEW_QUEUE_NAME, PREVIEW_CONCURRENCY)
     try:
         await stop.wait()
     finally:
@@ -154,7 +189,11 @@ async def main() -> None:
             await status_task
         except asyncio.CancelledError:
             pass
-        await worker.close()
+        await asyncio.gather(
+            render_worker.close(),
+            preview_worker.close(),
+            return_exceptions=True,
+        )
 
 
 if __name__ == "__main__":

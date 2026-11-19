@@ -56,9 +56,11 @@ Kebutuhan utama:
 
 1. **Masuk / Daftar** — buka `clipper.rencraft.site`, daftar akun pertama atau masuk dengan email dan password. Sesi disimpan di cookie `clipper_session` (httpOnly, 30 hari).
 2. **Cek Kesiapan LLM** — dashboard menampilkan indikator status LLM (online/offline, model, keberhasilan panggilan terakhir).
-3. **Buat job** — tempel URL video (YouTube, TikTok, Instagram), tentukan:
-   - Mode: `auto` (LLM memilih momen) atau `manual` (rentang timestamp spesifik).
-   - Parameter auto: jumlah klip (1–10, default 3), durasi target (15–180 detik, default 45), deskripsi/arahan konten singkat (opsional, maks 500 karakter).
+3. **Buat job atau Tinjau Momen** — tempel URL video (YouTube, TikTok, Instagram):
+   - **Mode otomatis langsung:** LLM memilih momen dan worker langsung memproses video sampai render.
+   - **Opsi "Tinjau Momen" (Review Moments):** sistem memindai URL terlebih dahulu (`POST /api/previews`), worker hanya mengunduh subtitle dan memanggil LLM (tanpa unduh video/render). Pengguna melihat daftar kandidat momen LLM dan transkrip penuh (`GET /api/previews/:id`). Pengguna memilih kandidat atau rentang transkrip untuk dijadikan job manual normal (`POST /api/jobs`). Hasil preview otomatis kedaluwarsa setelah 1 jam.
+   - **Mode manual langsung:** pengguna menentukan sendiri rentang waktu `{start, end}`.
+   - Parameter auto: jumlah klip (1–10, default 3 untuk job, default 5 untuk preview), durasi target (15–180 detik, default 45), deskripsi/arahan konten singkat (opsional, maks 500 karakter).
    - Rentang manual: daftar 1–10 rentang waktu `{start, end}` dalam detik.
    - Pilihan reframe: `face_tracking` (default), `blurred_fill`, atau `black_bars`.
    - Opsi takarir (`captions`): aktif (default) atau nonaktif.
@@ -80,6 +82,7 @@ Kebutuhan utama:
 | **P0** | Pembatalan job (`POST /api/jobs/:id/cancel`) dan penghapusan klip (`DELETE /api/clips/:id`) | Selesai |
 | **P0** | Regenerate job via prefill form (`/?from=<jobId>`) | Selesai |
 | **P0** | Indikator status LLM worker (`GET /api/system/llm-status` + Redis heartbeat `worker:status:llm`) | Selesai |
+| **P0** | Tinjau momen sebelum memotong (`POST /api/previews` + `GET /api/previews/:id`: kandidat LLM + transkrip penuh → job manual) | Selesai |
 | **P1** | Retensi otomatis terjadwal via background cron (`downloaded_at` / TTL) | Dalam antrean |
 | **P2** | Auto-posting ke TikTok dan Instagram Graph API | Masa depan |
 
@@ -105,6 +108,7 @@ Kebutuhan utama:
 | FR-2.5 | Pilihan mode reframe: `face_tracking` (default), `black_bars`, `blurred_fill` | Nilai tersimpan di database dan memengaruhi filter ffmpeg |
 | FR-2.6 | Pengaturan takarir (`captions`): boolean (default `true`) | Jika `false`, render klip melewatkan pembakaran subtitle ASS |
 | FR-2.7 | Tombol Buat Ulang (Regenerate) dari halaman detail job | Mengarahkan ke dashboard `/?from=<jobId>` dengan nilai form terisi otomatis dari job lama untuk membuat job baru |
+| FR-2.8 | Opsi "Tinjau Momen" pada mode otomatis: memindai URL untuk mendapatkan kandidat momen LLM dan transkrip penuh sebelum membuat job | `POST /api/previews` mengembalikan `{id}`; `GET /api/previews/:id` menampilkan kandidat `{start,end,title,reason}` dan cue `{start,end,text}`; pengguna memilih kandidat/rentang lalu membuat job manual via `POST /api/jobs`. Preview hanya tersimpan di Redis/BullMQ dan kedaluwarsa setelah 1 jam. Mode otomatis langsung dan mode manual tidak berubah |
 
 ### FR-3 Pemrosesan dan Pipeline Worker (P0)
 
@@ -137,6 +141,8 @@ Database menggunakan PostgreSQL dengan Prisma ORM.
 - **`jobs`** — `id` (UUID), `url`, `description` (opsional), `mode` (`auto` / `manual`), `reframe` (string, default `face_tracking`), `captions` (boolean, default `true`), `clipCount` (int), `targetDurationSec` (int), `ranges` (JSON), `status` (`queued`, `running`, `done`, `failed`, `cancelled`), `stage`, `progress`, `message`, `error`, `userId` (FK ke `users`, set null), `createdAt`, `startedAt`, `finishedAt`.
 - **`clips`** — `id` (UUID), `jobId` (FK ke `jobs`, cascade delete), `title`, `startSec` (float), `endSec` (float), `filePath`, `downloadedAt` (timestamp opsional), `deletedAt` (timestamp opsional), `createdAt`.
 
+Preview momen **tidak** memakai tabel database. Data preview hidup di antrean BullMQ/Redis (`previews`); job preview yang selesai/gagal dibuang otomatis setelah 1 jam.
+
 ## 10. Permukaan API
 
 Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_session` atau header `Authorization: Bearer <token>`.
@@ -153,6 +159,8 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | `/api/jobs/:id` | GET | Mengambil detail job beserta daftar klip miliknya | Sesi (hanya pemilik) |
 | `/api/jobs/:id/cancel` | POST | Membatalkan job yang sedang mengantre atau berjalan | Sesi (hanya pemilik) |
 | `/api/jobs/:id/events` | GET | Aliran Server-Sent Events (SSE) status & progres job | Sesi (hanya pemilik) |
+| `/api/previews` | POST | Memindai URL untuk preview momen: kandidat LLM + transkrip (tanpa render), body `{url, description?, clipCount? (1–10, default 5), targetDurationSec? (15–180, default 45)}` | Sesi |
+| `/api/previews/:id` | GET | Status preview beserta `candidates` dan `cues` bila selesai; 404 bila tidak ada, kedaluwarsa, atau milik pengguna lain | Sesi (hanya pemilik) |
 | `/api/clips/:id/stream` | GET | Streaming video klip (mendukung HTTP Range header) | Sesi (hanya pemilik) |
 | `/api/clips/:id/download` | GET | Mengunduh file video klip dan mencatat `downloadedAt` | Sesi (hanya pemilik) |
 | `/api/clips/:id` | DELETE | Menghapus file fisik klip dari disk dan menghapus baris DB | Sesi (hanya pemilik) |
@@ -160,7 +168,7 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 
 ## 11. Kebutuhan Non-Fungsional
 
-- **Kapasitas:** Satu worker memproses 1 job secara bergantian (concurrency 1) untuk menjaga kestabilan CPU/RAM saat rendering.
+- **Kapasitas:** Worker render memproses 1 job video secara bergantian (concurrency 1) untuk menjaga kestabilan CPU/RAM. Consumer preview berjalan di proses yang sama dengan concurrency 2 karena hanya mengunduh subtitle dan memanggil LLM.
 - **Penyimpanan:** Volume bersama `clips-data` dimount ke `/data/clips` pada kontainer API dan worker. File sementara dalam `temp_root` selalu dibersihkan di blok `finally`.
 - **Keamanan:** Hash password menggunakan `scrypt`. Token sesi berupa string acak `base64url` yang disimpan dalam bentuk hash SHA-256. Semua path file di disk dibentuk dari ID database dan divalidasi tidak keluar dari direktori `CLIPS_DIR`.
 - **UI/UX & Desain:** Antarmuka web modern dibangun dengan TanStack Start, TanStack Query, shadcn/ui, dan Tailwind v4. Mendukung dwibahasa (Inggris sebagai default, Bahasa Indonesia via cookie `clipper_language`), serta tema gelap, terang, dan sistem via cookie `clipper_theme`.
@@ -186,4 +194,5 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | **Reframe** | Metode transformasi video lanskap ke format potret 9:16 (`face_tracking`, `blurred_fill`, `black_bars`) |
 | **Captions** | Takarir kata per kata (gaya karaoke) yang dibakar langsung ke video |
 | **Regenerate** | Mengisi ulang formulir dashboard dengan konfigurasi job sebelumnya untuk membuat job baru |
+| **Preview / Tinjau Momen** | Pindai URL (subtitle + LLM, tanpa render) untuk menampilkan kandidat momen dan transkrip penuh sebelum membuat job manual; kedaluwarsa setelah 1 jam |
 | **Dokploy** | Panel orkestrasi deployment Docker di server VPS |

@@ -11,11 +11,19 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 from . import llm
 from . import reframe as reframe_mod
-from .models import JOB_ID_RE, ClipResult, JobData, JobResult, job_data_from_dict
+from .models import (
+    JOB_ID_RE,
+    MAX_DESCRIPTION_CHARS,
+    ClipResult,
+    JobData,
+    JobParams,
+    JobResult,
+    job_data_from_dict,
+)
 from .subtitles import Cue, Word, clip_words, parse_vtt, write_ass
 
 log = logging.getLogger(__name__)
@@ -461,5 +469,53 @@ async def run_job(
         await save(result, clips_dir, job.job_id, on_progress)
         log.info("job %s selesai, %s clip", job.job_id, len(clips))
         return result
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def run_preview(data: Mapping[str, Any], temp_root: Optional[str] = None) -> Dict[str, Any]:
+    """Pratinjau momen: subtitle + LLM saja, tanpa unduh video dan render.
+
+    Mengembalikan kandidat momen (klien & filter sama seperti mode auto) dan
+    daftar cue terdeduplikasi untuk transkrip penuh di UI.
+    """
+    url = data.get("url")
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("url wajib diisi untuk preview")
+
+    raw_description = data.get("description")
+    description = (
+        str(raw_description).strip()[:MAX_DESCRIPTION_CHARS]
+        if isinstance(raw_description, str) and str(raw_description).strip()
+        else None
+    )
+    params = JobParams.from_dict(data.get("params") or {})
+
+    temp_root = temp_root or os.getenv("TEMP_ROOT") or tempfile.gettempdir()
+    os.makedirs(temp_root, exist_ok=True)
+    workdir = tempfile.mkdtemp(prefix="preview-", dir=temp_root)
+    try:
+        subtitles = await asyncio.to_thread(_fetch_subtitles, url, workdir)
+        if not subtitles:
+            raise RuntimeError(NO_SUBTITLE_ERROR)
+
+        cues = await asyncio.to_thread(_read_vtt, subtitles)
+        if not cues:
+            raise RuntimeError(NO_SUBTITLE_ERROR)
+
+        moments = await asyncio.to_thread(
+            llm.select_moments,
+            cues,
+            params,
+            os.environ,
+            description,
+        )
+        return {
+            "candidates": [moment.to_dict() for moment in moments],
+            "cues": [
+                {"start": round(cue.start, 2), "end": round(cue.end, 2), "text": cue.text}
+                for cue in cues
+            ],
+        }
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

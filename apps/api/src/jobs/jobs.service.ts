@@ -13,12 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
 import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
 import { CreateJobDto } from './dto/create-job.dto';
-const ALLOWED_HOSTS = [
-  'youtube.com',
-  'youtu.be',
-  'tiktok.com',
-  'instagram.com',
-];
+import { assertAllowedUrl, normalizeDescription } from './validation';
 
 @Injectable()
 export class JobsService {
@@ -192,46 +187,6 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
       deletedAt: clip.deletedAt,
     })),
   };
-}
-
-function assertAllowedUrl(raw: string): string {
-  let url: URL;
-
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new BadRequestException(`URL tidak valid: ${raw}`);
-  }
-
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new BadRequestException('URL harus memakai http atau https.');
-  }
-
-  const host = url.hostname.toLowerCase().replace(/^www\./, '');
-  const allowed = ALLOWED_HOSTS.some(
-    (domain) => host === domain || host.endsWith(`.${domain}`),
-  );
-
-  if (!allowed) {
-    throw new BadRequestException(
-      `Host ${host} tidak didukung. Gunakan tautan YouTube, TikTok, atau Instagram.`,
-    );
-  }
-
-  return url.toString();
-}
-
-/** trim + batas 500 karakter; kosong -> null. */
-function normalizeDescription(raw: string | undefined): string | null {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (trimmed.length > 500) {
-    throw new BadRequestException(
-      `description maksimal 500 karakter (diterima ${trimmed.length}).`,
-    );
-  }
-  return trimmed;
 }
 
 function normalizeRanges(dto: CreateJobDto): ManualRange[] {

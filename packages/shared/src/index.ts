@@ -2,6 +2,9 @@
 
 export const QUEUE_NAME = 'clip-jobs';
 
+/** Antrean terpisah untuk pratinjau momen (subtitle + LLM saja, tanpa render). */
+export const PREVIEW_QUEUE_NAME = 'previews';
+
 export const JOB_STAGES = [
   'download',
   'transcribe',
@@ -61,4 +64,41 @@ export interface ClipResult {
 
 export interface JobResult {
   clips: ClipResult[];
+}
+
+export interface PreviewCandidate {
+  start: number;
+  end: number;
+  title: string;
+  reason: string;
+}
+
+export interface PreviewCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export type PreviewStatus = 'queued' | 'running' | 'done' | 'failed';
+
+export interface PreviewJobData {
+  url: string;
+  userId: string;
+  description?: string | null;
+  clipCount: number;
+  targetDurationSec: number;
+}
+
+export interface PreviewJobResult {
+  candidates: PreviewCandidate[];
+  cues: PreviewCue[];
+}
+
+export interface PreviewResponse {
+  id: string;
+  url: string;
+  status: PreviewStatus;
+  error: string | null;
+  candidates: PreviewCandidate[] | null;
+  cues: PreviewCue[] | null;
 }

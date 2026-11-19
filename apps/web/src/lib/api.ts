@@ -1,5 +1,6 @@
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled"
 export type Reframe = "face_tracking" | "blurred_fill" | "black_bars"
+export type JobPreview = { id: string; url: string; status: "queued" | "running" | "done" | "failed"; error: string | null; candidates: { start: number; end: number; title: string; reason: string }[] | null; cues: { start: number; end: number; text: string }[] | null }
 export type Job = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; clipCount: number; targetDurationSec: number; description: string | null; status: JobStatus; stage: "download" | "transcribe" | "select" | "render" | "save" | null; progress: number; message: string | null; error: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null; clipsCount: number }
 export type Clip = { id: string; title: string; startSec: number; endSec: number; downloadedAt: string | null; deletedAt: string | null }
 export type JobSnapshot = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; clipCount?: number; targetDurationSec?: number; ranges?: { start: number; end: number }[] | null; description: string | null; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
