@@ -1,6 +1,15 @@
 import pytest
 
-from clipper.subtitles import Cue, parse_vtt, sanitize, split_long_cues, write_ass
+from clipper.subtitles import (
+    Cue,
+    Word,
+    clip_words,
+    cue_to_words,
+    parse_vtt,
+    sanitize,
+    split_long_cues,
+    write_ass,
+)
 
 SAMPLE_VTT = """WEBVTT
 Kind: captions
@@ -67,7 +76,7 @@ def test_sanitize_strips_tags_and_collapses_whitespace():
     assert sanitize("a &amp; b") == "a & b"
 
 
-def test_write_ass_has_styles_and_centisecond_dialogue():
+def test_write_ass_has_styles_and_karaoke_per_word():
     ass = write_ass([Cue(1.0, 4.25, "Halo dunia")], 1080, 1920, 64, 180)
 
     assert "[Script Info]" in ass
@@ -75,17 +84,22 @@ def test_write_ass_has_styles_and_centisecond_dialogue():
     assert "Style: Default" in ass
     assert "Outline" in ass
     assert "[Events]" in ass
-    assert "Dialogue: 0,0:00:01.00,0:00:04.25,Default,,0,0,0,,Halo dunia" in ass
+    dialogue = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
+    assert len(dialogue) == 1
+    assert "0:00:01.00,0:00:04.25" in dialogue[0]
+    # 3.25 detik dibagi bobot panjang: "Halo" (5/11) ~ 1.48s (148cs), "dunia" (6/11) ~ 1.77s (177cs)
+    assert "{\\k148}Halo" in dialogue[0]
+    assert "{\\k177}dunia" in dialogue[0]
 
 
-def test_write_ass_wraps_long_text_and_escapes_braces():
-    long_text = " ".join(["kata"] * 30)
-    ass = write_ass([Cue(0.0, 2.0, long_text + " {kurung}")], 1080, 1920, 64, 180)
+def test_write_ass_keeps_inline_word_timings_and_escapes_braces():
+    words = [Word(0.0, 0.5, "kata"), Word(0.5, 1.2, "{kurung}")]
+    ass = write_ass([Cue(0.0, 1.2, "kata {kurung}", words=words)], 1080, 1920, 64, 180)
     dialogue = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
 
     assert len(dialogue) == 1
-    assert "\\N" in dialogue[0]
-    assert "\\{kurung}" in dialogue[0]
+    assert "{\\k50}kata" in dialogue[0]
+    assert "{\\k70}\\{kurung}" in dialogue[0]
 
 
 def test_write_ass_skips_invalid_cues():
@@ -107,3 +121,60 @@ def test_split_long_cues_splits_by_duration_and_keeps_words():
 def test_split_long_cues_leaves_short_cue_alone():
     cue = Cue(0.0, 3.0, "halo dunia")
     assert split_long_cues([cue]) == [cue]
+
+
+def test_parse_vtt_word_level_reads_inline_timestamps():
+    vtt = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:03.000\n"
+        "<00:00:01.000><c>halo</c> <00:00:02.000><c>dunia</c>\n"
+    )
+    cues = parse_vtt(vtt, word_level=True)
+
+    assert len(cues) == 1
+    assert cues[0].text == "halo dunia"
+    assert [(w.text, w.start, w.end) for w in cues[0].words] == [
+        ("halo", 1.0, 2.0),
+        ("dunia", 2.0, 3.0),
+    ]
+
+
+def test_parse_vtt_word_level_falls_back_to_plain_cue():
+    cues = parse_vtt("WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nhalo dunia\n", word_level=True)
+
+    assert len(cues) == 1
+    assert cues[0].words == []
+
+
+def test_cue_to_words_splits_duration_weighted_by_length():
+    words = cue_to_words(Cue(0.0, 4.0, "a bbbbbbb"))
+
+    assert len(words) == 2
+    assert [w.text for w in words] == ["a", "bbbbbbb"]
+    # "a" (bobot 2) < "bbbbbbb" (bobot 8)
+    assert words[0].end < 1.5
+    assert words[-1].end == pytest.approx(4.0)
+
+
+def test_parse_vtt_dedupes_rolling_auto_subs():
+    vtt = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:02.000\nhalo semua\n\n"
+        "00:00:02.000 --> 00:00:03.500\nsemua selamat datang\n"
+    )
+    cues = parse_vtt(vtt, word_level=True)
+
+    assert len(cues) == 2
+    assert cues[0].text == "halo semua"
+    # "semua" yang overlap tidak diulang
+    assert cues[1].text == "selamat datang"
+
+
+def test_clip_words_shifts_to_zero_and_drops_out_of_window():
+    cues = [Cue(0.0, 4.0, "satu dua tiga empat")]
+    words = clip_words(cues, 1.0, 3.0)
+
+    assert [(w.text, w.start, w.end) for w in words] == [
+        ("dua", 0.0, 1.0),
+        ("tiga", 1.0, 2.0),
+    ]

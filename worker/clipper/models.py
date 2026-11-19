@@ -19,13 +19,16 @@ CANCEL_KEY = "cancel:{}"
 
 JOB_STAGES = ("download", "transcribe", "select", "render", "save")
 JOB_MODES = ("auto", "manual")
+REFRAME_MODES = ("face_tracking", "black_bars", "blurred_fill")
 
 JobStage = Literal["download", "transcribe", "select", "render", "save"]
 JobMode = Literal["auto", "manual"]
+ReframeMode = Literal["face_tracking", "black_bars", "blurred_fill"]
 
 DEFAULT_CLIP_COUNT = 3
 DEFAULT_TARGET_DURATION_SEC = 45.0
 MAX_DESCRIPTION_CHARS = 500
+DEFAULT_REFRAME = "face_tracking"
 
 # job_id dipakai sebagai nama folder di CLIPS_DIR. Batasi keras supaya nilai
 # dari antrean tidak bisa keluar dari CLIPS_DIR.
@@ -96,6 +99,7 @@ class JobData:
     job_id: str
     url: str
     mode: JobMode = "auto"
+    reframe: ReframeMode = DEFAULT_REFRAME
     description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
@@ -105,6 +109,7 @@ class JobData:
             "jobId": self.job_id,
             "url": self.url,
             "mode": self.mode,
+            "reframe": self.reframe,
             "description": self.description,
             "params": self.params.to_dict(),
             "ranges": [item.to_dict() for item in self.ranges],
@@ -139,10 +144,16 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         else None
     )
 
+    raw_reframe = _first(data, "reframe", default=DEFAULT_REFRAME)
+    reframe = str(raw_reframe).strip().lower()
+    if reframe not in REFRAME_MODES:
+        raise ValueError(f"reframe tidak dikenal: {reframe!r} ({'/'.join(REFRAME_MODES)})")
+
     return JobData(
         job_id=job_id,
         url=url,
         mode=mode,  # type: ignore[arg-type]
+        reframe=reframe,  # type: ignore[arg-type]
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,

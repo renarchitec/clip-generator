@@ -50,6 +50,7 @@ model Job {
   url               String
   description       String?
   mode              JobMode
+  reframe           String    @default("face_tracking")
   clipCount         Int
   targetDurationSec Int
   ranges            Json?

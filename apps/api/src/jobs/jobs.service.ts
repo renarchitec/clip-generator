@@ -8,6 +8,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 import type { JobData, ManualRange } from '@clipper/shared';
+import { DEFAULT_REFRAME } from '@clipper/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
 import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
@@ -32,12 +33,14 @@ export class JobsService {
     const ranges = normalizeRanges(dto);
     const description =
       dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
+    const reframe = dto.reframe ?? DEFAULT_REFRAME;
 
     const job = await this.prisma.job.create({
       data: {
         url,
         description,
         mode: dto.mode,
+        reframe,
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
         ranges: ranges as unknown as Prisma.InputJsonValue,
@@ -49,6 +52,7 @@ export class JobsService {
       jobId: job.id,
       url,
       mode: dto.mode,
+      reframe,
       description,
       params: {
         clipCount: dto.clipCount,
@@ -166,6 +170,7 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
     url: job.url,
     description: job.description ?? null,
     mode: job.mode,
+    reframe: job.reframe,
     status: job.status,
     stage: job.stage,
     progress: job.progress,

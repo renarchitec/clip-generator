@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Union
 
 from . import llm
+from . import reframe as reframe_mod
 from .models import JOB_ID_RE, ClipResult, JobData, JobResult, job_data_from_dict
-from .subtitles import Cue, parse_vtt, sanitize, split_long_cues, write_ass
+from .subtitles import Cue, Word, clip_words, parse_vtt, write_ass
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ MARGIN_V = 180
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 DEFAULT_MIN_FREE_GB = 5.0
+NO_SUBTITLE_ERROR = "Subtitle YouTube tidak tersedia untuk video ini."
 
 
 async def _emit(on_progress, stage: str, percent: float, message: str = "") -> None:
@@ -99,13 +101,10 @@ def _find_subtitles(workdir: str) -> Optional[str]:
     return files[0]
 
 
-def _fetch_subtitles_best_effort(url: str, workdir: str) -> None:
-    """Subtitle best-effort: YouTube rate-limit (429) tidak boleh batalkan job."""
-    cmd = [
-        "yt-dlp",
-        "--skip-download",
-        "--write-subs",
-        "--write-auto-subs",
+def _subtitle_cmd(url: str, workdir: str, auto: bool) -> List[str]:
+    cmd = ["yt-dlp", "--skip-download"]
+    cmd.append("--write-auto-subs" if auto else "--write-subs")
+    cmd += [
         "--extractor-args",
         "youtube:skip=translated_subs",
         "--sub-langs",
@@ -120,18 +119,27 @@ def _fetch_subtitles_best_effort(url: str, workdir: str) -> None:
         os.path.join(workdir, "source.%(ext)s"),
         url,
     ]
-    try:
-        _run(cmd)
-    except Exception as exc:
-        log.warning("gagal unduh subtitle yt-dlp (lanjut fallback Whisper): %s", exc)
+    return cmd
+
+
+def _fetch_subtitles(url: str, workdir: str) -> Optional[str]:
+    """Subtitle asli YouTube: manual didahulukan, auto hanya bila manual kosong."""
+    for auto in (False, True):
+        try:
+            _run(_subtitle_cmd(url, workdir, auto))
+        except Exception as exc:
+            log.warning("gagal unduh subtitle %s: %s", "auto" if auto else "manual", exc)
+        found = _find_subtitles(workdir)
+        if found:
+            return found
+    return None
 
 
 async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
-    """yt-dlp: mp4 terbaik; subtitle via best-effort terpisah (fallback ke Whisper)."""
+    """yt-dlp: mp4 terbaik + subtitle asli; tanpa subtitle job gagal."""
     os.makedirs(workdir, exist_ok=True)
     await _emit(on_progress, "download", 0, "mengunduh video")
 
-    # 1. Download video murni — kebal dari subtitle 429
     cmd = [
         "yt-dlp",
         "-f",
@@ -151,57 +159,31 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     if not video:
         raise RuntimeError("yt-dlp selesai tanpa menghasilkan file video")
 
-    # 2. Coba ambil subtitle (best-effort); gagal = fallback Whisper di transcribe()
-    await asyncio.to_thread(_fetch_subtitles_best_effort, job.url, workdir)
+    subtitles = await asyncio.to_thread(_fetch_subtitles, job.url, workdir)
+    if not subtitles:
+        raise RuntimeError(NO_SUBTITLE_ERROR)
 
-    subtitles = _find_subtitles(workdir)
     await _emit(on_progress, "download", 100, "video siap diunduh")
     return Downloaded(video=video, subtitles=subtitles)
 
 
 def _read_vtt(path: str) -> List[Cue]:
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        return parse_vtt(handle.read())
-
-
-def _whisper_cues(video_path: str) -> List[Cue]:
-    from faster_whisper import WhisperModel  # impor lambat: model besar, hanya saat perlu
-
-    model_name = os.getenv("WHISPER_MODEL", "small")
-    model = WhisperModel(
-        model_name,
-        device=os.getenv("WHISPER_DEVICE", "cpu"),
-        compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
-    )
-    segments, _info = model.transcribe(video_path, language="id", vad_filter=True)
-
-    cues: List[Cue] = []
-    for segment in segments:
-        text = sanitize(getattr(segment, "text", "") or "")
-        start = float(getattr(segment, "start", 0.0) or 0.0)
-        end = float(getattr(segment, "end", 0.0) or 0.0)
-        if text and end > start:
-            cues.append(Cue(start=start, end=end, text=text))
-
-    if not cues:
-        raise RuntimeError("Whisper tidak menghasilkan transkrip")
-    return cues
+        return parse_vtt(handle.read(), word_level=True)
 
 
 async def transcribe(video: str, subtitles: Optional[str], on_progress=None) -> List[Cue]:
-    """Pakai subtitle hasil download bila ada, selain itu Whisper bahasa Indonesia."""
+    """Caption selalu dari subtitle asli YouTube; tanpa subtitle = job gagal."""
     await _emit(on_progress, "transcribe", 0, "menyiapkan transkrip")
 
-    if subtitles and os.path.exists(subtitles):
-        cues = await asyncio.to_thread(_read_vtt, subtitles)
-        if cues:
-            await _emit(on_progress, "transcribe", 100, f"{len(cues)} cue dari subtitle")
-            return cues
-        log.warning("subtitle %s kosong setelah parse, jatuh ke Whisper", subtitles)
+    if not subtitles or not os.path.exists(subtitles):
+        raise RuntimeError(NO_SUBTITLE_ERROR)
 
-    await _emit(on_progress, "transcribe", 10, "menjalankan Whisper (bisa lama)")
-    cues = await asyncio.to_thread(_whisper_cues, video)
-    await _emit(on_progress, "transcribe", 100, f"{len(cues)} cue dari Whisper")
+    cues = await asyncio.to_thread(_read_vtt, subtitles)
+    if not cues:
+        raise RuntimeError(NO_SUBTITLE_ERROR)
+
+    await _emit(on_progress, "transcribe", 100, f"{len(cues)} cue dari subtitle")
     return cues
 
 
@@ -252,7 +234,7 @@ def _ffmpeg_filter_path(path: str) -> str:
 
 
 def _clip_cues(cues: Sequence[Cue], start: float, end: float) -> List[Cue]:
-    """Ambil cue di dalam jendela clip, geser waktunya ke 0."""
+    """Ambil cue di dalam jendela clip, geser waktunya ke 0 (termasuk kata)."""
     limit = end - start
     relative: List[Cue] = []
     for cue in cues:
@@ -262,20 +244,61 @@ def _clip_cues(cues: Sequence[Cue], start: float, end: float) -> List[Cue]:
         cue_end = min(limit, cue.end - start)
         if cue_end <= cue_start:
             continue
-        relative.append(Cue(start=cue_start, end=cue_end, text=cue.text))
-    return split_long_cues(relative)
+        words: List[Word] = []
+        for word in cue.words:
+            word_start = max(0.0, word.start - start)
+            word_end = min(limit, word.end - start)
+            if word_end > word_start:
+                words.append(Word(start=word_start, end=word_end, text=word.text))
+        relative.append(Cue(start=cue_start, end=cue_end, text=cue.text, words=words))
+    return relative
 
 
-def _render_one(video: str, moment: llm.Moment, cues: Sequence[Cue], outdir: str, filename: str) -> None:
+def _reframe_filters(reframe: str, video: str, moment: llm.Moment) -> List[str]:
+    """Bangun filter video portrait 1080x1920 sesuai mode.
+
+    Mode centered (black_bars, blurred_fill) lewat tanpa deteksi frame.
+    face_tracking memanggil MediaPipe; dep hilang -> raise RuntimeError.
+    """
+    if reframe == "black_bars":
+        return [
+            f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease",
+            f"pad={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black",
+            "setsar=1",
+        ]
+    if reframe == "blurred_fill":
+        return [
+            (
+                f"split=2[fg][bg];"
+                f"[bg]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
+                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},"
+                f"boxblur=luma_radius=min(h\\,w)/10:luma_power=2[blurred];"
+                f"[fg]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease[sharp];"
+                f"[blurred][sharp]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2"
+            ),
+            "setsar=1",
+        ]
+
+    # Default / fallback eksplisit: face_tracking (deteksi per sampel proxy)
+    samples = reframe_mod.face_track_samples(video, moment.start, moment.end)
+    if samples:
+        return [reframe_mod.panning_crop_filter(samples), "setsar=1"]
+    return [reframe_mod.portrait_crop_filter(0.5), "setsar=1"]
+
+
+def _render_one(
+    video: str,
+    moment: llm.Moment,
+    cues: Sequence[Cue],
+    outdir: str,
+    filename: str,
+    reframe: str = "face_tracking",
+) -> None:
     out_path = os.path.join(outdir, filename)
     ass_path = os.path.join(outdir, os.path.splitext(filename)[0] + ".ass")
     clip_cues = _clip_cues(cues, moment.start, moment.end)
 
-    filters = [
-        f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase",
-        f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}",
-        "setsar=1",
-    ]
+    filters = _reframe_filters(reframe, video, moment)
     if clip_cues:
         with open(ass_path, "w", encoding="utf-8") as handle:
             handle.write(write_ass(clip_cues, VIDEO_WIDTH, VIDEO_HEIGHT, FONT_SIZE, MARGIN_V))
@@ -343,7 +366,7 @@ async def render(
     for index, moment in enumerate(moments, start=1):
         await _check_cancel(should_cancel)  # berhenti di antara clip, bukan di tengah ffmpeg
         filename = f"clip-{index:02d}.mp4"
-        await asyncio.to_thread(_render_one, video, moment, subs, outdir, filename)
+        await asyncio.to_thread(_render_one, video, moment, subs, outdir, filename, job.reframe)
         clips.append(
             ClipResult(
                 title=moment.title,

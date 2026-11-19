@@ -6,6 +6,7 @@ export interface JobSnapshot {
   url: string;
   description: string | null;
   mode: string;
+  reframe: string;
   status: string;
   stage: string | null;
   progress: number;

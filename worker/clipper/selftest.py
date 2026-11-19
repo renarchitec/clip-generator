@@ -15,7 +15,13 @@ import sys
 from typing import List, Optional
 
 from . import pipeline
-from .models import JobData, JobParams, ManualRange
+from .models import (
+    DEFAULT_REFRAME,
+    REFRAME_MODES,
+    JobData,
+    JobParams,
+    ManualRange,
+)
 
 
 def parse_ranges(raw: Optional[str]) -> List[ManualRange]:
@@ -44,6 +50,7 @@ def build_job(args: argparse.Namespace) -> JobData:
         job_id=args.job_id,
         url=args.url,
         mode=args.mode,
+        reframe=args.reframe,
         params=JobParams(clip_count=args.clips, target_duration_sec=args.duration),
         ranges=parse_ranges(args.ranges),
     )
@@ -75,6 +82,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--clips", type=int, default=3, help="jumlah clip mode auto")
     parser.add_argument("--duration", type=float, default=60.0, help="target durasi detik")
     parser.add_argument("--job-id", default="selftest")
+    parser.add_argument(
+        "--reframe",
+        choices=REFRAME_MODES,
+        default=DEFAULT_REFRAME,
+        help="cara mengubah video jadi portrait",
+    )
     parser.add_argument("--clips-dir", default=None, help="default CLIPS_DIR atau ./clips")
     parser.add_argument("--temp-root", default=None)
     args = parser.parse_args(argv)

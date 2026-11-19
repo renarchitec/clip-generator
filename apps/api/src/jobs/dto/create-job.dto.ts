@@ -11,7 +11,8 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import type { JobMode } from '@clipper/shared';
+import type { JobMode, ReframeMode } from '@clipper/shared';
+import { DEFAULT_REFRAME, REFRAME_MODES } from '@clipper/shared';
 
 export class ManualRangeDto {
   @IsNumber()
@@ -53,4 +54,9 @@ export class CreateJobDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  /** Cara mengubah video landscape jadi portrait; default face_tracking. */
+  @IsOptional()
+  @IsIn(REFRAME_MODES)
+  reframe: ReframeMode = DEFAULT_REFRAME;
 }

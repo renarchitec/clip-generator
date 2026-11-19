@@ -1,9 +1,10 @@
 bullmq>=3.0
 openai>=1.30
 yt-dlp>=2024.4.9
-faster-whisper>=1.0
 redis>=5.0
 python-dotenv>=1.0
+mediapipe>=0.10.14
+opencv-python-headless>=4.9.0.80
 
 # dev / test
 pytest>=8.0

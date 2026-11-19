@@ -14,6 +14,10 @@ export type JobStage = (typeof JOB_STAGES)[number];
 export type JobMode = 'auto' | 'manual';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
+export const REFRAME_MODES = ['face_tracking', 'black_bars', 'blurred_fill'] as const;
+export type ReframeMode = (typeof REFRAME_MODES)[number];
+export const DEFAULT_REFRAME: ReframeMode = 'face_tracking';
+
 export interface ManualRange {
   /** detik */
   start: number;
@@ -30,6 +34,7 @@ export interface JobData {
   jobId: string;
   url: string;
   mode: JobMode;
+  reframe: ReframeMode;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
   description?: string | null;
   params: JobParams;
