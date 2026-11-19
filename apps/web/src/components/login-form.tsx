@@ -1,5 +1,5 @@
 import { LoaderCircle } from "lucide-react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"

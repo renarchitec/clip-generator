@@ -1,21 +1,21 @@
-# TanStack Start + shadcn/ui
+# web — TanStack Start + shadcn/ui
 
-This is a template for a new TanStack Start project with React, TypeScript, and shadcn/ui.
+Dashboard for Clipper. Proxies `/api/*` to the NestJS API via `API_INTERNAL_URL`.
 
-## Adding components
-
-To add components to your app, run the following command:
+## Run
 
 ```bash
-npx shadcn@latest add button
+pnpm install          # from repo root
+pnpm --filter web dev # dev server on :3000
+pnpm --filter web build
+pnpm --filter web start
 ```
 
-This will place the ui components in the `components` directory.
+`start` serves the production build (`dist/`) with srvx: all requests hit the SSR entry, `dist/client` is served as static assets. Listens on all interfaces, port from `PORT` (default 3000).
 
-## Using components
+## Environment
 
-To use the components in your app, import them as follows:
+- `API_INTERNAL_URL` — internal base URL of the API (default `http://localhost:3000`), used server-side to proxy `/api/*` and resolve `/api/auth/me`.
+- `PORT` — port for `start`.
 
-```tsx
-import { Button } from "@/components/ui/button";
-```
+See repo root `.env.example`.
