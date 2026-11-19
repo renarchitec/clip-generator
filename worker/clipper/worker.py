@@ -132,6 +132,18 @@ async def main() -> None:
 
     redis_client = redis.from_url(redis_url, decode_responses=True)
 
+    # BullMQ Worker.run() mati permanen kalau Redis belum siap saat start,
+    # sementara proses tetap hidup. Tunggu Redis dulu sebelum membuat consumer.
+    for attempt in range(1, 61):
+        try:
+            await redis_client.ping()
+            break
+        except Exception as exc:  # noqa: BLE001
+            log.warning("redis belum siap (percobaan %s): %s", attempt, exc)
+            await asyncio.sleep(5)
+    else:
+        raise SystemExit("redis tidak bisa dihubungi, keluar agar container di-restart")
+
     async def _handle(job, token: str | None = None):
         return await handle_job(job, token, redis_client=redis_client)
 

@@ -177,7 +177,7 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 ## 11. Kebutuhan Non-Fungsional
 
 - **Kapasitas:** Worker render memproses 1 job video secara bergantian (concurrency 1) untuk menjaga kestabilan CPU/RAM. Consumer preview berjalan di proses yang sama dengan concurrency 2 karena hanya mengunduh subtitle dan memanggil LLM.
-- **Penyimpanan:** Volume bersama `clips-data` dimount ke `/data/clips` pada kontainer API dan worker. File sementara dalam `temp_root` selalu dibersihkan di blok `finally`.
+- **Penyimpanan:** Bind mount bersama `/srv/storage/clips` ke `/data/clips` pada kontainer API dan worker. File sementara dalam `temp_root` selalu dibersihkan di blok `finally`.
 - **Keamanan:** Hash password menggunakan `scrypt`. Token sesi berupa string acak `base64url` yang disimpan dalam bentuk hash SHA-256. Semua path file di disk dibentuk dari ID database dan divalidasi tidak keluar dari direktori `CLIPS_DIR`.
 - **UI/UX & Desain:** Antarmuka web modern dibangun dengan TanStack Start, TanStack Query, shadcn/ui, dan Tailwind v4. Mendukung dwibahasa (Inggris sebagai default, Bahasa Indonesia via cookie `clipper_language`), serta tema gelap, terang, dan sistem via cookie `clipper_theme`.
 - **Jaringan & Proksi:** Aplikasi web bertindak sebagai reverse proxy yang meneruskan permintaan `/api/*` ke `API_INTERNAL_URL`, menjaga cookie tetap berada di domain origin yang sama.

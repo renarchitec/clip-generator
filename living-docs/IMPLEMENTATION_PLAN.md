@@ -11,9 +11,9 @@ Platform dibangun dalam monorepo yang memisahkan aplikasi API, web front-end, pa
 | Web | TanStack Start + TanStack Query + shadcn/ui + Tailwind v4 | SSR + SPA type-safe, styling atomic responsif, caching query, i18n (EN/ID), serta dark/light theme |
 | Web Server | srvx production server | Server runtime produksi performan untuk TanStack Start SSR |
 | Worker | Python 3.12 + BullMQ (`bullmq` Python) + asyncio | Menjalankan pipeline video berat secara asynchronous tanpa memblokir event loop |
-| Antrean | Redis di Dokploy | Broker antrean BullMQ (`clip-jobs` dan `previews`), penyimpanan sinyal pembatalan, dan heartbeat status LLM |
+| Antrean | Redis di Dokploy | Broker antrean BullMQ (`clip-jobs` dan `previews`), penyimpanan sinyal pembatalan, dan heartbeat status LLM. Worker menunggu Redis siap (ping, maks ~5 menit) sebelum membuat consumer; kalau gagal, proses keluar agar container di-restart |
 | Database | PostgreSQL di Dokploy | Penyimpanan relasional pengguna, sesi, metadata job, dan klip |
-| Penyimpanan | Docker volume `clips-data` (`/data/clips`) | Di-mounted bersama ke API dan worker pada direktori yang sama |
+| Penyimpanan | Bind mount host `/srv/storage/clips` → `/data/clips` | Disk tambahan VPS, di-mount bersama ke API dan worker pada direktori yang sama |
 | Auth | Multi-user via database (`users` + `sessions`), scrypt, opaque session token | Keamanan cookie `clipper_session` (httpOnly, 30 hari), bearer token, isolasi per akun, klaim legacy jobs otomatis |
 
 ## Struktur repo
@@ -178,9 +178,9 @@ Seluruh aplikasi di-deploy pada VPS tunggal di bawah project Dokploy `clipper`.
 
 | Service | Tipe | Image / Build | Volume Mount | Domain / Routing | Catatan |
 | --- | --- | --- | --- | --- | --- |
-| `clipper-api` | Application | Dockerfile `apps/api` | `clips-data` → `/data/clips` | `https://api-clipper.rencraft.site` | Menjalankan `prisma migrate deploy` saat boot |
+| `clipper-api` | Application | Dockerfile `apps/api` | Bind `/srv/storage/clips` → `/data/clips` | `https://api-clipper.rencraft.site` | Menjalankan `prisma migrate deploy` saat boot |
 | `clipper-web` | Application | Dockerfile `apps/web` | — | `https://clipper.rencraft.site` | Server srvx TanStack Start, reverse proxy `/api/*` |
-| `clipper-worker` | Application | Dockerfile `worker` | `clips-data` → `/data/clips` | Tanpa domain eksternal | Python 3.12, mediapipe, ffmpeg; render concurrency 1, preview concurrency 2 |
+| `clipper-worker` | Application | Dockerfile `worker` | Bind `/srv/storage/clips` → `/data/clips` | Tanpa domain eksternal | Python 3.12, mediapipe, ffmpeg; render concurrency 1, preview concurrency 2 |
 | Postgres | Database | PostgreSQL Dokploy | Volume internal | Internal | Database relasional untuk API |
 | Redis | Database | Redis Dokploy | Volume internal | Internal | Broker BullMQ (`clip-jobs`, `previews`), cancel keys, LLM heartbeat |
 
