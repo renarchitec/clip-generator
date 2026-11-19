@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, Link, redirect, useNavigate, useSearch } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowDownRight, ArrowUpRight, Check, Clock3, LoaderCircle, Play, Plus, Scissors, Sparkles, X } from "lucide-react"
 import { useEffect, useState } from "react"
@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, type Job, type User } from "@/lib/api"
+import { api, type Job, type JobSnapshot, type User } from "@/lib/api"
 import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
@@ -23,6 +23,7 @@ export const Route = createFileRoute("/")({
     if (!user) throw redirect({ to: "/login" })
     return { user }
   },
+  validateSearch: (search: Record<string, unknown>): { from?: string } => (typeof search.from === "string" ? { from: search.from } : {}),
   component: Dashboard,
 })
 
@@ -43,6 +44,20 @@ function Dashboard() {
   const [description, setDescription] = useState("")
   const [ranges, setRanges] = useState<ClipRange[]>([{ start: "", end: "" }])
   const [error, setError] = useState("")
+  const { from } = useSearch({ from: "/" })
+  const source = useQuery({ queryKey: ["jobs", from], queryFn: () => api<JobSnapshot>(`/jobs/${from}`), enabled: !!from })
+  useEffect(() => {
+    const job = source.data
+    if (!job) return
+    setUrl(job.url)
+    setMode(job.mode === "manual" ? "manual" : "auto")
+    setReframe(job.reframe)
+    setCaptions(job.captions)
+    if (job.clipCount) setClipCount(job.clipCount)
+    if (job.targetDurationSec) setDuration(job.targetDurationSec)
+    setDescription(job.description ?? "")
+    if (job.ranges?.length) setRanges(job.ranges.map(({ start, end }) => ({ start: String(start), end: String(end) })))
+  }, [source.data])
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: () => api<Job[]>("/jobs"), refetchInterval: 5000 })
   const hasTerminalJob = jobs.data?.some((job) => ["done", "failed", "cancelled"].includes(job.status)) ?? false
   useEffect(() => { if (hasTerminalJob) void client.invalidateQueries({ queryKey: ["system", "llm-status"] }) }, [hasTerminalJob, client])

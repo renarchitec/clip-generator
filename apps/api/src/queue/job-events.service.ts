@@ -8,6 +8,9 @@ export interface JobSnapshot {
   mode: string;
   reframe: string;
   captions: boolean;
+  clipCount?: number;
+  targetDurationSec?: number;
+  ranges?: unknown;
   status: string;
   stage: string | null;
   progress: number;
