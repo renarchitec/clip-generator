@@ -78,7 +78,7 @@ function ReviewPanel({ preview, loading, error, t, selectedCandidates, setSelect
     <h2 id="review-heading" className="font-display text-xl font-medium">{t.reviewMoments}</h2>
     {loading && <div role="status" className="flex items-center gap-3 rounded-lg bg-card p-4 text-sm"><LoaderCircle className="size-4 animate-spin text-primary" />{t.scanningMoments}</div>}
     {error && <Alert variant="destructive"><AlertDescription>{error} <Button type="button" size="sm" variant="ghost" onClick={retry}>{t.retry}</Button></AlertDescription></Alert>}
-    {preview?.status === "done" && <>
+    {preview?.status === "done" && <><div className="flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{t.reviewReady}</p><Button type="button" size="sm" variant="outline" onClick={retry} disabled={loading}>{t.reviewAgain}</Button></div>
       <div><p className="mb-2 text-sm font-medium">{t.candidateMoments}</p><div className="space-y-2">{candidates.map((candidate, index) => {
         const checked = selectedCandidates.includes(index)
         const disabled = !checked && selectedCount >= 10
