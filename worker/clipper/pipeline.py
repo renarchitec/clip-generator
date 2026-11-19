@@ -287,10 +287,10 @@ def _reframe_filters(reframe: str, video: str, moment: llm.Moment) -> List[str]:
             "setsar=1",
         ]
 
-    # Default / fallback eksplisit: face_tracking (deteksi per sampel proxy)
-    samples = reframe_mod.face_track_samples(video, moment.start, moment.end)
-    if samples:
-        return [reframe_mod.panning_crop_filter(samples), "setsar=1"]
+    # Default / fallback eksplisit: face_tracking (cut per pembicara aktif)
+    segments = reframe_mod.face_track_samples(video, moment.start, moment.end)
+    if segments:
+        return [reframe_mod.cut_crop_filter(segments), "setsar=1"]
     return [reframe_mod.portrait_crop_filter(0.5), "setsar=1"]
 
 

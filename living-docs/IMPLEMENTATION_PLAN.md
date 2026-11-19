@@ -48,7 +48,7 @@ clipper/
 │  │  ├─ pipeline.py          # Orkestrasi tahap: download, transcribe, select, render, save, run_preview
 │  │  ├─ worker.py            # Consumer `clip-jobs` (concurrency 1) + `previews` (concurrency 2), heartbeat LLM
 │  │  ├─ llm.py               # Pemanggilan OpenAI-compatible LLM & parsing momen
-│  │  ├─ reframe.py           # face_tracking (MediaPipe), pan clamping & crop filters
+│  │  ├─ reframe.py           # face_tracking / active speaker (FaceMesh), cut segments & crop filters
 │  │  ├─ subtitles.py         # Parser VTT, deduplikasi rolling, pembuat subtitle ASS karaoke
 │  │  └─ models.py            # Definisi dataclass & konversi data job
 │  ├─ tests/                  # Pytest unit & integration tests
@@ -100,7 +100,7 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 ### 5. Tahap Rendering (`render`)
 Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, worker memeriksa apakah terdapat sinyal pembatalan (`should_cancel`).
 - **Transformasi Reframe ke Potret 9:16 (1080x1920):**
-  - `face_tracking`: Menjalankan deteksi wajah MediaPipe (`FaceDetection`, model selection 1) pada proxy video resolusi rendah (~360p, 5 fps). Hasil koordinat dihaluskan menggunakan Exponential Moving Average (EMA, `alpha=0.35`) dan pergerakan dibatasi (*pan clamp*, maks 0.15 lebar frame/detik). Jumlah titik sampel dibatasi maksimal 48 sampel pan agar ekspresi filter ffmpeg tetap efisien dan stabil.
+  - `face_tracking` ("Pembicara aktif" di UI): menganalisis proxy video resolusi rendah (~360p, 5 fps) dengan MediaPipe FaceMesh (`max_num_faces=4`). Per wajah diukur bukaan bibir (landmark inner lips 13/14) dan energi geraknya; wajah paling aktif dipilih sebagai pembicara dengan hysteresis (margin skor 1.25x, ambang noise 0.003) dan minimal hold 0.9 detik per cut. Hasilnya deretan crop statis per segmen (cut, bukan pan halus) maksimal 16 segmen, dieksekusi sebagai ekspresi filter ffmpeg piecewise; tidak ada wajah sama sekali -> fallback crop tengah.
   - `black_bars`: Skala video mempertahankan rasio asli dengan padding hitam di atas dan bawah.
   - `blurred_fill`: Membagi video menjadi dua layer; layer belakang diperbesar, dipotong, dan diburamkan (`boxblur`), layer depan diletakkan di tengah dengan rasio tajam.
 - **Pembakaran Takarir ASS:**

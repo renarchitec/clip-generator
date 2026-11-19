@@ -1,4 +1,13 @@
-"""Reframe face_tracking: deteksi wajah MediaPipe di proxy low-res.
+"""Reframe `face_tracking` (kini: active speaker) — potong statis per segmen.
+
+Perilaku tersimpan `face_tracking` didefinisikan ulang sebagai "pembicara aktif":
+worker menganalisis frame proxy ~360p/5 fps dengan MediaPipe FaceMesh, mengukur
+bukaan/gerak bibir tiap wajah, lalu memilih wajah yang sedang bicara dengan
+hysteresis + minimal hold. Hasilnya bukan pan halus, melainkan deretan crop
+statis (cut) per segmen pembicara, sebagai ekspresi filter ffmpeg piecewise.
+
+Kontrak API/DB tidak berubah: nilai `face_tracking` tetap diterima dan tetap
+default; fallback crop tengah tetap ada bila tidak ada wajah sama sekali.
 
 Dependency opsional: kalau mediapipe/opencv tidak terpasang, job gagal dengan
 pesan jelas — bukan fallback diam-diam ke mode lain.
@@ -18,9 +27,29 @@ FACE_DEPS_ERROR = (
 )
 SAMPLE_FPS = 5.0
 PROXY_HEIGHT = 360
-EMA_ALPHA = 0.35
-MAX_PAN_PER_SEC = 0.15  # fraksi lebar frame per detik
 PORTRAIT_RATIO = 9 / 16
+
+# Pemilihan pembicara aktif
+MAX_FACES = 4
+MOTION_ALPHA = 0.5  # EMA energi gerak bibir per wajah
+SWITCH_MARGIN = 1.25  # kandidat harus jelas lebih "bicara" dari aktif saat ini
+SPEECH_FLOOR = 0.003  # gerak bibir minimal agar dianggap bicara (bukan noise)
+MIN_HOLD_SEC = 0.9  # minimal durasi satu cut
+DRIFT_CUT = 0.08  # potong ulang bila wajah aktif bergeser cukup jauh
+MISSING_TTL_SEC = 1.0  # wajah hilang se lama ini -> wajib pilih ulang
+MAX_SEGMENTS = 16  # batas panjang ekspresi filter ffmpeg
+MAX_SAMPLES = 1200  # batas runtime: ~4 menit pada 5 fps
+MIN_FACE_HEIGHT = 0.05  # abaikan deteksi wajah terlalu kecil
+
+# Landmark bibir dalam FaceMesh (inner lips): 13 atas, 14 bawah.
+LIP_UPPER, LIP_LOWER = 13, 14
+
+# Face tuple: (cx 0..1, tinggi relatif, bukaan mulut relatif thd tinggi wajah)
+Face = Tuple[float, float, float]
+# Frame sampel: (t_rel, daftar wajah terdeteksi)
+SampledFrame = Tuple[float, List[Face]]
+# Segmen cut: (t_mulai, pusat_x 0..1) — x statis sampai segmen berikutnya
+Segment = Tuple[float, float]
 
 
 def face_track_samples(
@@ -28,12 +57,11 @@ def face_track_samples(
     start: float,
     end: float,
     sample_fps: float = SAMPLE_FPS,
-) -> Optional[List[Tuple[float, float]]]:
-    """Deret waktu (t_rel, pusat_x 0..1) dari proxy ~360p, ~5 fps.
+) -> Optional[List[Segment]]:
+    """Segmen cut (t_rel, pusat_x) dari proxy ~360p ~5 fps.
 
-    - Wajah terbesar dipakai, EMA meredam lompatan, pan dibatasi per detik.
-    - Frame tanpa wajah: target kembali ke tengah (0.5), bukan error.
-    - None bila tidak ada wajah sama sekali -> pipeline memakai crop tengah.
+    - FaceMesh per sampel; wajah aktif dipilih dari gerak bibir (hysteresis).
+    - Tidak ada wajah sama sekali -> None -> pipeline memakai crop tengah.
     """
     try:
         import cv2
@@ -53,12 +81,13 @@ def face_track_samples(
         step = 1 if fps <= 0 else max(1, round(fps / sample_fps))
         dt = step / fps if fps > 0 else 1.0 / sample_fps
         limit = end + 0.5 * dt
-        samples: List[Tuple[float, float]] = []
-        ema: Optional[float] = None
+        frames: List[SampledFrame] = []
 
-        with mp.solutions.face_detection.FaceDetection(
-            model_selection=1, min_detection_confidence=0.4
-        ) as detector:
+        with mp.solutions.face_mesh.FaceMesh(
+            max_num_faces=MAX_FACES,
+            refine_landmarks=False,
+            min_detection_confidence=0.4,
+        ) as mesh:
             while True:
                 ok, frame = capture.read()
                 if not ok:
@@ -67,9 +96,9 @@ def face_track_samples(
                 if timestamp > limit:
                     break
 
-                target = _largest_face_center(frame, detector)
-                ema = target if ema is None else ema + EMA_ALPHA * (target - ema)
-                samples.append((max(0.0, timestamp - start), ema))
+                frames.append((max(0.0, timestamp - start), _detect_faces(frame, cv2, mesh)))
+                if len(frames) >= MAX_SAMPLES:
+                    break
 
                 grabbed = True
                 for _ in range(step - 1):
@@ -81,23 +110,12 @@ def face_track_samples(
                 if capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 > limit:
                     break
 
-        if not samples:
-            return None
-        samples = _clamp_pan(samples, dt)
-        # Keep the FFmpeg expression bounded for long clips; interpolation still
-        # follows the smoothed path, just at a coarser sample rate.
-        max_samples = 48
-        if len(samples) > max_samples:
-            stride = (len(samples) - 1) / (max_samples - 1)
-            samples = [samples[round(index * stride)] for index in range(max_samples)]
-        return samples
+        return select_speaker_segments(frames)
     finally:
         capture.release()
 
 
-def _largest_face_center(frame, detector) -> float:
-    import cv2
-
+def _detect_faces(frame, cv2, mesh) -> List[Face]:
     height = frame.shape[0]
     if height > PROXY_HEIGHT:
         scale = PROXY_HEIGHT / height
@@ -106,30 +124,110 @@ def _largest_face_center(frame, detector) -> float:
             (int(frame.shape[1] * scale), PROXY_HEIGHT),
             interpolation=cv2.INTER_AREA,
         )
-    result = detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    detections = getattr(result, "detections", None) or []
-    if not detections:
-        return 0.5  # tanpa wajah: kembali ke tengah, bukan error
-    best = max(
-        detections,
-        key=lambda item: item.location_data.relative_bounding_box.width
-        * item.location_data.relative_bounding_box.height,
-    )
-    box = best.location_data.relative_bounding_box
-    return max(0.0, min(1.0, float(box.xmin + box.width / 2)))
+    result = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    faces: List[Face] = []
+    for landmarks in getattr(result, "multi_face_landmarks", None) or []:
+        xs = [point.x for point in landmarks.landmark]
+        ys = [point.y for point in landmarks.landmark]
+        face_height = max(ys) - min(ys)
+        if face_height < MIN_FACE_HEIGHT:
+            continue
+        cx = (max(xs) + min(xs)) / 2
+        mouth = (landmarks.landmark[LIP_LOWER].y - landmarks.landmark[LIP_UPPER].y) / face_height
+        faces.append((float(cx), float(face_height), max(0.0, float(mouth))))
+    return faces
 
 
-def _clamp_pan(samples: Sequence[Tuple[float, float]], dt: float) -> List[Tuple[float, float]]:
-    """Batas kecepatan geser antar sampel EMA supaya pan tidak lompat."""
-    max_step = MAX_PAN_PER_SEC * dt
-    output: List[Tuple[float, float]] = []
-    previous = samples[0][1]
-    for timestamp, center in samples:
-        delta = center - previous
-        clamped = previous + max(-max_step, min(delta, max_step))
-        output.append((timestamp, clamped))
-        previous = clamped
-    return output
+class _Track:
+    """Wajah yang diikuti antar sampel: posisi, ukuran, energi gerak bibir."""
+
+    __slots__ = ("cx", "height", "mouth", "score", "last_seen")
+
+    def __init__(self, face: Face, t: float) -> None:
+        self.cx, self.height, self.mouth = face
+        self.score = 0.0
+        self.last_seen = t
+
+    def update(self, face: Face, t: float) -> None:
+        cx, height, mouth = face
+        self.score = MOTION_ALPHA * abs(mouth - self.mouth) + (1 - MOTION_ALPHA) * self.score
+        self.cx, self.height, self.mouth, self.last_seen = cx, height, mouth, t
+
+
+def select_speaker_segments(
+    frames: Sequence[SampledFrame],
+) -> Optional[List[Segment]]:
+    """Pilih wajah aktif per sampel -> segmen cut statis.
+
+    Terpisah dari deteksi agar bisa diuji tanpa mediapipe.
+    """
+    tracks: List[_Track] = []
+    active: Optional[_Track] = None
+    last_cut_t: Optional[float] = None
+    segments: List[Segment] = []
+
+    for t, faces in frames:
+        # pasangkan deteksi ke track lama berdasar kedekatan posisi
+        for track in tracks:
+            track.score *= 0.8  # meluruh kalau bibir berhenti bergerak
+        pending = list(tracks)
+        tracks = []
+        for face in faces:
+            match = None
+            if pending:
+                match = min(pending, key=lambda track: abs(track.cx - face[0]))
+                if abs(match.cx - face[0]) > 0.18:
+                    match = None
+                else:
+                    pending.remove(match)
+            if match is None:
+                match = _Track(face, t)
+            else:
+                match.update(face, t)
+            tracks.append(match)
+        tracks = [track for track in tracks if t - track.last_seen <= 2 * MISSING_TTL_SEC]
+
+        visible = [track for track in tracks if t - track.last_seen <= MISSING_TTL_SEC]
+
+        forced = active is None or t - active.last_seen > MISSING_TTL_SEC
+        if visible:
+            candidate = max(visible, key=lambda track: (track.score, track.height))
+            switch = forced or (
+                candidate is not active
+                and candidate.score > max(SPEECH_FLOOR, active.score * SWITCH_MARGIN)
+                and last_cut_t is not None
+                and t - last_cut_t >= MIN_HOLD_SEC
+            )
+            drift = (
+                active is not None
+                and not switch
+                and abs(active.cx - segments[-1][1]) > DRIFT_CUT
+                and t - last_cut_t >= MIN_HOLD_SEC
+            )
+            if switch or drift:
+                active, last_cut_t = candidate, t
+                segments.append((t, active.cx))
+
+    if not segments:
+        return None
+    return _normalize_segments(segments)
+
+
+def _normalize_segments(segments: List[Segment]) -> List[Segment]:
+    """Gabungkan segmen terlalu pendek, batasi jumlah segmen, mulai dari t=0."""
+    merged: List[Segment] = [segments[0]]
+    for t, x in segments[1:]:
+        if t - merged[-1][0] < MIN_HOLD_SEC - 1e-6:
+            continue  # cut terlalu pendek: biarkan cut sebelumnya berlanjut
+        merged.append((t, x))
+    while len(merged) > MAX_SEGMENTS:
+        # buang cut dengan rentang terpendek (cut sebelumnya diperpanjang)
+        shortest = min(
+            range(1, len(merged)), key=lambda i: merged[i][0] - merged[i - 1][0]
+        )
+        merged.pop(shortest)
+    merged[0] = (0.0, merged[0][1])
+    return merged
 
 
 def portrait_crop_filter(center_x: Optional[float]) -> str:
@@ -144,22 +242,18 @@ def portrait_crop_filter(center_x: Optional[float]) -> str:
     )
 
 
-def panning_crop_filter(samples: Sequence[Tuple[float, float]]) -> str:
-    """Crop 9:16 yang bergerak mengikuti deret waktu sampel.
+def cut_crop_filter(segments: Sequence[Segment]) -> str:
+    """Crop 9:16 statis per segmen (cut, tanpa pan halus).
 
-    x(t) = interpolasi linear antar sampel, dalam piksel, dengan clamp ffmpeg.
+    x(t) konstan dalam tiap segmen: jumlah suku `x*gte(t,a)*lt(t,b)`; ffmpeg
+    sendiri meng-clamp x ke rentang valid.
     """
     terms: List[str] = []
-    first_time, first_x = samples[0]
-    terms.append(f"{first_x:.4f}*lt(t,{first_time:.2f})")
-    for (time_a, x_a), (time_b, x_b) in zip(samples, samples[1:]):
-        span = max(1e-3, time_b - time_a)
-        terms.append(
-            f"({x_a:.4f}+({x_b:.4f}-{x_a:.4f})*(t-{time_a:.2f})/{span:.2f})"
-            f"*gte(t,{time_a:.2f})*lt(t,{time_b:.2f})"
-        )
-    last_time, last_x = samples[-1]
-    terms.append(f"{last_x:.4f}*gte(t,{last_time:.2f})")
+    for index, (t, x) in enumerate(segments):
+        cond = f"gte(t,{t:.2f})"
+        if index + 1 < len(segments):
+            cond += f"*lt(t,{segments[index + 1][0]:.2f})"
+        terms.append(f"{max(0.0, min(1.0, x)):.4f}*{cond}")
 
     x_expr = (
         "max(0,min((" + "+".join(terms) + f")*in_w-ih*{PORTRAIT_RATIO / 2:.5f},"
@@ -168,3 +262,7 @@ def panning_crop_filter(samples: Sequence[Tuple[float, float]]) -> str:
     return (
         f"crop=w='ih*{PORTRAIT_RATIO:.5f}':h=ih:x='{x_expr}',scale=1080:1920"
     )
+
+
+# Alias kompatibilitas mundur
+panning_crop_filter = cut_crop_filter

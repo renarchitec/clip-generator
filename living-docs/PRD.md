@@ -76,7 +76,7 @@ Kebutuhan utama:
 | --- | --- | --- |
 | **P0** | Multi-user auth (`users` + `sessions`, scrypt, httpOnly cookie `clipper_session`, claim legacy jobs) | Selesai |
 | **P0** | Pipeline video vertikal (yt-dlp, YouTube VTT subtitles, LLM OpenAI-compatible, ASS word-by-word karaoke, ffmpeg) | Selesai |
-| **P0** | Pilihan mode reframe (`face_tracking` MediaPipe, `blurred_fill`, `black_bars`) | Selesai |
+| **P0** | Pilihan mode reframe (`face_tracking` / pembicara aktif via MediaPipe FaceMesh, `blurred_fill`, `black_bars`) | Selesai |
 | **P0** | Web UI TanStack Start + Query + shadcn/ui + Tailwind v4 + i18n (EN/ID) + Dark/Light theme | Selesai |
 | **P0** | Real-time progress SSE (`GET /api/jobs/:id/events`) dan streaming klip byte-range | Selesai |
 | **P0** | Pembatalan job (`POST /api/jobs/:id/cancel`), penghapusan job (`DELETE /api/jobs/:id`), dan penghapusan klip (`DELETE /api/clips/:id`) | Selesai |
@@ -119,7 +119,7 @@ Kebutuhan utama:
 | FR-3.3 | Pengunduhan video menggunakan `yt-dlp` dengan format MP4 terbaik dan ekstraksi subtitle YouTube (manual diutamakan, fallback ke auto-subs) | Jika video tidak memiliki track subtitle YouTube, job gagal dengan pesan: `"Subtitle YouTube tidak tersedia untuk video ini."` |
 | FR-3.4 | Pemilihan momen mode otomatis mewajibkan konfigurasi LLM OpenAI-compatible (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`) | Jika LLM gagal atau tidak dikonfigurasi, job langsung gagal (tanpa fallback berbasis aturan) |
 | FR-3.5 | Subtitle diubah menjadi takarir ASS kata per kata (*karaoke style*) dengan deduplikasi *rolling auto-sub* | Teks subtitle tidak bertumpuk dan muncul sinkron per kata |
-| FR-3.6 | Reframe potret 9:16 (1080x1920) dieksekusi dengan `libx264` format piksel `yuv420p`: <br>- `face_tracking`: deteksi wajah MediaPipe 0.10.14 pada proxy ~360p/5fps, dihaluskan dengan EMA dan clamp pergerakan pan (maks 48 sampel pan). <br>- `black_bars`: letterbox dengan latar hitam. <br>- `blurred_fill`: latar belakang video diburamkan (`boxblur`) dengan video utama di tengah. | Hasil video dapat diputar di semua browser modern dan seluler tanpa kendala kompatibilitas piksel |
+| FR-3.6 | Reframe potret 9:16 (1080x1920) dieksekusi dengan `libx264` format piksel `yuv420p`: <br>- `face_tracking` (UI: Pembicara aktif / Active speaker): deteksi wajah dan analisis gerak bibir MediaPipe FaceMesh pada proxy ~360p/5fps, pemilihan wajah aktif dengan hysteresis dan min hold 0.9s, dipotong statis per segmen pembicara (maks 16 cut) lewat filter crop ffmpeg (fallback crop tengah bila tanpa wajah). <br>- `black_bars`: letterbox dengan latar hitam. <br>- `blurred_fill`: latar belakang video diburamkan (`boxblur`) dengan video utama di tengah. | Hasil video dapat diputar di semua browser modern dan seluler tanpa kendala kompatibilitas piksel |
 | FR-3.7 | Pembatalan job (`POST /api/jobs/:id/cancel`): worker memeriksa kunci Redis `worker:cancel:<job_id>` di batas tahapan proses | Worker menghentikan proses secara aman, membersihkan direktori kerja sementara, dan menandai job `cancelled` |
 
 ### FR-4 Status, Pemantauan, dan Pengelolaan Klip (P0)
@@ -182,7 +182,7 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 - **Cloudflare Tunnel:** Menyediakan akses publik HTTPS yang aman ke domain `clipper.rencraft.site` (Web) dan `api-clipper.rencraft.site` (API internal/eksternal).
 - **yt-dlp:** Bergantung pada YouTube untuk video dan trek subtitle VTT.
 - **OpenAI-compatible LLM:** Wajib terhubung ke penyedia LLM untuk menjalankan mode otomatis.
-- **MediaPipe (0.10.14) & OpenCV:** Digunakan untuk pelacakan koordinat wajah pada mode reframe `face_tracking`.
+- **MediaPipe (0.10.14) & OpenCV:** Digunakan untuk deteksi wajah dan analisis gerak bibir FaceMesh pada mode reframe `face_tracking` (pembicara aktif).
 - **ffmpeg:** Rendering video potret H.264 (`yuv420p`), audio AAC, dan pembakaran takarir ASS kata per kata.
 
 ## 13. Glosarium
