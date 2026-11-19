@@ -30,7 +30,8 @@ export class JobsService {
   async create(dto: CreateJobDto, userId: string) {
     const url = assertAllowedUrl(dto.url);
     const ranges = normalizeRanges(dto);
-    const description = normalizeDescription(dto.description);
+    const description =
+      dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
 
     const job = await this.prisma.job.create({
       data: {

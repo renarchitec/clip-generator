@@ -24,7 +24,7 @@ JobStage = Literal["download", "transcribe", "select", "render", "save"]
 JobMode = Literal["auto", "manual"]
 
 DEFAULT_CLIP_COUNT = 3
-DEFAULT_TARGET_DURATION_SEC = 60.0
+DEFAULT_TARGET_DURATION_SEC = 45.0
 MAX_DESCRIPTION_CHARS = 500
 
 # job_id dipakai sebagai nama folder di CLIPS_DIR. Batasi keras supaya nilai
@@ -175,8 +175,8 @@ class ClipResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "title": self.title,
-            "start": self.start,
-            "end": self.end,
+            "start": round(self.start, 2),
+            "end": round(self.end, 2),
             "file": self.file,
         }
 

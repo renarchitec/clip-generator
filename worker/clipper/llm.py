@@ -129,15 +129,46 @@ def _target_duration(params: JobParams) -> float:
     return value if value > 0 else DEFAULT_TARGET_DURATION_SEC
 
 
-def _transcript_text(cues: Sequence[Cue], max_chars: int = MAX_TRANSCRIPT_CHARS) -> str:
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _brief_keywords(description: Optional[str]) -> set:
+    """Kata kunci preferensi pengguna: lowercase, panjang minimal 4 karakter."""
+    if not description:
+        return set()
+    return {word.lower() for word in _WORD_RE.findall(description) if len(word) >= 4}
+
+
+def _transcript_text(
+    cues: Sequence[Cue],
+    max_chars: int = MAX_TRANSCRIPT_CHARS,
+    description: Optional[str] = None,
+) -> str:
     lines = [f"[{cue.start:.1f}-{cue.end:.1f}] {cue.text}" for cue in cues]
     text = "\n".join(lines)
     if len(text) <= max_chars:
         return text
-    # Video panjang: ambil sampel merata supaya awal dan akhir tetap terwakili.
+
+    # Video panjang: pertahankan baris yang cocok dengan preferensi pengguna,
+    # sisanya sampel merata supaya awal dan akhir tetap terwakili.
     keep = max(1, len(lines) * max_chars // len(text))
-    step = len(lines) / keep
-    return "\n".join(lines[min(len(lines) - 1, int(i * step))] for i in range(keep))
+    keywords = _brief_keywords(description)
+    chosen: List[int] = []
+    if keywords:
+        matching = [
+            index
+            for index, line in enumerate(lines)
+            if any(keyword in line.lower() for keyword in keywords)
+        ]
+        chosen = matching[: max(1, keep // 2)]
+    remaining = keep - len(chosen)
+    if remaining > 0:
+        taken = set(chosen)
+        rest = [index for index in range(len(lines)) if index not in taken]
+        step = len(rest) / remaining
+        chosen.extend(rest[min(len(rest) - 1, int(i * step))] for i in range(remaining))
+    chosen.sort()
+    return "\n".join(lines[index] for index in chosen)
 
 
 def _build_prompt(
@@ -163,8 +194,10 @@ def _build_prompt(
 
     return (
         "Kamu editor video pendek berbahasa Indonesia.\n"
-        f"Pilih {count} momen paling menarik dari transkrip video ini untuk dijadikan "
-        f"video vertikal 9:16 berdurasi sekitar {target:.0f} detik.\n\n"
+        f"Tugas utama: pilih momen yang paling sesuai dengan preferensi pengguna, "
+        f"lalu paling menarik. Kembalikan {count + 2} kandidat momen dari transkrip "
+        f"video ini untuk dijadikan video vertikal 9:16 berdurasi sekitar "
+        f"{target:.0f} detik; sistem memilih {count} terbaik.\n\n"
         "Aturan:\n"
         f"- Durasi tiap momen antara {MIN_DURATION_RATIO * target:.0f} dan "
         f"{MAX_DURATION_RATIO * target:.0f} detik idealnya.\n"
@@ -172,15 +205,33 @@ def _build_prompt(
         "- Momen harus utuh: jangan memotong di tengah kalimat, dan jangan tumpang tindih.\n"
         "- title singkat dan memancing rasa ingin tahu (maksimal 70 karakter).\n"
         "- reason satu kalimat alasan momen itu menarik.\n\n"
-        f"{preference}"
         "Balas HANYA dengan JSON list, tanpa penjelasan:\n"
         '[{"start": 12.5, "end": 58.0, "title": "...", "reason": "..."}]\n\n'
+        f"{preference}"
         "Transkrip (detik):\n"
-        f"{_transcript_text(cues)}"
+        f"{_transcript_text(cues, description=description)}"
     )
 
 
-def _complete(base_url: str, api_key: str, model: str, prompt: str, temperature: float) -> str:
+def _system_prompt(has_brief: bool) -> str:
+    base = "Kamu editor video shorts berbahasa Indonesia. Jawab hanya JSON."
+    if has_brief:
+        return (
+            base
+            + " Utamakan momen yang paling sesuai dengan preferensi pengguna di"
+            " blok <preferensi>, baru paling menarik."
+        )
+    return base
+
+
+def _complete(
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    temperature: float,
+    has_brief: bool = False,
+) -> str:
     from openai import OpenAI  # impor lambat: butuh jaringan, bukan untuk unit test
 
     client = OpenAI(base_url=base_url, api_key=api_key, timeout=180.0)
@@ -188,10 +239,7 @@ def _complete(base_url: str, api_key: str, model: str, prompt: str, temperature:
         model=model,
         temperature=temperature,
         messages=[
-            {
-                "role": "system",
-                "content": "Kamu editor video shorts berbahasa Indonesia. Jawab hanya JSON.",
-            },
+            {"role": "system", "content": _system_prompt(has_brief)},
             {"role": "user", "content": prompt},
         ],
     )
@@ -258,13 +306,18 @@ def validate_moments(
         if end > total + 1.0:
             continue
         end = min(end, total)
+        original_start, original_end = start, end
         start, end = _fit_duration(start, end, target, total)
         if end <= start or end - start < MIN_CLIP_SECONDS:
             continue
         if any(_overlap(start, end, m.start, m.end) > 0.5 * (end - start) for m in moments):
             continue
 
-        title = str(item.get("title") or "").strip() or title_from_cues(cues, start, end)
+        title = str(item.get("title") or "").strip()
+        # Jendela bergeser: judul dari LLM sudah tidak relevan.
+        if abs(start - original_start) > 0.01 or abs(end - original_end) > 0.01:
+            title = title_from_cues(cues, start, end)
+        title = title or title_from_cues(cues, start, end)
         reason = str(item.get("reason") or "").strip()
         moments.append(
             Moment(
@@ -275,8 +328,17 @@ def validate_moments(
             )
         )
 
+    if len(moments) < count:
+        log.warning(
+            "LLM hanya menghasilkan %s momen valid dari %s yang diminta",
+            len(moments),
+            count,
+        )
+
+    # Pertahankan urutan ranking LLM: potong dulu, baru urutkan per waktu.
+    moments = moments[:count]
     moments.sort(key=lambda moment: moment.start)
-    return moments[:count]
+    return moments
 
 
 def _density(cue: Cue) -> float:
@@ -354,9 +416,17 @@ def select_moments(
         return []
 
     prompt = _build_prompt(cues, params, description=description)
+    has_brief = bool((description or "").strip())
     for attempt in (1, 2):
         try:
-            raw = _complete(base_url, api_key, model, prompt, temperature=0.2 if attempt == 1 else 0.0)
+            raw = _complete(
+                base_url,
+                api_key,
+                model,
+                prompt,
+                temperature=0.2 if attempt == 1 else 0.0,
+                has_brief=has_brief,
+            )
         except Exception as exc:
             detail = _short_error(exc)
             if api_key:
