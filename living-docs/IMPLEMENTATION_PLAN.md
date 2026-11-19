@@ -104,7 +104,7 @@ Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, w
   - `black_bars`: Skala video mempertahankan rasio asli dengan padding hitam di atas dan bawah.
   - `blurred_fill`: Membagi video menjadi dua layer; layer belakang diperbesar, dipotong, dan diburamkan (`boxblur`), layer depan diletakkan di tengah dengan rasio tajam.
 - **Pembakaran Takarir ASS:**
-  - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` dengan gaya karaoke kata per kata (`{\k<durasi_cs>}`).
+  - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` dengan gaya karaoke kata per kata (`{\k<durasi_cs>}`). Setiap event maksimal 5 kata / 26 karakter, event dipotong agar tidak tumpang tindih, margin aman bawah ≥18% tinggi frame dan samping 80px, teks putih tebal dengan outline hitam dan bayangan; kata aktif disorot kuning.
   - Jika `captions: false`, langkah pembakaran takarir dilewati.
 - **Encoding Video:**
   - ffmpeg dipanggil menggunakan video codec `libx264` dengan pixel format standar `yuv420p` (menjamin kompatibilitas playback di Safari/iOS dan browser Android), audio `aac` 128k, preset `veryfast`, dan `movflags +faststart`.

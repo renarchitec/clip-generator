@@ -15,8 +15,8 @@ _TAG_RE = re.compile(r"<[^>]*>")
 _WS_RE = re.compile(r"\s+")
 _NON_CUE_BLOCKS = {"NOTE", "STYLE", "REGION"}
 
-WRAP_CHARS = 42
-MAX_WORDS_PER_CUE = 7
+WRAP_CHARS = 26
+MAX_WORDS_PER_CUE = 5
 
 
 @dataclass
@@ -211,20 +211,66 @@ def _wrap(text: str, max_chars: int = WRAP_CHARS) -> List[str]:
     return lines
 
 
-def _split_words(cue: Cue, max_words: int = MAX_WORDS_PER_CUE) -> List[Cue]:
-    """Pecah cue panjang tanpa kata bertiming supaya layar tidak penuh."""
-    if cue.words:
-        return [cue]
-    tokens = cue.text.split()
-    if len(tokens) <= max_words:
-        return [cue]
-    step = cue.duration / len(tokens)
+def _split_words(
+    cue: Cue,
+    max_words: int = MAX_WORDS_PER_CUE,
+    max_chars: int = WRAP_CHARS,
+) -> List[Cue]:
+    """Pecah jadi baris ringkas sambil mempertahankan timing karaoke."""
+    timed_words = cue_to_words(cue)
+    chunks: List[List[Word]] = []
+    current: List[Word] = []
+    char_count = 0
+    for word in timed_words:
+        word_length = len(word.text)
+        if current and (len(current) >= max_words or char_count + 1 + word_length > max_chars):
+            chunks.append(current)
+            current = []
+            char_count = 0
+        current.append(word)
+        char_count += word_length + (1 if len(current) > 1 else 0)
+    if current:
+        chunks.append(current)
+
+    return [
+        Cue(
+            start=chunk[0].start,
+            end=chunk[-1].end,
+            text=" ".join(word.text for word in chunk),
+            words=chunk,
+        )
+        for chunk in chunks
+        if chunk[-1].end > chunk[0].start
+    ]
+
+
+def _non_overlapping_cues(cues: Sequence[Cue]) -> List[Cue]:
+    """Clamp each cue to the next start so ASS dialogue events never overlap."""
+    ordered = sorted((cue for cue in cues if cue.end > cue.start), key=lambda cue: cue.start)
     result: List[Cue] = []
-    for offset in range(0, len(tokens), max_words):
-        chunk = tokens[offset : offset + max_words]
-        start = cue.start + step * offset
-        result.append(Cue(start=start, end=start + step * len(chunk), text=" ".join(chunk)))
+    for index, cue in enumerate(ordered):
+        end = min(cue.end, ordered[index + 1].start) if index + 1 < len(ordered) else cue.end
+        if end > cue.start:
+            result.append(Cue(cue.start, end, cue.text, cue.words))
     return result
+
+
+def _render_cue_parts(cues: Sequence[Cue]) -> List[Cue]:
+    """Normalize overlaps and split oversized captions without losing word timing."""
+    parts: List[Cue] = []
+    for cue in _non_overlapping_cues(cues):
+        timed_words = cue_to_words(cue)
+        words: List[Word] = []
+        cursor = cue.start
+        for word in timed_words:
+            start = max(cursor, cue.start, word.start)
+            end = min(cue.end, word.end)
+            if end > start:
+                words.append(Word(start, end, word.text))
+                cursor = end
+        if words:
+            parts.extend(_split_words(Cue(cue.start, cue.end, cue.text, words)))
+    return parts
 
 
 def cue_to_words(cue: Cue) -> List[Word]:
@@ -270,10 +316,11 @@ def write_ass(
     margin_v: int = 180,
 ) -> str:
     """Tulis ASS dengan format karaoke {\\k<durasi_cs>} per kata."""
+    safe_margin_v = max(int(margin_v), int(height * 0.18))
     style = (
-        "Style: Default,DejaVu Sans,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-        "-1,0,0,0,100,100,0,0,1,3,0,2,60,60,{margin_v},1"
-    ).format(font_size=int(font_size), margin_v=int(margin_v))
+        "Style: Default,DejaVu Sans,{font_size},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,"
+        "-1,0,0,0,100,100,0,0,1,3,1.5,2,80,80,{margin_v},1"
+    ).format(font_size=int(font_size), margin_v=safe_margin_v)
 
     lines = [
         "[Script Info]",
@@ -281,6 +328,7 @@ def write_ass(
         "WrapStyle: 2",
         "ScaledBorderAndShadow: yes",
         "YCbCr Matrix: TV.709",
+        "Collisions: Reverse",
         f"PlayResX: {int(width)}",
         f"PlayResY: {int(height)}",
         "",
@@ -294,9 +342,8 @@ def write_ass(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
-    for cue in cues:
-        for part in _split_words(cue):
-            _write_cue_part(part, lines)
+    for part in _render_cue_parts(cues):
+        _write_cue_part(part, lines)
 
     return "\n".join(lines) + "\n"
 
