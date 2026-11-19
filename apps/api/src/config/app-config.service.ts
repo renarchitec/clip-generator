@@ -8,11 +8,13 @@ export class AppConfig {
   readonly redisUrl: string;
   readonly clipsDir: string;
   readonly port: number;
+  readonly allowRegistration: boolean;
 
   constructor(config: ConfigService) {
     this.databaseUrl = config.getOrThrow<string>('DATABASE_URL');
     this.redisUrl = config.getOrThrow<string>('REDIS_URL');
     this.clipsDir = config.getOrThrow<string>('CLIPS_DIR');
     this.port = Number(config.get('PORT') ?? 3000);
+    this.allowRegistration = config.get<boolean>('ALLOW_REGISTRATION') ?? false;
   }
 }

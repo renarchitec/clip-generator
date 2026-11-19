@@ -1,0 +1,33 @@
+import { createContext, useContext, useState, type ReactNode } from "react"
+
+export type Language = "en" | "id"
+const messages = {
+  en: {
+    brand: "clipper", tagline: "Make the moments worth sharing.", heroFirst: "Cut the scroll.", heroSecond: "Keep the story.", signInCardTitle: "A better cut, minus the cutting.", signInCardBody: "Long-form in. Shareable moments out.", signInCardFooter: "Your next great clip starts here.", autoMode: "Auto clip mode", sourceStatement: "Give your video a second life.", sourceDetail: "Drop a link and let the good moments find you.", processTitle: "One link. A better cut.", sourceVideo: "Source video", readyClips: "Ready-to-share clips", activity: "Your activity", complete: "Complete", inProgress: "In progress", logIn: "Log in", signUp: "Create account", email: "Email", password: "Password", name: "Name", noAccount: "New to Clipper?", haveAccount: "Already have an account?", register: "Create an account", loginIntro: "Your next great clip starts here.", registerIntro: "A little source video. A lot of good moments.", dashboard: "Your workspace", library: "Clip library", settings: "Settings", signOut: "Sign out", welcome: "Good to have you back.", pageIntro: "Paste a video link. We’ll find the moments worth keeping.", sourceUrl: "Video URL", sourceHint: "YouTube, Vimeo, or another supported link", makeClips: "Find my clips", clipCount: "Number of clips", duration: "Target length", minutes: "sec each", recent: "Recent jobs", active: "In progress", empty: "Nothing here yet", emptyHint: "Your first batch of clips will show up here.", startNow: "Start with a video URL above.", processing: "Working on your clips", cancel: "Cancel job", download: "Download", clipsReady: "clips ready", back: "Back to workspace", retry: "Try again", loading: "Loading…", error: "Something went wrong. Please try again.", apiError: "Can’t connect right now. Your work is safe—try again in a moment.", stages: { download: "Getting the video", transcribe: "Listening for the good parts", select: "Finding clip-worthy moments", render: "Making your clips", save: "Saving the finished clips" }, status: { queued: "In queue", running: "In progress", done: "Complete", failed: "Failed", cancelled: "Cancelled" }, language: "Language", theme: "Appearance", light: "Light", dark: "Dark", system: "System", registerClosed: "Account creation is currently closed.", jobCreated: "Job started. We’re finding your clips now.", urlRequired: "Enter a video URL to continue.", passwordHint: "At least 8 characters", appDesc: "A calmer way to turn long videos into short clips." },
+  id: {
+    brand: "clipper", tagline: "Ubah momen terbaik jadi klip.", heroFirst: "Pilih momen penting.", heroSecond: "Bagikan ceritanya.", signInCardTitle: "Klip keren, tanpa repot mengedit.", signInCardBody: "Video panjang masuk. Momen siap dibagikan keluar.", signInCardFooter: "Klip keren berikutnya dimulai di sini.", autoMode: "Mode klip otomatis", sourceStatement: "Berikan video kehidupan kedua.", sourceDetail: "Tempel tautan, biarkan kami menemukan bagian menarik.", processTitle: "Satu tautan. Hasil terbaik.", sourceVideo: "Video sumber", readyClips: "Klip siap dibagikan", activity: "Aktivitasmu", complete: "Selesai", inProgress: "Sedang diproses", logIn: "Masuk", signUp: "Buat akun", email: "Email", password: "Kata sandi", name: "Nama", noAccount: "Belum punya akun Clipper?", haveAccount: "Sudah punya akun?", register: "Buat akun", loginIntro: "Klip keren berikutnya dimulai di sini.", registerIntro: "Satu video panjang. Banyak momen berharga.", dashboard: "Ruang kerja", library: "Koleksi klip", settings: "Pengaturan", signOut: "Keluar", welcome: "Senang melihatmu lagi.", pageIntro: "Tempel tautan video. Kami akan menemukan momen terbaiknya.", sourceUrl: "URL video", sourceHint: "YouTube, Vimeo, atau tautan lain yang didukung", makeClips: "Cari klip saya", clipCount: "Jumlah klip", duration: "Durasi target", minutes: "detik per klip", recent: "Pekerjaan terbaru", active: "Sedang diproses", empty: "Belum ada pekerjaan", emptyHint: "Klip pertamamu akan muncul di sini.", startNow: "Mulai dengan menempelkan URL video di atas.", processing: "Klipmu sedang dibuat", cancel: "Batalkan pekerjaan", download: "Unduh", clipsReady: "klip siap", back: "Kembali ke ruang kerja", retry: "Coba lagi", loading: "Memuat…", error: "Terjadi kesalahan. Silakan coba lagi.", apiError: "Belum bisa terhubung. Pekerjaanmu aman—coba lagi sebentar lagi.", stages: { download: "Mengambil video", transcribe: "Mendengarkan bagian penting", select: "Memilih momen terbaik", render: "Membuat klip", save: "Menyimpan klip" }, status: { queued: "Dalam antrean", running: "Diproses", done: "Selesai", failed: "Gagal", cancelled: "Dibatalkan" }, language: "Bahasa", theme: "Tampilan", light: "Terang", dark: "Gelap", system: "Sistem", registerClosed: "Pendaftaran akun sedang ditutup.", jobCreated: "Pekerjaan dimulai. Klipmu sedang dicari.", urlRequired: "Masukkan URL video untuk melanjutkan.", passwordHint: "Minimal 8 karakter", appDesc: "Cara praktis mengubah video panjang menjadi klip pendek." },
+} as const
+
+type Messages = typeof messages.en
+type I18nContextValue = { language: Language; setLanguage: (language: Language) => void }
+const I18nContext = createContext<I18nContextValue | null>(null)
+
+export function I18nProvider({ initialLanguage, children }: { initialLanguage: Language; children: ReactNode }) {
+  const [language, setLanguageState] = useState(initialLanguage)
+  const setLanguage = (next: Language) => {
+    setLanguageState(next)
+    document.cookie = `clipper_language=${next}; Path=/; Max-Age=31536000; SameSite=Lax`
+  }
+  return <I18nContext.Provider value={{ language, setLanguage }}>{children}</I18nContext.Provider>
+}
+
+export function useLanguage() {
+  const value = useContext(I18nContext)
+  if (!value) throw new Error("useLanguage must be used within I18nProvider")
+  return value
+}
+
+export function useT(): Messages {
+  const { language } = useLanguage()
+  return messages[language] as unknown as Messages
+}

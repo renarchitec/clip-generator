@@ -32,8 +32,9 @@ export class ClipsService {
     id: string,
     rangeHeader: string | undefined,
     res: Response,
+    userId: string,
   ): Promise<void> {
-    const { absolutePath, size, mimeType } = await this.resolve(id);
+    const { absolutePath, size, mimeType } = await this.resolve(id, userId);
 
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', mimeType);
@@ -65,8 +66,11 @@ export class ClipsService {
     this.send(absolutePath, res, range.start, range.end);
   }
 
-  async download(id: string, res: Response): Promise<void> {
-    const { clip, absolutePath, size, mimeType } = await this.resolve(id);
+  async download(id: string, res: Response, userId: string): Promise<void> {
+    const { clip, absolutePath, size, mimeType } = await this.resolve(
+      id,
+      userId,
+    );
 
     if (!clip.downloadedAt) {
       await this.prisma.clip.updateMany({
@@ -103,8 +107,10 @@ export class ClipsService {
   }
 
   /** Path selalu dibentuk dari id database, lalu diverifikasi tetap di dalam CLIPS_DIR. */
-  private async resolve(id: string): Promise<ResolvedClip> {
-    const clip = await this.prisma.clip.findUnique({ where: { id } });
+  private async resolve(id: string, userId: string): Promise<ResolvedClip> {
+    const clip = await this.prisma.clip.findFirst({
+      where: { id, job: { userId } },
+    });
     if (!clip || clip.deletedAt) {
       throw new NotFoundException(`Clip ${id} tidak ditemukan.`);
     }

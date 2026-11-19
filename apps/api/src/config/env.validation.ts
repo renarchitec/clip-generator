@@ -5,6 +5,10 @@ const envSchema = z.object({
   REDIS_URL: z.string().min(1),
   CLIPS_DIR: z.string().min(1),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  ALLOW_REGISTRATION: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((val) => val === 'true'),
 });
 
 export type Env = z.infer<typeof envSchema>;

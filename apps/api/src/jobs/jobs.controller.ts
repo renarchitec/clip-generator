@@ -8,6 +8,7 @@ import {
   Sse,
 } from '@nestjs/common';
 import { Observable, concat, map, of } from 'rxjs';
+import { CurrentUser } from '../auth/current-user.decorator';
 import { JobEventsService } from '../queue/job-events.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { JobsService } from './jobs.service';
@@ -20,30 +21,33 @@ export class JobsController {
   ) {}
 
   @Post()
-  create(@Body() dto: CreateJobDto) {
-    return this.jobs.create(dto);
+  create(@Body() dto: CreateJobDto, @CurrentUser() user: { id: string }) {
+    return this.jobs.create(dto, user.id);
   }
 
   @Get()
-  findAll() {
-    return this.jobs.findAll();
+  findAll(@CurrentUser() user: { id: string }) {
+    return this.jobs.findAll(user.id);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.jobs.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: { id: string }) {
+    return this.jobs.findOne(id, user.id);
   }
 
   /** Idempoten: job yang sudah selesai/gagal/dibatalkan dikembalikan apa adanya. */
   @Post(':id/cancel')
-  cancel(@Param('id') id: string) {
-    return this.jobs.cancel(id);
+  cancel(@Param('id') id: string, @CurrentUser() user: { id: string }) {
+    return this.jobs.cancel(id, user.id);
   }
 
   @Sse(':id/events')
-  async stream(@Param('id') id: string): Promise<Observable<MessageEvent>> {
+  async stream(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<Observable<MessageEvent>> {
     // State sekarang dikirim lebih dulu supaya klien SSE tidak perlu request terpisah.
-    const current = await this.jobs.snapshot(id);
+    const current = await this.jobs.snapshot(id, user.id);
 
     if (
       current.status === 'done' ||

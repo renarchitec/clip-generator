@@ -27,7 +27,7 @@ export class JobsService {
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
   ) {}
 
-  async create(dto: CreateJobDto) {
+  async create(dto: CreateJobDto, userId: string) {
     const url = assertAllowedUrl(dto.url);
     const ranges = normalizeRanges(dto);
 
@@ -38,6 +38,7 @@ export class JobsService {
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
         ranges: ranges as unknown as Prisma.InputJsonValue,
+        userId,
       },
     });
 
@@ -76,8 +77,9 @@ export class JobsService {
     return job;
   }
 
-  async findAll() {
+  async findAll(userId: string) {
     const jobs = await this.prisma.job.findMany({
+      where: { userId },
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { clips: true } } },
     });
@@ -88,9 +90,9 @@ export class JobsService {
     }));
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId: string) {
     const job = await this.prisma.job.findUnique({
-      where: { id },
+      where: { id, userId },
       include: { clips: { orderBy: { createdAt: 'asc' } } },
     });
 
@@ -98,8 +100,8 @@ export class JobsService {
     return job;
   }
 
-  async cancel(id: string) {
-    const job = await this.findOne(id);
+  async cancel(id: string, userId: string) {
+    const job = await this.findOne(id, userId);
 
     if (
       job.status === JobStatus.done ||
@@ -146,8 +148,8 @@ export class JobsService {
     return updated;
   }
 
-  async snapshot(id: string): Promise<JobSnapshot> {
-    const job = await this.findOne(id);
+  async snapshot(id: string, userId: string): Promise<JobSnapshot> {
+    const job = await this.findOne(id, userId);
     return toSnapshot(job);
   }
 }
