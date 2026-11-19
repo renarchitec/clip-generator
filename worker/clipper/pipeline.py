@@ -325,6 +325,8 @@ def _render_one(
         "0:a:0?",
         "-c:v",
         "libx264",
+        "-pix_fmt",
+        "yuv420p",
         "-preset",
         "veryfast",
         "-crf",
