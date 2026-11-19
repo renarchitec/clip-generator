@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -59,4 +60,9 @@ export class CreateJobDto {
   @IsOptional()
   @IsIn(REFRAME_MODES)
   reframe: ReframeMode = DEFAULT_REFRAME;
+
+  /** Apakah subtitle dibakar ke clip; default true untuk kompatibilitas. */
+  @IsOptional()
+  @IsBoolean()
+  captions: boolean = true;
 }

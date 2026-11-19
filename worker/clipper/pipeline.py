@@ -293,13 +293,14 @@ def _render_one(
     outdir: str,
     filename: str,
     reframe: str = "face_tracking",
+    captions: bool = True,
 ) -> None:
     out_path = os.path.join(outdir, filename)
     ass_path = os.path.join(outdir, os.path.splitext(filename)[0] + ".ass")
     clip_cues = _clip_cues(cues, moment.start, moment.end)
 
     filters = _reframe_filters(reframe, video, moment)
-    if clip_cues:
+    if captions and clip_cues:
         with open(ass_path, "w", encoding="utf-8") as handle:
             handle.write(write_ass(clip_cues, VIDEO_WIDTH, VIDEO_HEIGHT, FONT_SIZE, MARGIN_V))
         filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
@@ -356,7 +357,7 @@ async def render(
     on_progress=None,
     should_cancel=None,
 ) -> List[ClipResult]:
-    """Render tiap momen jadi 1080x1920 dengan subtitle terbakar."""
+    """Render tiap momen jadi 1080x1920; subtitle terbakar bila job.captions."""
     if not moments:
         raise ValueError("tidak ada momen untuk dirender")
 
@@ -368,7 +369,16 @@ async def render(
     for index, moment in enumerate(moments, start=1):
         await _check_cancel(should_cancel)  # berhenti di antara clip, bukan di tengah ffmpeg
         filename = f"clip-{index:02d}.mp4"
-        await asyncio.to_thread(_render_one, video, moment, subs, outdir, filename, job.reframe)
+        await asyncio.to_thread(
+            _render_one,
+            video,
+            moment,
+            subs,
+            outdir,
+            filename,
+            job.reframe,
+            job.captions,
+        )
         clips.append(
             ClipResult(
                 title=moment.title,

@@ -34,6 +34,7 @@ export class JobsService {
     const description =
       dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
     const reframe = dto.reframe ?? DEFAULT_REFRAME;
+    const captions = dto.captions ?? true;
 
     const job = await this.prisma.job.create({
       data: {
@@ -41,6 +42,7 @@ export class JobsService {
         description,
         mode: dto.mode,
         reframe,
+        captions,
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
         ranges: ranges as unknown as Prisma.InputJsonValue,
@@ -53,6 +55,7 @@ export class JobsService {
       url,
       mode: dto.mode,
       reframe,
+      captions,
       description,
       params: {
         clipCount: dto.clipCount,
@@ -171,6 +174,7 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
     description: job.description ?? null,
     mode: job.mode,
     reframe: job.reframe,
+    captions: job.captions,
     status: job.status,
     stage: job.stage,
     progress: job.progress,

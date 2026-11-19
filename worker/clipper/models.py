@@ -29,6 +29,7 @@ DEFAULT_CLIP_COUNT = 3
 DEFAULT_TARGET_DURATION_SEC = 45.0
 MAX_DESCRIPTION_CHARS = 500
 DEFAULT_REFRAME = "face_tracking"
+DEFAULT_CAPTIONS = True
 
 # job_id dipakai sebagai nama folder di CLIPS_DIR. Batasi keras supaya nilai
 # dari antrean tidak bisa keluar dari CLIPS_DIR.
@@ -100,6 +101,7 @@ class JobData:
     url: str
     mode: JobMode = "auto"
     reframe: ReframeMode = DEFAULT_REFRAME
+    captions: bool = DEFAULT_CAPTIONS
     description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
@@ -110,6 +112,7 @@ class JobData:
             "url": self.url,
             "mode": self.mode,
             "reframe": self.reframe,
+            "captions": self.captions,
             "description": self.description,
             "params": self.params.to_dict(),
             "ranges": [item.to_dict() for item in self.ranges],
@@ -149,11 +152,22 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
     if reframe not in REFRAME_MODES:
         raise ValueError(f"reframe tidak dikenal: {reframe!r} ({'/'.join(REFRAME_MODES)})")
 
+    raw_captions = _first(data, "captions", default=DEFAULT_CAPTIONS)
+    if isinstance(raw_captions, bool):
+        captions = raw_captions
+    elif isinstance(raw_captions, str):
+        captions = raw_captions.strip().lower() not in ("0", "false", "no", "off")
+    elif raw_captions is None:
+        captions = DEFAULT_CAPTIONS
+    else:
+        captions = bool(raw_captions)
+
     return JobData(
         job_id=job_id,
         url=url,
         mode=mode,  # type: ignore[arg-type]
         reframe=reframe,  # type: ignore[arg-type]
+        captions=captions,
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,

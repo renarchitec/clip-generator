@@ -7,7 +7,7 @@
     "dev": "nest start --watch",
     "start": "node dist/apps/api/src/main.js",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "node --experimental-strip-types src/jobs/jobs.cancel.contract.spec.ts && node --experimental-strip-types src/jobs/jobs.description.contract.spec.ts && node --experimental-strip-types src/jobs/jobs.reframe.contract.spec.ts && node --experimental-strip-types src/clips/clips.delete.spec.ts && node --experimental-strip-types src/auth/crypto.spec.ts",
+    "test": "node --experimental-strip-types src/jobs/jobs.cancel.contract.spec.ts && node --experimental-strip-types src/jobs/jobs.description.contract.spec.ts && node --experimental-strip-types src/jobs/jobs.reframe.contract.spec.ts && node --experimental-strip-types src/jobs/jobs.captions.contract.spec.ts && node --experimental-strip-types src/clips/clips.delete.spec.ts && node --experimental-strip-types src/auth/crypto.spec.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

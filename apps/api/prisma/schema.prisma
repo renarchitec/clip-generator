@@ -51,6 +51,7 @@ model Job {
   description       String?
   mode              JobMode
   reframe           String    @default("face_tracking")
+  captions          Boolean   @default(true)
   clipCount         Int
   targetDurationSec Int
   ranges            Json?

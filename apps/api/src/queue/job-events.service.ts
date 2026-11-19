@@ -7,6 +7,7 @@ export interface JobSnapshot {
   description: string | null;
   mode: string;
   reframe: string;
+  captions: boolean;
   status: string;
   stage: string | null;
   progress: number;

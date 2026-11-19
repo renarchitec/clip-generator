@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, type Job, type User } from "@/lib/api"
 import { WorkspaceShell } from "@/components/chrome"
@@ -26,7 +27,7 @@ export const Route = createFileRoute("/")({
 })
 
 type ClipRange = { start: string; end: string }
-type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; clipCount?: number; targetDurationSec: number; description?: string; ranges?: { start: number; end: number }[] }
+type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; clipCount?: number; targetDurationSec: number; description?: string; ranges?: { start: number; end: number }[] }
 
 function Dashboard() {
   const { user } = Route.useRouteContext() as { user: User }
@@ -36,6 +37,7 @@ function Dashboard() {
   const [url, setUrl] = useState("")
   const [mode, setMode] = useState<"auto" | "manual">("auto")
   const [reframe, setReframe] = useState<Job["reframe"]>("face_tracking")
+  const [captions, setCaptions] = useState(true)
   const [clipCount, setClipCount] = useState(3)
   const [duration, setDuration] = useState(45)
   const [description, setDescription] = useState("")
@@ -54,7 +56,7 @@ function Dashboard() {
     event.preventDefault()
     setError("")
     if (!url.trim()) { setError(t.urlRequired); return }
-    const body: JobInput = { url: url.trim(), mode, reframe, targetDurationSec: duration }
+    const body: JobInput = { url: url.trim(), mode, reframe, captions, targetDurationSec: duration }
     if (mode === "auto") {
       body.clipCount = clipCount
       if (description.trim()) body.description = description.trim()
@@ -78,6 +80,7 @@ function Dashboard() {
           <Field><FieldLabel htmlFor="source-url">{t.sourceUrl}</FieldLabel><div className="relative"><Play className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input id="source-url" type="url" inputMode="url" autoComplete="url" placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} required className="h-12 rounded-xl pl-10" /></div><FieldDescription>{t.sourceHint}</FieldDescription><FieldDescription className="mt-1">{t.captionsNote}</FieldDescription></Field>
           <Field><FieldLabel>{t.creationMode}</FieldLabel><div className="grid grid-cols-2 gap-2 rounded-xl bg-secondary/70 p-1.5" role="group" aria-label={t.creationMode}><Button type="button" variant={mode === "auto" ? "default" : "ghost"} className="h-10 rounded-lg" aria-pressed={mode === "auto"} onClick={() => setMode("auto")}>{t.autoMode}</Button><Button type="button" variant={mode === "manual" ? "default" : "ghost"} className="h-10 rounded-lg" aria-pressed={mode === "manual"} onClick={() => setMode("manual")}>{t.manualMode}</Button></div></Field>
           <Field><FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => setReframe(value as Job["reframe"])} className="grid gap-2 sm:grid-cols-3">{([{ value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/80 bg-card px-3 py-3 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5" /><span><span className="block text-sm font-medium">{option.label}</span><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup></Field>
+           <Field className="flex flex-row items-center justify-between rounded-xl border border-border/80 bg-card px-4 py-3"><div><FieldLabel htmlFor="burn-captions">{t.burnCaptions}</FieldLabel></div><Switch id="burn-captions" checked={captions} onCheckedChange={setCaptions} /></Field>
            {mode === "auto" ? <div className="grid gap-4 sm:grid-cols-2"><Field><FieldLabel htmlFor="clip-count">{t.clipCount}</FieldLabel><Input id="clip-count" type="number" min={1} max={10} step={1} required value={clipCount} onChange={(e) => setClipCount(Number(e.target.value))} className="h-11 rounded-xl" /></Field><Field><FieldLabel htmlFor="target-duration">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration" type="number" min={15} max={180} step={1} required value={duration} onChange={(e) => setDuration(Number(e.target.value))} className="h-11 rounded-xl pr-14" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field><Field className="sm:col-span-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="clip-description">{t.description}</FieldLabel><span className="text-xs tabular-nums text-muted-foreground">{description.length}/500</span></div><textarea id="clip-description" maxLength={500} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t.descriptionHint} className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" /></Field></div> : <div className="space-y-3 rounded-xl border border-border/80 bg-secondary/25 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{t.manualRanges}</p><p className="mt-1 text-xs text-muted-foreground">{t.rangeHint}</p></div><Badge variant="secondary" className="rounded-full font-normal">{ranges.length}/10</Badge></div><div className="space-y-2">{ranges.map((range, index) => <div key={index} className="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-2 rounded-lg border border-border/70 bg-card p-3"><span className="pb-3 text-xs font-medium tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><Field><FieldLabel htmlFor={`range-start-${index}`}>{t.startSec}</FieldLabel><Input id={`range-start-${index}`} type="number" min="0" step="any" required aria-label={`${t.startSec} ${index + 1}`} placeholder="0" value={range.start} onChange={(e) => updateRange(index, "start", e.target.value)} className="h-10 rounded-lg" /></Field><Field><FieldLabel htmlFor={`range-end-${index}`}>{t.endSec}</FieldLabel><Input id={`range-end-${index}`} type="number" min="0" step="any" required aria-label={`${t.endSec} ${index + 1}`} placeholder="30" value={range.end} onChange={(e) => updateRange(index, "end", e.target.value)} className="h-10 rounded-lg" /></Field><Button type="button" variant="ghost" size="icon" aria-label={`${t.removeRange} ${index + 1}`} disabled={ranges.length === 1} onClick={() => setRanges((items) => items.filter((_, i) => i !== index))} className="mb-0.5 text-muted-foreground hover:text-destructive"><X className="size-4" /></Button></div>)}</div><Button type="button" variant="outline" size="sm" disabled={ranges.length >= 10} onClick={() => setRanges((items) => [...items, { start: "", end: "" }])} className="rounded-lg"><Plus className="size-4" />{t.addRange}</Button></div>}
           {mode === "manual" && <Field><FieldLabel htmlFor="target-duration-manual">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration-manual" type="number" min={15} max={180} step={1} required value={duration} onChange={(e) => setDuration(Number(e.target.value))} className="h-11 rounded-xl pr-14" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field>}
           {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
