@@ -187,4 +187,3 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | **Captions** | Takarir kata per kata (gaya karaoke) yang dibakar langsung ke video |
 | **Regenerate** | Mengisi ulang formulir dashboard dengan konfigurasi job sebelumnya untuk membuat job baru |
 | **Dokploy** | Panel orkestrasi deployment Docker di server VPS |
-
