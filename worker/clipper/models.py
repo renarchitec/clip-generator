@@ -33,6 +33,11 @@ MAX_DESCRIPTION_CHARS = 500
 DEFAULT_REFRAME = "face_tracking"
 DEFAULT_CAPTIONS = True
 
+# Batas judul/alasan rentang manual hasil tinjauan LLM; harus sama dengan
+# MaxLength di apps/api/src/jobs/dto/create-job.dto.ts.
+MAX_RANGE_TITLE_CHARS = 70
+MAX_RANGE_REASON_CHARS = 200
+
 # job_id dipakai sebagai nama folder di CLIPS_DIR. Batasi keras supaya nilai
 # dari antrean tidak bisa keluar dari CLIPS_DIR.
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -59,19 +64,40 @@ def _to_int(value: Any, default: int) -> int:
         return default
 
 
+def _to_text(value: Any, max_chars: int) -> Optional[str]:
+    """trim + batas panjang; kosong/bukan string -> None."""
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed[:max_chars] or None
+
+
 @dataclass
 class ManualRange:
     """detik"""
 
     start: float
     end: float
+    # Judul/alasan hasil tinjauan LLM; None bila rentang berasal dari transkrip.
+    title: Optional[str] = None
+    reason: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, float]:
-        return {"start": self.start, "end": self.end}
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"start": self.start, "end": self.end}
+        if self.title:
+            payload["title"] = self.title
+        if self.reason:
+            payload["reason"] = self.reason
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ManualRange":
-        return cls(start=_to_float(data.get("start"), 0.0), end=_to_float(data.get("end"), 0.0))
+        return cls(
+            start=_to_float(data.get("start"), 0.0),
+            end=_to_float(data.get("end"), 0.0),
+            title=_to_text(data.get("title"), MAX_RANGE_TITLE_CHARS),
+            reason=_to_text(data.get("reason"), MAX_RANGE_REASON_CHARS),
+        )
 
 
 @dataclass

@@ -58,12 +58,12 @@ Kebutuhan utama:
 2. **Cek Kesiapan LLM** — dashboard menampilkan indikator status LLM (online/offline, model, keberhasilan panggilan terakhir).
 3. **Buat job atau Tinjau Momen** — tempel URL video (YouTube, TikTok, Instagram):
    - **Mode otomatis langsung:** LLM memilih momen dan worker langsung memproses video sampai render.
-   - **Opsi "Tinjau Momen" (Review Moments):** sistem memindai URL terlebih dahulu (`POST /api/previews`), worker hanya mengunduh subtitle dan memanggil LLM (tanpa unduh video/render). Pengguna melihat daftar kandidat momen LLM dan transkrip penuh (`GET /api/previews/:id`). Pengguna memilih kandidat atau rentang transkrip untuk dijadikan job manual normal (`POST /api/jobs`). Hasil preview otomatis kedaluwarsa setelah 1 jam.
+   - **Opsi "Tinjau Momen" (Review Moments):** sistem memindai URL terlebih dahulu (`POST /api/previews`), worker hanya mengunduh subtitle dan memanggil LLM (tanpa unduh video/render). Pengguna melihat daftar kandidat momen LLM dan transkrip penuh (`GET /api/previews/:id`). Pengguna memilih kandidat atau rentang transkrip untuk dijadikan job manual normal (`POST /api/jobs`); kandidat LLM membawa `title`/`reason` aslinya sehingga judul klip dipertahankan. Hasil preview otomatis kedaluwarsa setelah 1 jam.
      - **Draf bertahan saat berpindah halaman:** URL, mode, reframe, takarir, jumlah klip, durasi, deskripsi, rentang manual, status tinjau momen, `previewId`, pilihan kandidat, rentang transkrip, serta cue awal/akhir disimpan di `sessionStorage` per tab browser (tanpa token/sesi) dan dipulihkan saat pengguna kembali ke dashboard. Polling `GET /api/previews/:id` otomatis berlanjut dari `previewId` tersimpan.
      - Draf dihapus setelah job dibuat, saat pengguna mematikan opsi tinjau momen, atau bila preview sudah kedaluwarsa (404): dashboard menampilkan pesan "preview kedaluwarsa" dan tombol pindai ulang, sambil mempertahankan URL dan parameter lain.
    - **Mode manual langsung:** pengguna menentukan sendiri rentang waktu `{start, end}`.
    - Parameter auto: jumlah klip (1–10, default 3 untuk job, default 5 untuk preview), durasi target (15–180 detik, default 45), deskripsi/arahan konten singkat (opsional, maks 500 karakter).
-   - Rentang manual: daftar 1–10 rentang waktu `{start, end}` dalam detik.
+   - Rentang manual: daftar 1–10 rentang waktu `{start, end}` dalam detik; `title`/`reason` opsional hanya dikirim untuk kandidat hasil tinjauan LLM. Tanpa judul, worker memakai fallback `Clip mm:ss–mm:ss`.
    - Pilihan reframe: `face_tracking` (default), `blurred_fill`, atau `black_bars`.
    - Opsi takarir (`captions`): aktif (default) atau nonaktif.
 4. **Pantau** — job masuk antrean `clip-jobs` di BullMQ; dashboard dan halaman detail menampilkan tahapan nyata secara real-time via Server-Sent Events (`download` → `transcribe` → `select` → `render` → `save`).
@@ -106,11 +106,11 @@ Kebutuhan utama:
 | FR-2.1 | Validasi URL sumber hanya untuk host yang didukung: YouTube, TikTok, Instagram | Host lain atau URL cacat → 400 Bad Request |
 | FR-2.2 | Pilihan mode: `auto` (LLM) atau `manual` (rentang timestamp) | Parameter divalidasi sesuai mode yang dipilih |
 | FR-2.3 | Parameter mode auto: `clipCount` (1–10, default 3), `targetDurationSec` (15–180 detik, default 45), dan `description` (brief arahan LLM, maks 500 karakter) | Parameter tersimpan di database dan diteruskan ke worker |
-| FR-2.4 | Parameter mode manual: `ranges` berisi array 1–10 rentang `{start, end}` dengan `start >= 0` dan `end > start` | Validasi gagal bila rentang kosong, durasi negatif, atau melebihi 10 rentang |
+| FR-2.4 | Parameter mode manual: `ranges` berisi array 1–10 rentang `{start, end}` dengan `start >= 0` dan `end > start`, serta field opsional `title` (maks. 70 karakter) dan `reason` (maks. 200 karakter) yang diawetkan dari kandidat tinjauan LLM | Validasi gagal bila rentang kosong, durasi negatif, atau melebihi 10 rentang. Rentang manual murni/transkrip tanpa judul menggunakan judul fallback timestamp `Clip mm:ss–mm:ss` |
 | FR-2.5 | Pilihan mode reframe: `face_tracking` (default), `black_bars`, `blurred_fill` | Nilai tersimpan di database dan memengaruhi filter ffmpeg |
 | FR-2.6 | Pengaturan takarir (`captions`): boolean (default `true`) | Jika `false`, render klip melewatkan pembakaran subtitle ASS |
 | FR-2.7 | Tombol Buat Ulang (Regenerate) dari halaman detail job | Mengarahkan ke dashboard `/?from=<jobId>` dengan nilai form terisi otomatis dari job lama untuk membuat job baru |
-| FR-2.8 | Opsi "Tinjau Momen" pada mode otomatis: memindai URL untuk mendapatkan kandidat momen LLM dan transkrip penuh sebelum membuat job | `POST /api/previews` mengembalikan `{id}`; `GET /api/previews/:id` menampilkan kandidat `{start,end,title,reason}` dan cue `{start,end,text}`; pengguna memilih kandidat/rentang lalu membuat job manual via `POST /api/jobs`. Preview hanya tersimpan di Redis/BullMQ dan kedaluwarsa setelah 1 jam. Mode otomatis langsung dan mode manual tidak berubah |
+| FR-2.8 | Opsi "Tinjau Momen" pada mode otomatis: memindai URL untuk mendapatkan kandidat momen LLM dan transkrip penuh sebelum membuat job | `POST /api/previews` mengembalikan `{id}`; `GET /api/previews/:id` menampilkan kandidat `{start,end,title,reason}` dan cue `{start,end,text}`; pengguna memilih kandidat/rentang lalu membuat job manual via `POST /api/jobs`. Pilihan kandidat LLM mengawetkan `title` dan `reason` ke dalam payload rentang manual sehingga judul klip tidak hilang saat dirender. Preview hanya tersimpan di Redis/BullMQ dan kedaluwarsa setelah 1 jam. Mode otomatis langsung dan mode manual tidak berubah |
 
 ### FR-3 Pemrosesan dan Pipeline Worker (P0)
 

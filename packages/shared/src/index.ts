@@ -26,6 +26,10 @@ export interface ManualRange {
   start: number;
   /** detik */
   end: number;
+  /** judul momen hasil tinjauan LLM; opsional */
+  title?: string;
+  /** alasan momen hasil tinjauan LLM; opsional */
+  reason?: string;
 }
 
 export interface JobParams {

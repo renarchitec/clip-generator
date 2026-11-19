@@ -200,12 +200,15 @@ def _moments_from_ranges(cues: Sequence[Cue], ranges) -> List[llm.Moment]:
     for item in ranges:
         if item.end <= item.start:
             continue
+        # Pakai judul/alasan dari tinjauan LLM bila ada; timestamp hanya fallback.
+        title = (item.title or "").strip()
+        reason = (item.reason or "").strip()
         moments.append(
             llm.Moment(
                 start=round(float(item.start), 2),
                 end=round(float(item.end), 2),
-                title=llm.title_from_cues(cues, item.start, item.end),
-                reason="manual",
+                title=title[:70] or llm.title_from_cues(cues, item.start, item.end),
+                reason=reason[:200] or "manual",
             )
         )
     return sorted(moments, key=lambda moment: moment.start)

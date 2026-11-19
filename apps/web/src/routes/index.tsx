@@ -29,7 +29,8 @@ export const Route = createFileRoute("/")({
 })
 
 type ClipRange = { start: string; end: string }
-type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; clipCount?: number; targetDurationSec: number; description?: string; ranges?: { start: number; end: number }[] }
+type RangePayload = { start: number; end: number; title?: string; reason?: string }
+type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[] }
 
 function formatMomentTime(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
@@ -50,7 +51,7 @@ type ReviewPanelProps = {
   cueRanges: { start: number; end: number }[]
   setCueRanges: React.Dispatch<React.SetStateAction<{ start: number; end: number }[]>>
   createPending: boolean
-  renderSelected: (ranges: { start: number; end: number }[]) => void
+  renderSelected: (ranges: RangePayload[]) => void
   retry: () => void
   reviewRef: React.RefObject<HTMLDivElement | null>
 }
@@ -90,7 +91,7 @@ function ReviewPanel({ preview, loading, error, t, selectedCandidates, setSelect
         return <button key={`${cue.start}-${index}`} type="button" aria-pressed={isStart || isEnd} onClick={() => { if (selectedCueStart === null || selectedCueEnd !== null) { setSelectedCueStart(index); setSelectedCueEnd(null) } else setSelectedCueEnd(index) }} className={`flex w-full gap-3 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isStart || isEnd ? "bg-primary/10 ring-1 ring-primary" : ""}`}><span className="shrink-0 font-mono text-xs text-muted-foreground">{formatMomentTime(cue.start)}{isStart ? ` · ${t.startSec}` : isEnd ? ` · ${t.endSec}` : ""}</span><span>{cue.text}</span></button>
       })}</div><div className="mt-3 flex flex-wrap items-center gap-2"><Button type="button" variant="outline" size="sm" disabled={selectedCueStart === null || selectedCueEnd === null || selectedCount >= 10 || cues[selectedCueStart]?.start === cues[selectedCueEnd]?.end} onClick={addCueRange}>{t.addRange}</Button><span aria-live="polite" className="text-xs text-muted-foreground">{selectedCueStart === null ? t.chooseStartCue : selectedCueEnd === null ? t.chooseEndCue : `${t.selectedMoments}: ${formatMomentTime(cues[selectedCueStart]?.start ?? 0)}–${formatMomentTime(cues[selectedCueEnd]?.end ?? 0)}`}</span></div></div>
       <div className="space-y-2"><p className="text-sm font-medium">{t.selectedMoments} ({selectedCount}/10)</p>{selectedCandidates.map((index) => { const candidate = candidates[index]; return candidate ? <div key={`candidate-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-3 py-2 text-sm"><span className="min-w-0 truncate">{candidate.title} <span className="text-xs text-muted-foreground">{formatMomentTime(candidate.start)}–{formatMomentTime(candidate.end)}</span></span><Button type="button" variant="ghost" size="sm" onClick={() => setSelectedCandidates((current) => current.filter((item) => item !== index))}>{t.removeRange}</Button></div> : null })}{cueRanges.map((range, index) => <div key={`cue-range-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-3 py-2 text-sm"><span>{formatMomentTime(range.start)}–{formatMomentTime(range.end)}</span><Button type="button" variant="ghost" size="sm" onClick={() => setCueRanges((current) => current.filter((_, item) => item !== index))}>{t.removeRange}</Button></div>)}</div>
-      <Button type="button" className="w-full rounded-xl" disabled={selectedCount < 1 || selectedCount > 10 || createPending} onClick={() => renderSelected([...selectedCandidates.flatMap((index) => candidates[index] ? [{ start: candidates[index].start, end: candidates[index].end }] : []), ...cueRanges])}>{createPending && <LoaderCircle className="mr-2 size-4 animate-spin" />}{t.renderClips.replace("{count}", String(selectedCount))}</Button>
+      <Button type="button" className="w-full rounded-xl" disabled={selectedCount < 1 || selectedCount > 10 || createPending} onClick={() => renderSelected([...selectedCandidates.flatMap((index) => candidates[index] ? [{ start: candidates[index].start, end: candidates[index].end, title: candidates[index].title, reason: candidates[index].reason }] : []), ...cueRanges])}>{createPending && <LoaderCircle className="mr-2 size-4 animate-spin" />}{t.renderClips.replace("{count}", String(selectedCount))}</Button>
     </>}
   </section>
 }
@@ -186,7 +187,7 @@ function Dashboard() {
     onError: (e: Error) => setError((e as Error & { status?: number }).status === 401 ? t.error : t.apiError),
   })
   const updateRange = (index: number, field: keyof ClipRange, value: string) => setRanges((items) => items.map((item, i) => i === index ? { ...item, [field]: value } : item))
-  const renderSelected = (selectedRanges: { start: number; end: number }[]) => {
+  const renderSelected = (selectedRanges: RangePayload[]) => {
     if (!selectedRanges.length || selectedRanges.length > 10 || selectedRanges.some(({ start, end }) => !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start)) { setError(t.rangesInvalid); return }
     create.mutate({ url: url.trim(), mode: "manual", ranges: selectedRanges, targetDurationSec: duration, reframe, captions, ...(description.trim() ? { description: description.trim() } : {}) })
   }

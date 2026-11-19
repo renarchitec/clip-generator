@@ -9,6 +9,7 @@ import {
   IsString,
   IsUrl,
   Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -23,6 +24,18 @@ export class ManualRangeDto {
   @IsNumber()
   @Min(0)
   end: number;
+
+  /** Judul hasil tinjauan LLM; opsional agar rentang transkrip tetap valid. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(70)
+  title?: string;
+
+  /** Alasan hasil tinjauan LLM; opsional. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reason?: string;
 }
 
 export class CreateJobDto {

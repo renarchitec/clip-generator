@@ -92,7 +92,7 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 - Menghasilkan token kata (*word-level timestamps*) baik dari tag inline VTT atau aproksimasi berbasis bobot karakter.
 
 ### 4. Tahap Pemilihan Momen (`select`)
-- **Mode `manual`:** Menggunakan rentang timestamp `{start, end}` yang diberikan pengguna dan mencocokkan judul ringkas dari cue terdekat.
+- **Mode `manual`:** Menggunakan rentang timestamp `{start, end}` yang diberikan pengguna. Jika rentang memuat `title` dan `reason` (hasil tinjauan LLM), nilai tersebut digunakan langsung sebagai judul dan alasan momen; jika kosong (misal rentang manual biasa atau dari cue transkrip), judul menggunakan fallback berbasis timestamp `Clip mm:ss–mm:ss` dan reason `"manual"`.
 - **Mode `auto`:** Mengirimkan transkrip terstruktur, parameter (`clipCount`, `targetDurationSec`), dan instruksi `description` (brief konten) ke endpoint LLM OpenAI-compatible.
 - Brief pengguna menjadi instruksi prioritas utama bagi LLM untuk memilih topik/bagian yang relevan.
 - JSON dari respon LLM divalidasi ketat (dengan 1x retry jika respon rusak). Jika LLM tidak dikonfigurasi atau gagal memberikan momen valid, job langsung gagal (tanpa fallback berbasis aturan).
@@ -202,5 +202,5 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 ## Testing
 
 - **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, dan pembatalan job (`worker/tests/`).
-- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
+- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, manual ranges/preservasi title-reason, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
 - **Verifikasi pipeline tanpa Redis:** `python -m clipper.selftest --url <url> --mode <auto|manual> [--ranges 12-40,90-130]` menjalankan pipeline penuh secara lokal (tanpa antrean) untuk uji cepat.

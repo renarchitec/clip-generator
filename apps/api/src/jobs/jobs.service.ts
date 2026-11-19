@@ -272,5 +272,23 @@ function normalizeRanges(dto: CreateJobDto): ManualRange[] {
     }
   }
 
-  return ranges.map((range) => ({ start: range.start, end: range.end }));
+  return ranges.map((range) => {
+    const normalized: ManualRange = { start: range.start, end: range.end };
+    const title = sanitizeMomentText(range.title, 70);
+    const reason = sanitizeMomentText(range.reason, 200);
+    if (title) normalized.title = title;
+    if (reason) normalized.reason = reason;
+    return normalized;
+  });
+}
+
+/** trim + batas panjang; kosong -> undefined agar field opsional tidak ikut terkirim. */
+function sanitizeMomentText(
+  raw: string | undefined,
+  max: number,
+): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  return trimmed.slice(0, max);
 }
