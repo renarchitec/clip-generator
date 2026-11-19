@@ -69,7 +69,7 @@ Kebutuhan utama:
    - Pilihan rasio output (`aspectRatio`): `9:16` (default, 1080x1920), `1:1` (1080x1080, reframe diterapkan ke target persegi), atau `16:9` (1920x1080 landscape; sumber di-skala pas dan di-pad hitam bila bukan 16:9 — reframe diabaikan).
    - Opsi dua pembicara (`twoSpeakers`): nonaktif (default) atau aktif; hanya berlaku untuk rasio 9:16 (API menormalkan ke `false` untuk 1:1/16:9). Bila aktif, klip 1080x1920 dibagi dua panel 1080x960 (atas/bawah) berisi dua pembicara dominan; pilihan reframe diabaikan.
 4. **Pantau** — job masuk antrean `clip-jobs` di BullMQ; dashboard dan halaman detail menampilkan tahapan nyata secara real-time via Server-Sent Events (`download` → `transcribe` → `select` → `render` → `save`).
-5. **Kontrol** — pengguna dapat membatalkan job yang sedang berjalan via tombol Batal (`POST /api/jobs/:id/cancel`).
+5. **Kontrol** — pengguna dapat membatalkan job yang sedang berjalan via tombol Batal (`POST /api/jobs/:id/cancel`), atau mengulang job `failed`/`cancelled` langsung (`POST /api/jobs/:id/retry` membuat job baru dari konfigurasi lama tanpa mengubah job lama).
 6. **Tinjau & Putar** — buka detail job, putar klip di player 9:16 (`GET /api/clips/:id/stream` mendukung HTTP byte-range), salin judul klip.
 7. **Buat Ulang (Regenerate)** — klik "Buat ulang" (`/?from=<jobId>`) untuk mengisi form dashboard dengan parameter job sebelumnya guna membuat job baru.
 8. **Unduh atau Hapus** — unduh file video langsung via browser (`GET /api/clips/:id/download`), hapus klip seketika (`DELETE /api/clips/:id`), atau hapus keseluruhan job beserta klip dan file fisiknya (`DELETE /api/jobs/:id`).
@@ -84,7 +84,7 @@ Kebutuhan utama:
 | **P0** | Pilihan mode reframe (`face_tracking` / pembicara aktif via MediaPipe FaceMesh, `blurred_fill`, `black_bars`) | Selesai |
 | **P0** | Web UI TanStack Start + Query + shadcn/ui + Tailwind v4 + i18n (EN/ID) + Dark/Light theme | Selesai |
 | **P0** | Real-time progress SSE (`GET /api/jobs/:id/events`) dan streaming klip byte-range | Selesai |
-| **P0** | Pembatalan job (`POST /api/jobs/:id/cancel`), penghapusan job (`DELETE /api/jobs/:id`), dan penghapusan klip (`DELETE /api/clips/:id`) | Selesai |
+| **P0** | Pembatalan job (`POST /api/jobs/:id/cancel`), penghapusan job (`DELETE /api/jobs/:id`), penghapusan klip (`DELETE /api/clips/:id`), dan pengulangan job (`POST /api/jobs/:id/retry`) | Selesai |
 | **P0** | Regenerate job via prefill form (`/?from=<jobId>`) | Selesai |
 | **P0** | Indikator status LLM worker (`GET /api/system/llm-status` + Redis heartbeat `worker:status:llm`) | Selesai |
 | **P0** | Tinjau momen sebelum memotong (`POST /api/previews` + `GET /api/previews/:id`: kandidat LLM + transkrip penuh → job manual) | Selesai |
@@ -121,6 +121,7 @@ Kebutuhan utama:
 | FR-2.11 | Batas pemindaian sumber (`maxSourceSec`): integer opsional 60–36000 detik; kosong/`null` = durasi penuh (default). Hanya berlaku untuk mode auto dan preview; mode manual mengabaikannya karena rentangnya sudah eksplisit | Nilai divalidasi `@IsInt @Min(60) @Max(36000)`, tersimpan di database (`Int?`, default NULL), dan diteruskan ke antrean/worker. Preview hanya memindai cue yang mulai sebelum limit (cue yang melintasi limit dipotong di limit) dan mengembalikan hanya cue itu; kandidat momen berakhir ≤ limit. Job auto hanya mengunduh 0–limit via `--download-sections` (satu section, offset 0) dengan fallback unduh penuh bila section tanpa stream video; momen berakhir ≤ limit. Bila video lebih pendek dari limit, perilakunya sama seperti durasi penuh |
 | FR-2.7 | Tombol Buat Ulang (Regenerate) dari halaman detail job | Mengarahkan ke dashboard `/?from=<jobId>` dengan nilai form terisi otomatis dari job lama untuk membuat job baru |
 | FR-2.8 | Opsi "Tinjau Momen" pada mode otomatis: memindai URL untuk mendapatkan kandidat momen LLM dan transkrip penuh sebelum membuat job | `POST /api/previews` mengembalikan `{id}`; `GET /api/previews/:id` menampilkan kandidat `{start,end,title,reason}` dan cue `{start,end,text}`; pengguna memilih kandidat/rentang lalu membuat job manual via `POST /api/jobs`. Pilihan kandidat LLM mengawetkan `title` dan `reason` ke dalam payload rentang manual sehingga judul klip tidak hilang saat dirender. Preview hanya tersimpan di Redis/BullMQ dan kedaluwarsa setelah 1 jam. Mode otomatis langsung dan mode manual tidak berubah |
+| FR-2.12 | Pengulangan job (`POST /api/jobs/:id/retry`): membuat job **baru** dari konfigurasi job lama (URL, deskripsi, mode, reframe, captions, twoSpeakers, aspectRatio, clipCount, targetDurationSec, rentang beserta `title`/`reason`, dan `maxSourceSec`) | Hanya untuk job berstatus `failed` atau `cancelled`; status lain → 400 Bad Request. Job non-pemilik → 404. Job baru dibuat lewat jalur create yang sama (validasi URL, normalisasi `twoSpeakers`/`maxSourceSec`/rentang, dan payload antrean BullMQ) lalu mengembalikan snapshot job baru; job lama tidak diubah |
 
 ### FR-3 Pemrosesan dan Pipeline Worker (P0)
 
@@ -176,6 +177,7 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | `/api/jobs/:id` | GET | Mengambil detail job beserta daftar klip miliknya | Sesi (hanya pemilik) |
 | `/api/jobs/:id` | DELETE | Menghapus job: membatalkan bila masih queued/running, menghapus semua file klip, lalu menghapus baris job (klip cascade) | Sesi (hanya pemilik) |
 | `/api/jobs/:id/cancel` | POST | Membatalkan job yang sedang mengantre atau berjalan | Sesi (hanya pemilik) |
+| `/api/jobs/:id/retry` | POST | Membuat job baru dari konfigurasi job lama; hanya job `failed`/`cancelled` (400 selain itu), job lama tidak diubah | Sesi (hanya pemilik) |
 | `/api/jobs/:id/events` | GET | Aliran Server-Sent Events (SSE) status & progres job | Sesi (hanya pemilik) |
 | `/api/previews` | POST | Memindai URL untuk preview momen: kandidat LLM + transkrip (tanpa render), body `{url, description?, clipCount? (1–10, default 5), targetDurationSec? (15–180, default 45), maxSourceSec? (60–36000, default null = durasi penuh)}` | Sesi |
 | `/api/previews/:id` | GET | Status preview beserta `candidates` dan `cues` bila selesai; 404 bila tidak ada, kedaluwarsa, atau milik pengguna lain | Sesi (hanya pemilik) |
@@ -212,5 +214,6 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | **Reframe** | Metode transformasi video lanskap ke format potret 9:16 (`face_tracking`, `blurred_fill`, `black_bars`) |
 | **Captions** | Takarir kata per kata (gaya karaoke) yang dibakar langsung ke video |
 | **Regenerate** | Mengisi ulang formulir dashboard dengan konfigurasi job sebelumnya untuk membuat job baru |
+| **Retry** | Membuat job baru dari konfigurasi job lama yang `failed`/`cancelled` lewat `POST /api/jobs/:id/retry`; job lama tetap utuh |
 | **Preview / Tinjau Momen** | Pindai URL (subtitle + LLM, tanpa render) untuk menampilkan kandidat momen dan transkrip penuh sebelum membuat job manual; kedaluwarsa setelah 1 jam |
 | **Dokploy** | Panel orkestrasi deployment Docker di server VPS |

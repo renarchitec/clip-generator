@@ -29,7 +29,7 @@ clipper/
 │  │  ├─ Dockerfile
 │  │  └─ src/
 │  │     ├─ auth/             # scrypt hash, sessions DB, auth guard, cookie
-│  │     ├─ jobs/             # CRUD job, cancel, DTO, snapshot, SSE stream
+│  │     ├─ jobs/             # CRUD job, cancel, retry, DTO, snapshot, SSE stream
 │  │     ├─ previews/         # pindai subtitle & LLM: POST /api/previews, GET /api/previews/:id
 │  │     ├─ clips/            # stream Range, download, delete clip fisik + DB
 │  │     ├─ system/           # status LLM worker dari Redis (GET /api/system/llm-status)
@@ -132,6 +132,7 @@ Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, w
 - **Pembatalan (`POST /api/jobs/:id/cancel`):** Menyetel key `cancel:<job_id>` di Redis (TTL 24 jam) dan mencabut job dari status antrean BullMQ jika belum berjalan. Jika worker sedang memproses, worker akan menghentikan render di batas antar klip, melempar exception `JobCancelled`, membersihkan file temporary, dan status job tercatat `cancelled`.
 - **Penghapusan Klip (`DELETE /api/clips/:id`):** Endpoint API langsung menghapus file fisik di filesystem (mengabaikan `ENOENT` jika sudah terhapus) dan menghapus baris dari tabel `clips` di PostgreSQL.
 - **Penghapusan Job (`DELETE /api/jobs/:id`):** `JobsService.remove` memverifikasi kepemilikan via `findOne(id, userId)` (404 bila bukan milik user). Bila status job masih `queued`/`running`, endpoint menyetel key `cancel:<job_id>` di Redis (TTL 24 jam) dan mencabut job BullMQ bila masih `waiting`/`delayed`/`prioritized`. Setelah itu semua path klip di-resolve lewat `resolveClipPath(clipsDir, filePath)` (menolak path traversal) dan file fisiknya di-`unlink` (ENOENT diabaikan; error lain membatalkan operasi). Baris job lalu dihapus dengan `prisma.job.delete({ where: { id } })`; baris `clips` terhapus otomatis via FK `onDelete: Cascade`. Subscription SSE (`jobEvents.close(id)`) ditutup dan endpoint mengembalikan HTTP 204.
+- **Pengulangan Job (`POST /api/jobs/:id/retry`):** `JobsService.retry` memverifikasi kepemilikan via `findOne(id, userId)` (404 bila bukan milik user) dan menolak status selain `failed`/`cancelled` dengan 400. Seluruh konfigurasi job lama (`url`, `description`, `mode`, `reframe`, `captions`, `twoSpeakers`, `aspectRatio`, `clipCount`, `targetDurationSec`, `ranges` beserta `title`/`reason`, dan `maxSourceSec` — di-null-kan kembali bila bukan mode auto) disalin ke `CreateJobDto` lalu job baru dibuat lewat `this.create(dto, userId)` yang sama dengan `POST /api/jobs`: validasi URL allowlist, normalisasi rentang/takarir/deskripsi, dan payload antrean BullMQ tidak diduplikasi. Job lama tidak diubah; endpoint mengembalikan snapshot job baru (bentuk respons sama dengan create).
 
 ### 8. Sinkronisasi Status Job (Queue Listener & Pemulihan Basi)
 
@@ -232,5 +233,5 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 ## Testing
 
 - **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, refinement pass-2 dengan LLM di-mock (`LLM_REFINE` aktif/nonaktif, hasil tidak valid, error), snap deterministik batas momen (`snap.py`), pembatalan job, batas pemindaian sumber `maxSourceSec` (parse toleran, potongan cue 0–limit, unduh section tunggal mode auto + fallback), dan unduhan section manual (`worker/tests/`).
-- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, aspect ratio (persistensi, normalisasi `twoSpeakers` ke `false` di luar 9:16, ukuran output worker), manual ranges/preservasi title-reason, batas pemindaian sumber `maxSourceSec`, pemulihan status job basi, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
+- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, delete job, retry job (kepemilikan, status gate, salinan konfigurasi, jalur create yang sama), description, reframe, captions, aspect ratio (persistensi, normalisasi `twoSpeakers` ke `false` di luar 9:16, ukuran output worker), manual ranges/preservasi title-reason, batas pemindaian sumber `maxSourceSec`, pemulihan status job basi, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
 - **Verifikasi pipeline tanpa Redis:** `python -m clipper.selftest --url <url> --mode <auto|manual> [--ranges 12-40,90-130]` menjalankan pipeline penuh secara lokal (tanpa antrean) untuk uji cepat.

@@ -43,6 +43,12 @@ export class JobsController {
     return this.jobs.cancel(id, user.id);
   }
 
+  /** Buat job baru dari konfigurasi job lama; hanya job failed/cancelled. */
+  @Post(':id/retry')
+  retry(@Param('id') id: string, @CurrentUser() user: { id: string }) {
+    return this.jobs.retry(id, user.id);
+  }
+
   @Delete(':id')
   @HttpCode(204)
   async remove(

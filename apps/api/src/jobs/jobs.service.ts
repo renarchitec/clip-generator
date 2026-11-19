@@ -8,7 +8,12 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { unlink } from 'node:fs/promises';
-import type { JobData, ManualRange } from '@clipper/shared';
+import type {
+  AspectRatio,
+  JobData,
+  ManualRange,
+  ReframeMode,
+} from '@clipper/shared';
 import { DEFAULT_ASPECT, DEFAULT_REFRAME } from '@clipper/shared';
 import { resolveClipPath } from '../clips/clip-path';
 import { AppConfig } from '../config/app-config.service';
@@ -167,6 +172,40 @@ export class JobsService {
     this.jobEvents.close(id);
 
     return updated;
+  }
+
+  /**
+   * Buat ulang job dari konfigurasi job lama (failed/cancelled) lewat jalur
+   * create yang sama: validasi, normalisasi, dan payload antrean tidak diduplikasi.
+   * Job lama tidak diubah.
+   */
+  async retry(id: string, userId: string) {
+    const old = await this.findOne(id, userId);
+
+    if (
+      old.status !== JobStatus.failed &&
+      old.status !== JobStatus.cancelled
+    ) {
+      throw new BadRequestException(
+        `Job ${id} berstatus ${old.status}; hanya job failed atau cancelled yang bisa diulang.`,
+      );
+    }
+
+    const dto = new CreateJobDto();
+    dto.url = old.url;
+    dto.mode = old.mode;
+    dto.clipCount = old.clipCount;
+    dto.targetDurationSec = old.targetDurationSec;
+    dto.reframe = old.reframe as ReframeMode;
+    dto.captions = old.captions;
+    dto.twoSpeakers = old.twoSpeakers;
+    dto.aspectRatio = old.aspectRatio as AspectRatio;
+    dto.description = old.description ?? undefined;
+    dto.ranges = (old.ranges as ManualRange[] | null) ?? undefined;
+    // maxSourceSec hanya relevan untuk mode auto; null = durasi penuh.
+    dto.maxSourceSec = old.mode === 'auto' ? old.maxSourceSec : null;
+
+    return this.create(dto, userId);
   }
 
   async snapshot(id: string, userId: string): Promise<JobSnapshot> {
