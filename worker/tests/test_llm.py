@@ -1,7 +1,9 @@
 import pytest
 
-from clipper.llm import fallback_moments, parse_llm_json
+from clipper import llm
+from clipper.llm import fallback_moments, parse_llm_json, select_moments
 from clipper.models import JobParams
+from clipper.snap import END_PAD, START_PAD
 from clipper.subtitles import Cue
 
 
@@ -76,3 +78,106 @@ def test_fallback_moments_titles_use_timestamp_not_transcript():
         assert moment.title.startswith("Clip ")
         assert "halo" not in moment.title
         assert moment.title.count(":") == 2
+
+
+# --- Pass refinement LLM + snap deterministik ---
+
+ENV_LLM = {"LLM_BASE_URL": "http://x", "LLM_API_KEY": "k", "LLM_MODEL": "m"}
+
+PASS1 = '[{"start": 10.0, "end": 40.0, "title": "A", "reason": "r"}]'
+
+
+def _cues_boundaries():
+    """Cue dengan batas kalimat jelas pada 0, 12, 42, 60."""
+    return [
+        Cue(0.0, 12.0, "pembuka."),
+        Cue(12.0, 42.0, "isi utama?"),
+        Cue(42.0, 60.0, "penutup."),
+    ]
+
+
+def _run(monkeypatch, responses, env):
+    """select_moments dengan _complete palsu; kembalikan (moments, jumlah panggilan)."""
+    calls = []
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        calls.append(prompt)
+        return responses[len(calls) - 1] if len(calls) <= len(responses) else responses[-1]
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    moments = select_moments(_cues_boundaries(), JobParams(clip_count=1, target_duration_sec=30.0), env)
+    return moments, len(calls)
+
+
+def test_select_moments_refine_and_snap(monkeypatch):
+    refined = '[{"index": 0, "start": 12.0, "end": 42.0}]'
+    moments, calls = _run(monkeypatch, [PASS1, refined], ENV_LLM)
+
+    assert calls == 2
+    # Snap: start 12.0 -> awal cue 12.0 minus pad; end 42.0 -> akhir cue 42.0 plus pad.
+    assert moments[0].start == pytest.approx(12.0 - START_PAD, abs=0.01)
+    assert moments[0].end == pytest.approx(42.0 + END_PAD, abs=0.01)
+
+
+def test_select_moments_refine_disabled_keeps_pass1(monkeypatch):
+    moments, calls = _run(monkeypatch, [PASS1], {**ENV_LLM, "LLM_REFINE": "0"})
+
+    assert calls == 1
+    # Tanpa refinement; snap tetap jalan: tidak ada batas cue dekat 10.0.
+    assert moments[0].start == pytest.approx(10.0 - START_PAD, abs=0.01)
+
+
+def test_select_moments_refine_invalid_kept_pass1(monkeypatch):
+    # Durasi 500 tidak dalam batas target: refinement ditolak, pass-1 dipakai.
+    refined = '[{"index": 0, "start": 5.0, "end": 505.0}]'
+    moments, calls = _run(monkeypatch, [PASS1, refined], ENV_LLM)
+
+    assert calls == 2
+    assert moments[0].start == pytest.approx(10.0 - START_PAD, abs=0.01)
+    assert moments[0].end == pytest.approx(42.0 + END_PAD, abs=0.01)
+
+
+def test_select_moments_refine_error_kept_pass1(monkeypatch):
+    calls = []
+
+    def flaky(base_url, api_key, model, prompt, temperature, has_brief=False):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return PASS1
+        raise RuntimeError("timeout")
+
+    monkeypatch.setattr(llm, "_complete", flaky)
+    moments = select_moments(_cues_boundaries(), JobParams(clip_count=1, target_duration_sec=30.0), ENV_LLM)
+
+    # Pass-2 gagal -> pass-1 tetap dipakai (tanpa error ke atas), lalu di-snap.
+    assert len(calls) == 2
+    assert moments[0].end == pytest.approx(42.0 + END_PAD, abs=0.01)
+
+
+def test_refine_items_out_of_window_rejected():
+    from clipper.llm import Moment, _refine_items
+
+    cues = _cues_boundaries()
+    moments = [Moment(start=10.0, end=40.0, title="A")]
+    items = [
+        {"index": 0, "start": 11.0, "end": 39.0},  # valid
+        {"index": 0, "start": 5.0, "end": 500.0},  # invalid, diabaikan
+    ]
+    result = _refine_items(items, cues, moments, JobParams(clip_count=1, target_duration_sec=30.0))
+    assert result[0].start == 11.0
+    assert result[0].end == 39.0
+
+
+def test_refine_items_nonfinite_rejected():
+    from clipper.llm import Moment, _refine_items
+
+    cues = _cues_boundaries()
+    moments = [Moment(start=10.0, end=40.0, title="A")]
+    result = _refine_items(
+        [{"index": 0, "start": "NaN", "end": 39.0}],
+        cues,
+        moments,
+        JobParams(clip_count=1, target_duration_sec=30.0),
+    )
+    assert result[0].start == 10.0
+    assert result[0].end == 40.0

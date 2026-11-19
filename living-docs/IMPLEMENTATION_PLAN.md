@@ -47,7 +47,8 @@ clipper/
 │  ├─ clipper/
 │  │  ├─ pipeline.py          # Orkestrasi tahap: download, transcribe, select, render, save, run_preview
 │  │  ├─ worker.py            # Consumer `clip-jobs` (concurrency 1) + `previews` (concurrency 2), heartbeat LLM
-│  │  ├─ llm.py               # Pemanggilan OpenAI-compatible LLM & parsing momen
+│  │  ├─ llm.py               # Pemanggilan OpenAI-compatible LLM & parsing momen + pass refinement
+│  │  ├─ snap.py              # Snap deterministik batas momen ke cue/kalimat terdekat (murni)
 │  │  ├─ reframe.py           # face_tracking / active speaker (FaceMesh), dua pembicara (2-means), crop filters
 │  │  ├─ subtitles.py         # Parser VTT, deduplikasi rolling, takarir hook ASS per kata
 │  │  └─ models.py            # Definisi dataclass & konversi data job
@@ -100,6 +101,9 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 - **Mode `auto`:** Mengirimkan transkrip terstruktur, parameter (`clipCount`, `targetDurationSec`), dan instruksi `description` (brief konten) ke endpoint LLM OpenAI-compatible.
 - Brief pengguna menjadi instruksi prioritas utama bagi LLM untuk memilih topik/bagian yang relevan.
 - JSON dari respon LLM divalidasi ketat (dengan 1x retry jika respon rusak). Jika LLM tidak dikonfigurasi atau gagal memberikan momen valid, job langsung gagal (tanpa fallback berbasis aturan).
+- **Refinement dua-pass (default aktif, `LLM_REFINE=0/false/no/off` untuk mematikan):** setelah validasi pass-1, satu panggilan LLM tambahan (klien/model/env yang sama, temperature 0.0, gaya validasi JSON + 1x retry yang sama) mengirim tiap kandidat: `index`, `title`, `start`/`end` saat ini, dan excerpt transkrip ber-timestamp dari `start-20s` sampai `end+20s`. LLM diminta menggeser `start`/`end` per kandidat agar klip dimulai di awal pemikiran/hook yang utuh dan berakhir setelah payoff/kalimat selesai. Validasi pass-2: angka finit, dalam jendela excerpt, `end > start`, durasi dalam batas target (0.6x–1.4x `targetDurationSec`); kandidat tidak valid/absen tetap memakai nilai pass-1. Error/timeout panggilan refinement -> semua kandidat tetap pakai pass-1 (job tidak gagal; kegagalan tidak menurunkan heartbeat status LLM).
+- **Snap deterministik (`worker/clipper/snap.py`, fungsi murni):** hasil akhir (LLM refined maupun fallback rule-based) digeser: `start` ke awal cue terdekat <= start dan `end` ke akhir cue terdekat >= end (jendela ±3 detik, diutamakan batas "kuat": cue sebelumnya/sekarakter berakhir `.?!…` atau jeda antar-cue >= 0.4 detik), lalu bantalan `start - 0.15s`, `end + 0.25s` di-clamp ke `[0, akhir cue terakhir]`, durasi dijaga dalam batas target, dan tumpang tindih antar momen dirapikan (start momen berikutnya ditarik ke end momen sebelumnya).
+- **Urutan:** pass-1 pilih -> pass-2 refinement LLM -> snap deterministik. Rentang manual/transkrip pilihan pengguna tidak melewati LLM maupun snap; hanya pemilihan otomatis (job `auto` dan kandidat `run_preview`) yang melewati keduanya.
 
 ### 5. Tahap Rendering (`render`)
 Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, worker memeriksa apakah terdapat sinyal pembatalan (`should_cancel`).
@@ -132,7 +136,7 @@ Fitur "tinjau momen sebelum memotong" memungkinkan pengguna memindai URL terlebi
   - `POST /api/previews` (auth, sesi) — body `{ url, description? (maks 500), clipCount? (1–10, default 5), targetDurationSec? (15–180, default 45) }`. URL divalidasi dengan allowlist yang sama seperti job (`apps/api/src/jobs/validation.ts`). Respons `201 { id }`.
   - `GET /api/previews/:id` (auth, hanya pemilik) — `{ id, url, status: queued|running|done|failed, error: string|null, candidates: {start,end,title,reason}[]|null, cues: {start,end,text}[]|null }`. Mengembalikan 404 bila job tidak ada, sudah kedaluwarsa, atau milik pengguna lain.
 - **Penyimpanan:** Tanpa tabel/migrasi baru. `userId`, URL, dan parameter disimpan di data job BullMQ pada antrean `previews`. Job yang selesai/gagal dipertahankan 1 jam (`removeOnComplete`/`removeOnFail` `age: 3600`), lalu dihapus Redis. Endpoint GET membaca state, `returnvalue`, dan `failedReason` langsung dari BullMQ.
-- **Worker:** Consumer `previews` terpisah di proses Python yang sama (concurrency 2, tidak menunggu render). Handler hanya memanggil `_fetch_subtitles` (`yt-dlp --skip-download`), `_read_vtt` untuk cue terdeduplikasi, lalu `llm.select_moments` dengan brief yang sama seperti mode auto. Kandidat melewati validasi/clamp yang sama (`validate_moments`). Subtitle tidak tersedia → gagal dengan pesan `"Subtitle YouTube tidak tersedia untuk video ini."`; LLM tidak dikonfigurasi/gagal → gagal dengan pesan jelas. Worker mengembalikan `{candidates, cues}` sebagai return value job.
+- **Worker:** Consumer `previews` terpisah di proses Python yang sama (concurrency 2, tidak menunggu render). Handler hanya memanggil `_fetch_subtitles` (`yt-dlp --skip-download`), `_read_vtt` untuk cue terdeduplikasi, lalu `llm.select_moments` dengan brief yang sama seperti mode auto. Kandidat melewati jalur yang sama persis dengan mode auto: validasi `validate_moments` -> refinement dua-pass (`LLM_REFINE`) -> snap deterministik `snap.py`. Subtitle tidak tersedia → gagal dengan pesan `"Subtitle YouTube tidak tersedia untuk video ini."`; LLM tidak dikonfigurasi/gagal → gagal dengan pesan jelas. Worker mengembalikan `{candidates, cues}` sebagai return value job.
 - **Transkrip:** `cues` berisi baris cue (bukan kata) `{start, end, text}` hasil deduplikasi rolling auto-sub.
 - **Persistensi State Web:** State draft review (`url`, `mode`, `reframe`, `captions`, `clipCount`, `duration`, `description`, `ranges`, `reviewFirst`, `previewId`, `selectedCandidates`, `cueRanges`, `selectedCueStart`, `selectedCueEnd`) disimpan di `sessionStorage` (`clipper-review-draft`). Saat navigasi bolak-balik dalam sesi tab yang sama, state dipulihkan dan polling `GET /api/previews/:id` dilanjutkan otomatis. Preview kedaluwarsa (HTTP 404) ditangani anggun: polling dihentikan, pesan kedaluwarsa ditampilkan dengan aksi coba lagi/pindai ulang, `previewId` di-reset, dan draft dibersihkan saat job manual berhasil dibuat atau sakelar review dinonaktifkan. Data sensitif/kredensial tidak pernah disimpan di storage ini.
 
@@ -201,12 +205,13 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 | `API_INTERNAL_URL` | Web | URL upstream API untuk reverse proxy server (mis. `http://clipper-api:3000`) |
 | `LLM_BASE_URL` | Worker | URL endpoint OpenAI-compatible (mis. OpenRouter / OpenCode Go) |
 | `LLM_API_KEY` | Worker | Kunci API untuk otentikasi LLM |
-| `LLM_MODEL` | Worker | Nama model LLM yang digunakan untuk pemilihan momen |
+| `LLM_MODEL` | Worker | Nama model LLM yang digunakan untuk pemilihan momen dan refinement batas |
+| `LLM_REFINE` | Worker | Pass-2 refinement batas momen oleh LLM; default aktif, matikan dengan `0`/`false`/`no`/`off` |
 | `MIN_FREE_GB` | Worker | Ambang batas ruang disk minimum (default `5.0`) |
 | `LOG_LEVEL` | Worker | Tingkat logging (`INFO`, `DEBUG`, dsb.) |
 
 ## Testing
 
-- **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, dan pembatalan job (`worker/tests/`).
+- **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, refinement pass-2 dengan LLM di-mock (`LLM_REFINE` aktif/nonaktif, hasil tidak valid, error), snap deterministik batas momen (`snap.py`), dan pembatalan job (`worker/tests/`).
 - **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, manual ranges/preservasi title-reason, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
 - **Verifikasi pipeline tanpa Redis:** `python -m clipper.selftest --url <url> --mode <auto|manual> [--ranges 12-40,90-130]` menjalankan pipeline penuh secara lokal (tanpa antrean) untuk uji cepat.

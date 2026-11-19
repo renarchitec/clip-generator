@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .models import DEFAULT_CLIP_COUNT, DEFAULT_TARGET_DURATION_SEC, JobParams
+from .snap import snap_window
 from .subtitles import Cue
 
 log = logging.getLogger(__name__)
@@ -23,6 +25,8 @@ MIN_DURATION_RATIO = 0.6
 MAX_DURATION_RATIO = 1.4
 MIN_CLIP_SECONDS = 1.0
 MAX_TRANSCRIPT_CHARS = 24000
+# Jendela transkrip di sekitar kandidat untuk pass refinement.
+REFINE_MARGIN_SEC = 20.0
 
 _FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.S)
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
@@ -346,6 +350,154 @@ def _density(cue: Cue) -> float:
     return words / cue.duration if cue.duration > 0 else float(words)
 
 
+def _duration_bounds(params: JobParams) -> tuple[float, float]:
+    target = _target_duration(params)
+    return MIN_DURATION_RATIO * target, MAX_DURATION_RATIO * target
+
+
+def _snap_moments(
+    cues: Sequence[Cue],
+    moments: Sequence[Moment],
+    params: JobParams,
+    retitle: bool = False,
+) -> List[Moment]:
+    """Terapkan snap deterministik + rapikan tumpang tindih antar momen."""
+    if not cues:
+        return list(moments)
+
+    min_duration, max_duration = _duration_bounds(params)
+    result: List[Moment] = []
+    previous_end = 0.0
+    for moment in moments:
+        start, end = snap_window(cues, moment.start, moment.end, min_duration, max_duration)
+        start = max(start, previous_end)
+        if end - start < MIN_CLIP_SECONDS:
+            continue
+        previous_end = end
+        title = moment.title
+        if retitle or not title:
+            title = title_from_cues(cues, start, end)
+        result.append(
+            Moment(
+                start=round(start, 2),
+                end=round(end, 2),
+                title=title[:70],
+                reason=moment.reason,
+            )
+        )
+    return result
+
+
+def _refine_enabled(env: Mapping[str, str]) -> bool:
+    value = (env.get("LLM_REFINE") or "").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
+def _excerpt(cues: Sequence[Cue], start: float, end: float) -> str:
+    return "\n".join(
+        f"[{cue.start:.1f}-{cue.end:.1f}] {cue.text}"
+        for cue in cues
+        if cue.end > start and cue.start < end
+    )
+
+
+def _refine_prompt(cues: Sequence[Cue], moments: Sequence[Moment], params: JobParams) -> str:
+    target = _target_duration(params)
+    total = cues[-1].end if cues else 0.0
+    blocks: List[str] = []
+    for index, moment in enumerate(moments):
+        low = max(0.0, moment.start - REFINE_MARGIN_SEC)
+        high = min(total, moment.end + REFINE_MARGIN_SEC)
+        blocks.append(
+            f"Kandidat {index}: title={moment.title!r}, start={moment.start:.2f}, "
+            f"end={moment.end:.2f}\nTranskrip sekitar (detik, jendela {low:.1f}-{high:.1f}):\n"
+            f"{_excerpt(cues, low, high)}"
+        )
+
+    return (
+        "Kamu editor video pendek berbahasa Indonesia.\n"
+        "Tugas: perbaiki batas tiap kandidat momen di bawah agar klip dimulai tepat di "
+        "awal pemikiran/hook yang utuh dan berakhir setelah payoff, di akhir kalimat.\n\n"
+        "Aturan:\n"
+        f"- Durasi tiap klip antara {MIN_DURATION_RATIO * target:.0f} dan "
+        f"{MAX_DURATION_RATIO * target:.0f} detik.\n"
+        "- start dan end hanya boleh digeser di dalam jendela transkrip kandidat itu.\n"
+        "- end harus > start. Jangan menambah/menghapus kandidat, jangan ubah judul.\n\n"
+        "Balas HANYA dengan JSON list, satu objek per kandidat:\n"
+        '[{"index": 0, "start": 12.0, "end": 55.5}]\n\n' + "\n\n".join(blocks)
+    )
+
+
+def _refine_items(
+    items: Sequence[Mapping[str, Any]],
+    cues: Sequence[Cue],
+    moments: Sequence[Moment],
+    params: JobParams,
+) -> List[Moment]:
+    """Pakai hasil refinement hanya bila valid; kandidat lain tetap pass-1."""
+    min_duration, max_duration = _duration_bounds(params)
+    total = cues[-1].end if cues else 0.0
+    accepted: Dict[int, tuple[float, float]] = {}
+
+    for item in items:
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= len(moments) or index in accepted:
+            continue
+        start = _number(item.get("start"))
+        end = _number(item.get("end"))
+        if start is None or end is None:
+            continue
+        if not (math.isfinite(start) and math.isfinite(end)):
+            continue
+        moment = moments[index]
+        low = max(0.0, moment.start - REFINE_MARGIN_SEC)
+        high = min(total, moment.end + REFINE_MARGIN_SEC)
+        if start < low - 0.01 or end > high + 0.01 or end <= start:
+            continue
+        if not (min_duration <= end - start <= max_duration):
+            continue
+        accepted[index] = (start, end)
+
+    return [
+        Moment(
+            start=accepted.get(index, (moment.start, moment.end))[0],
+            end=accepted.get(index, (moment.start, moment.end))[1],
+            title=moment.title,
+            reason=moment.reason,
+        )
+        for index, moment in enumerate(moments)
+    ]
+
+
+def _refine(
+    base_url: str,
+    api_key: str,
+    model: str,
+    cues: Sequence[Cue],
+    moments: List[Moment],
+    params: JobParams,
+) -> List[Moment]:
+    """Pass-2: satu panggilan LLM. Error/timeout/kandidat tidak valid -> pass-1."""
+    prompt = _refine_prompt(cues, moments, params)
+    for attempt in (1, 2):
+        try:
+            raw = _complete(base_url, api_key, model, prompt, temperature=0.0)
+        except Exception as exc:
+            log.warning("refinement LLM gagal, pakai hasil pass-1: %s", _short_error(exc))
+            return moments
+        try:
+            items = parse_llm_json(raw)
+        except ValueError as exc:
+            log.warning("jawaban refinement tidak valid pada percobaan %s: %s", attempt, exc)
+            continue
+        return _refine_items(items, cues, moments, params)
+    log.warning("refinement dilewati: jawaban LLM tidak valid setelah 2 percobaan")
+    return moments
+
+
 def fallback_moments(cues: Sequence[Cue], params: JobParams) -> List[Moment]:
     """Rule-based: ambil jendela di sekitar cue dengan kepadatan kata tertinggi."""
     if not cues:
@@ -393,7 +545,8 @@ def fallback_moments(cues: Sequence[Cue], params: JobParams) -> List[Moment]:
         )
         for start, end in sorted(windows)
     ]
-    return moments[:count]
+    # Fallback juga dirapikan ke batas cue/kalimat terdekat.
+    return _snap_moments(cues, moments[:count], params, retitle=True)
 
 
 def select_moments(
@@ -442,6 +595,9 @@ def select_moments(
 
         moments = validate_moments(items, cues, params)
         if moments:
+            if _refine_enabled(env):
+                moments = _refine(base_url, api_key, model, cues, moments, params)
+            moments = _snap_moments(cues, moments, params)
             _record_call(True)
             return moments
         log.warning("tidak ada momen valid dari LLM pada percobaan %s", attempt)
