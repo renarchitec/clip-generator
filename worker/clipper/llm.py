@@ -300,19 +300,19 @@ def select_moments(
     api_key = (env.get("LLM_API_KEY") or "").strip()
     model = (env.get("LLM_MODEL") or "").strip()
 
-    if not (base_url and api_key and model) or not cues:
-        log.warning(
-            "LLM tidak dikonfigurasi (LLM_BASE_URL/LLM_API_KEY/LLM_MODEL); memakai fallback"
+    if not (base_url and api_key and model):
+        raise RuntimeError(
+            "LLM tidak dikonfigurasi: set LLM_BASE_URL, LLM_API_KEY, LLM_MODEL di worker."
         )
-        return fallback_moments(cues, params)
+    if not cues:
+        return []
 
     prompt = _build_prompt(cues, params)
     for attempt in (1, 2):
         try:
             raw = _complete(base_url, api_key, model, prompt, temperature=0.2 if attempt == 1 else 0.0)
-        except Exception as exc:  # jaringan/endpoint mati: jangan gagalkan job
-            log.warning("panggilan LLM gagal pada percobaan %s: %s", attempt, exc)
-            break
+        except Exception as exc:
+            raise RuntimeError(f"panggilan LLM gagal: {exc}") from exc
 
         try:
             items = parse_llm_json(raw)
@@ -325,5 +325,4 @@ def select_moments(
             return moments
         log.warning("tidak ada momen valid dari LLM pada percobaan %s", attempt)
 
-    log.warning("memakai fallback rule-based untuk pemilihan momen")
-    return fallback_moments(cues, params)
+    raise RuntimeError("LLM tidak menghasilkan momen valid setelah 2 percobaan")
