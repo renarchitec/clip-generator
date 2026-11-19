@@ -30,6 +30,6 @@ import { redisConnection } from './redis';
         }),
     },
   ],
-  exports: [JobEventsService],
+  exports: [JobEventsService, BullModule],
 })
 export class QueueModule {}
