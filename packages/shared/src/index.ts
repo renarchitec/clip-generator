@@ -12,7 +12,7 @@ export const JOB_STAGES = [
 
 export type JobStage = (typeof JOB_STAGES)[number];
 export type JobMode = 'auto' | 'manual';
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface ManualRange {
   /** detik */

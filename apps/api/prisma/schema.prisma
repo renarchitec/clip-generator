@@ -17,6 +17,7 @@ enum JobStatus {
   running
   done
   failed
+  cancelled
 }
 
 model Job {

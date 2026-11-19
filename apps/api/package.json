@@ -7,7 +7,7 @@
     "dev": "nest start --watch",
     "start": "node dist/apps/api/src/main.js",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "echo no tests",
+    "test": "node --experimental-strip-types src/jobs/jobs.cancel.contract.spec.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

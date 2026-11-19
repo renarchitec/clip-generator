@@ -35,6 +35,21 @@ async def _emit(on_progress, stage: str, percent: float, message: str = "") -> N
         await result
 
 
+class JobCancelled(RuntimeError):
+    """Job dihentikan karena permintaan pembatalan pengguna."""
+
+
+async def _check_cancel(should_cancel) -> None:
+    """Pembatalan dicek di batas tahap: subproses yang sedang jalan tetap selesai dulu."""
+    if should_cancel is None:
+        return
+    cancelled = should_cancel()
+    if inspect.isawaitable(cancelled):
+        cancelled = await cancelled
+    if cancelled:
+        raise JobCancelled("job dibatalkan")
+
+
 def _run(cmd: Sequence[str], cwd: Optional[str] = None, timeout: Optional[float] = None) -> str:
     log.debug("jalankan: %s", " ".join(cmd))
     try:
@@ -308,6 +323,7 @@ async def render(
     subs: Sequence[Cue],
     outdir: str,
     on_progress=None,
+    should_cancel=None,
 ) -> List[ClipResult]:
     """Render tiap momen jadi 1080x1920 dengan subtitle terbakar."""
     if not moments:
@@ -319,6 +335,7 @@ async def render(
     clips: List[ClipResult] = []
     total = len(moments)
     for index, moment in enumerate(moments, start=1):
+        await _check_cancel(should_cancel)  # berhenti di antara clip, bukan di tengah ffmpeg
         filename = f"clip-{index:02d}.mp4"
         await asyncio.to_thread(_render_one, video, moment, subs, outdir, filename)
         clips.append(
@@ -375,6 +392,7 @@ async def run_job(
     on_progress=None,
     clips_dir: Optional[str] = None,
     temp_root: Optional[str] = None,
+    should_cancel=None,
 ) -> JobResult:
     """Orkestrasi semua tahap. Folder sementara selalu dihapus di finally."""
     job = job_data if isinstance(job_data, JobData) else job_data_from_dict(job_data)
@@ -389,10 +407,15 @@ async def run_job(
     workdir = tempfile.mkdtemp(prefix=f"clip-{job.job_id}-", dir=temp_root)
     log.info("job %s mulai, workdir=%s", job.job_id, workdir)
     try:
+        await _check_cancel(should_cancel)
         media = await download(job, workdir, on_progress)
+        await _check_cancel(should_cancel)
         cues = await transcribe(media.video, media.subtitles, on_progress)
+        await _check_cancel(should_cancel)
         moments = await select(job, cues, on_progress)
-        clips = await render(job, moments, media.video, cues, output_dir, on_progress)
+        await _check_cancel(should_cancel)
+        clips = await render(job, moments, media.video, cues, output_dir, on_progress, should_cancel)
+        await _check_cancel(should_cancel)
         result = JobResult(clips=clips)
         await save(result, clips_dir, job.job_id, on_progress)
         log.info("job %s selesai, %s clip", job.job_id, len(clips))

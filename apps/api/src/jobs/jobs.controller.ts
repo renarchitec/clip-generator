@@ -34,12 +34,22 @@ export class JobsController {
     return this.jobs.findOne(id);
   }
 
+  /** Idempoten: job yang sudah selesai/gagal/dibatalkan dikembalikan apa adanya. */
+  @Post(':id/cancel')
+  cancel(@Param('id') id: string) {
+    return this.jobs.cancel(id);
+  }
+
   @Sse(':id/events')
   async stream(@Param('id') id: string): Promise<Observable<MessageEvent>> {
     // State sekarang dikirim lebih dulu supaya klien SSE tidak perlu request terpisah.
     const current = await this.jobs.snapshot(id);
 
-    if (current.status === 'done' || current.status === 'failed') {
+    if (
+      current.status === 'done' ||
+      current.status === 'failed' ||
+      current.status === 'cancelled'
+    ) {
       return of({ data: current } as MessageEvent);
     }
 

@@ -5,14 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Prisma } from '@prisma/client';
+import { JobStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 import type { JobData, ManualRange } from '@clipper/shared';
 import { PrismaService } from '../prisma/prisma.service';
-import { QUEUE_NAME } from '../queue/queue.constants';
-import { JobSnapshot } from '../queue/job-events.service';
+import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
+import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
 import { CreateJobDto } from './dto/create-job.dto';
-
 const ALLOWED_HOSTS = [
   'youtube.com',
   'youtu.be',
@@ -24,6 +23,7 @@ const ALLOWED_HOSTS = [
 export class JobsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly jobEvents: JobEventsService,
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
   ) {}
 
@@ -98,28 +98,81 @@ export class JobsService {
     return job;
   }
 
-  async snapshot(id: string): Promise<JobSnapshot> {
+  async cancel(id: string) {
     const job = await this.findOne(id);
 
-    return {
-      id: job.id,
-      url: job.url,
-      mode: job.mode,
-      status: job.status,
-      stage: job.stage,
-      progress: job.progress,
-      message: job.message,
-      error: job.error,
-      clips: job.clips.map((clip) => ({
-        id: clip.id,
-        title: clip.title,
-        startSec: clip.startSec,
-        endSec: clip.endSec,
-        downloadedAt: clip.downloadedAt,
-        deletedAt: clip.deletedAt,
-      })),
-    };
+    if (
+      job.status === JobStatus.done ||
+      job.status === JobStatus.failed ||
+      job.status === JobStatus.cancelled
+    ) {
+      return job;
+    }
+
+    // Set sinyal pembatalan di Redis agar worker memeriksa dan berhenti aman.
+    try {
+      const client = await this.queue.client;
+      await client.set(cancelKey(id), '1', { EX: 86400 });
+    } catch {
+      // Redis error tidak boleh menggagalkan pembatalan di DB
+    }
+
+    // Cabut dari antrean BullMQ bila belum jalan.
+    try {
+      const bullJob = await this.queue.getJob(id);
+      if (bullJob) {
+        const state = await bullJob.getState();
+        if (state === 'waiting' || state === 'delayed' || state === 'prioritized') {
+          await bullJob.remove();
+        }
+      }
+    } catch {
+      // Abaikan bila job sudah selesai/tidak ada di BullMQ
+    }
+
+    const updated = await this.prisma.job.update({
+      where: { id },
+      data: {
+        status: JobStatus.cancelled,
+        message: 'Dibatalkan oleh pengguna.',
+        finishedAt: new Date(),
+      },
+      include: { clips: { orderBy: { createdAt: 'asc' } } },
+    });
+
+    this.jobEvents.publish(toSnapshot(updated));
+    this.jobEvents.close(id);
+
+    return updated;
   }
+
+  async snapshot(id: string): Promise<JobSnapshot> {
+    const job = await this.findOne(id);
+    return toSnapshot(job);
+  }
+}
+
+type JobWithClips = Prisma.JobGetPayload<{ include: { clips: true } }>;
+
+function toSnapshot(job: JobWithClips): JobSnapshot {
+  return {
+    id: job.id,
+    url: job.url,
+    mode: job.mode,
+    status: job.status,
+    stage: job.stage,
+    progress: job.progress,
+    message: job.message,
+    error: job.error,
+    clips: job.clips.map((clip) => ({
+      id: clip.id,
+      title: clip.title,
+      startSec: clip.startSec,
+      endSec: clip.endSec,
+      downloadedAt: clip.downloadedAt,
+      deletedAt: clip.deletedAt,
+    })),
+  };
 }
 
 function assertAllowedUrl(raw: string): string {

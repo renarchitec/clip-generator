@@ -13,6 +13,10 @@ from typing import Any, Dict, List, Literal, Mapping, Optional
 
 QUEUE_NAME = "clip-jobs"
 
+# Kunci Redis sinyal pembatalan; harus sama dengan cancelKey() di
+# apps/api/src/queue/queue.constants.ts.
+CANCEL_KEY = "cancel:{}"
+
 JOB_STAGES = ("download", "transcribe", "select", "render", "save")
 JOB_MODES = ("auto", "manual")
 

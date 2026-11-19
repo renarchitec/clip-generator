@@ -61,6 +61,8 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
   }
 
   private async onProgress(jobId: string, data: unknown): Promise<void> {
+    if (await this.isCancelled(jobId)) return; // jangan hidupkan ulang job yang dibatalkan
+
     const progress = parseJobProgress(data);
     if (!progress) return;
 
@@ -86,6 +88,8 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
     jobId: string,
     returnvalue: unknown,
   ): Promise<void> {
+    if (await this.isCancelled(jobId)) return; // abaikan hasil worker setelah dibatalkan
+
     let result = parseJobResult(returnvalue);
 
     if (!result) {
@@ -128,18 +132,33 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
   }
 
   private async onFailed(jobId: string, failedReason: string): Promise<void> {
+    if (await this.isCancelled(jobId)) return; // worker berhenti karena pembatalan, bukan gagal
     await this.fail(jobId, humanizeError(failedReason));
   }
 
-  private async fail(jobId: string, message: string): Promise<void> {
-    await this.prisma.job.updateMany({
+  /**
+   * Pembatalan diklaim lewat kolom status (updateMany bersyarat), jadi job yang
+   * sudah cancelled tidak pernah ditimpa progress/done/failed di belakang.
+   */
+  private async isCancelled(jobId: string): Promise<boolean> {
+    const job = await this.prisma.job.findUnique({
       where: { id: jobId },
+      select: { status: true },
+    });
+    return job?.status === JobStatus.cancelled;
+  }
+
+  private async fail(jobId: string, message: string): Promise<void> {
+    const updated = await this.prisma.job.updateMany({
+      where: { id: jobId, status: { not: JobStatus.cancelled } },
       data: {
         status: JobStatus.failed,
         error: message,
         finishedAt: new Date(),
       },
     });
+
+    if (updated.count === 0) return; // sudah dibatalkan: biarkan status cancelled
 
     await this.emit(jobId);
     this.jobEvents.close(jobId);
