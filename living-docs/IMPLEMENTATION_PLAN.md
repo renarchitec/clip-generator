@@ -85,7 +85,9 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 
 ### 2. Tahap Download (`download`)
 - Memanggil `yt-dlp` untuk mengunduh video format MP4 terbaik (`bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b`).
-- Mengunduh trek subtitle asli YouTube (mengutamakan subtitle manual, fallback ke auto-subs) dalam format VTT.
+- **Mode `auto`:** mengunduh video penuh ke `source.*` seperti biasa.
+- **Mode `manual`:** hanya mengunduh rentang terpilih — satu file `section-NN.*` per rentang valid, diurutkan `start`, via `--download-sections "*start-end"` + `--force-keyframes-at-cuts` (potongan tepat pada batas rentang, dengan biaya re-encode). Timestamp file section direset ke 0 oleh yt-dlp; offset awal rentang disimpan dan dipakai render untuk menggeser `-ss`/deteksi wajah ke timeline file section, sementara timestamp absolut asli tetap dilaporkan pada hasil klip. Rentang yang tumpang tindih diunduh dua kali (satu file per rentang, tanpa deduplikasi). Tanpa rentang valid, job manual gagal cepat sebelum unduh apa pun.
+- Mengunduh trek subtitle asli YouTube penuh (mengutamakan subtitle manual, fallback ke auto-subs) dalam format VTT — tetap video penuh untuk kebutuhan pemilihan momen, takarir, dan transkrip.
 - Jika subtitle YouTube tidak ditemukan sama sekali, job langsung digagalkan dengan error: `"Subtitle YouTube tidak tersedia untuk video ini."` (Whisper telah dihapus sepenuhnya dari worker).
 
 ### 3. Tahap Transkrip (`transcribe`)
@@ -101,6 +103,7 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 
 ### 5. Tahap Rendering (`render`)
 Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, worker memeriksa apakah terdapat sinyal pembatalan (`should_cancel`).
+- **Sumber video:** mode `auto` memakai satu file `source.*` dengan timestamp absolut. Mode `manual` memakai file `section-NN.*` milik rentang terkait; timestamp momen digeser relatif ke file section (`moment - range.start`) untuk seek ffmpeg dan sampling FaceMesh, sedangkan pemilihan cue takarir tetap memakai timestamp absolut video asli. Nilai `start`/`end` yang disimpan pada hasil klip tetap absolut.
 - **Transformasi Reframe ke Potret 9:16 (1080x1920):**
   - `face_tracking` ("Pembicara aktif" di UI): menganalisis proxy video resolusi rendah (~360p, 5 fps) dengan MediaPipe FaceMesh (`max_num_faces=4`). Per wajah diukur bukaan bibir (landmark inner lips 13/14) dan energi geraknya; wajah paling aktif dipilih sebagai pembicara dengan hysteresis (margin skor 1.25x, ambang noise 0.003) dan minimal hold 0.9 detik per cut. Hasilnya deretan crop statis per segmen (cut, bukan pan halus) maksimal 16 segmen, dieksekusi sebagai ekspresi filter ffmpeg piecewise; tidak ada wajah sama sekali -> fallback crop tengah.
   - `black_bars`: Skala video mempertahankan rasio asli dengan padding hitam di atas dan bawah.

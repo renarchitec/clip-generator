@@ -10,8 +10,8 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import llm
 from . import reframe as reframe_mod
@@ -22,6 +22,7 @@ from .models import (
     JobData,
     JobParams,
     JobResult,
+    ManualRange,
     job_data_from_dict,
 )
 from .subtitles import Cue, Word, clip_words, parse_vtt, write_ass
@@ -83,20 +84,31 @@ def _run(cmd: Sequence[str], cwd: Optional[str] = None, timeout: Optional[float]
 
 @dataclass
 class Downloaded:
-    video: str
+    video: Optional[str] = None
     subtitles: Optional[str] = None
+    # Mode manual: satu file per rentang, berisi (path, offset awal di video asli).
+    sections: List[Tuple[str, float]] = field(default_factory=list)
+
+
+def _valid_ranges(ranges: Sequence[ManualRange]) -> List[ManualRange]:
+    """Rentang yang bisa dirender, urut start; urutan sama dipakai unduh & select."""
+    return sorted((item for item in ranges if item.end > item.start), key=lambda item: item.start)
+
+
+def _find_media(workdir: str, prefix: str) -> Optional[str]:
+    for path in sorted(glob.glob(os.path.join(workdir, f"{prefix}*"))):
+        if ".part" in path.lower():
+            continue
+        if path.lower().endswith((".mp4", ".webm", ".mkv", ".mov")):
+            return path
+    return None
 
 
 def _find_video(workdir: str) -> Optional[str]:
     exact = os.path.join(workdir, "source.mp4")
     if os.path.isfile(exact):
         return exact
-    for path in sorted(glob.glob(os.path.join(workdir, "source*"))):
-        if ".part" in path.lower():
-            continue
-        if path.lower().endswith((".mp4", ".webm", ".mkv", ".mov")):
-            return path
-    return None
+    return _find_media(workdir, "source")
 
 
 def _find_subtitles(workdir: str) -> Optional[str]:
@@ -143,12 +155,8 @@ def _fetch_subtitles(url: str, workdir: str) -> Optional[str]:
     return None
 
 
-async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
-    """yt-dlp: mp4 terbaik + subtitle asli; tanpa subtitle job gagal."""
-    os.makedirs(workdir, exist_ok=True)
-    await _emit(on_progress, "download", 0, "mengunduh video")
-
-    cmd = [
+def _yt_dlp_base() -> List[str]:
+    return [
         "yt-dlp",
         "-f",
         "bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b",
@@ -157,22 +165,62 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
         "--no-playlist",
         "--no-progress",
         "--no-warnings",
-        "-o",
-        os.path.join(workdir, "source.%(ext)s"),
-        job.url,
     ]
-    await asyncio.to_thread(_run, cmd)
 
-    video = _find_video(workdir)
-    if not video:
-        raise RuntimeError("yt-dlp selesai tanpa menghasilkan file video")
+
+async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
+    """yt-dlp: mp4 terbaik + subtitle asli; tanpa subtitle job gagal.
+
+    Mode manual hanya mengunduh rentang terpilih (satu `section-NN.*` per
+    rentang via --download-sections), bukan video penuh. yt-dlp mereset
+    timestamp file section ke 0; offset awal rentang disimpan untuk render.
+    """
+    os.makedirs(workdir, exist_ok=True)
+
+    ranges = _valid_ranges(job.ranges) if job.mode == "manual" else []
+    if job.mode == "manual" and not ranges:
+        # Gagal cepat: jangan unduh video penuh untuk job manual tanpa rentang sah.
+        raise ValueError("mode manual butuh minimal satu range")
+    sections: List[Tuple[str, float]] = []
+    video: Optional[str] = None
+
+    if ranges:
+        await _emit(on_progress, "download", 0, f"mengunduh {len(ranges)} rentang")
+        for index, item in enumerate(ranges):
+            cmd = _yt_dlp_base() + [
+                "--download-sections",
+                f"*{item.start:.3f}-{item.end:.3f}",
+                # Re-encode keyframe agar potongan tepat pada batas rentang.
+                "--force-keyframes-at-cuts",
+                "-o",
+                os.path.join(workdir, f"section-{index:02d}.%(ext)s"),
+                job.url,
+            ]
+            await asyncio.to_thread(_run, cmd)
+            path = _find_media(workdir, f"section-{index:02d}")
+            if not path:
+                raise RuntimeError(
+                    f"yt-dlp selesai tanpa file untuk rentang {item.start:.1f}-{item.end:.1f}"
+                )
+            sections.append((path, item.start))
+    else:
+        await _emit(on_progress, "download", 0, "mengunduh video")
+        cmd = _yt_dlp_base() + [
+            "-o",
+            os.path.join(workdir, "source.%(ext)s"),
+            job.url,
+        ]
+        await asyncio.to_thread(_run, cmd)
+        video = _find_video(workdir)
+        if not video:
+            raise RuntimeError("yt-dlp selesai tanpa menghasilkan file video")
 
     subtitles = await asyncio.to_thread(_fetch_subtitles, job.url, workdir)
     if not subtitles:
         raise RuntimeError(NO_SUBTITLE_ERROR)
 
-    await _emit(on_progress, "download", 100, "video siap diunduh")
-    return Downloaded(video=video, subtitles=subtitles)
+    await _emit(on_progress, "download", 100, "media siap dirender")
+    return Downloaded(video=video, subtitles=subtitles, sections=sections)
 
 
 def _read_vtt(path: str) -> List[Cue]:
@@ -180,7 +228,7 @@ def _read_vtt(path: str) -> List[Cue]:
         return parse_vtt(handle.read(), word_level=True)
 
 
-async def transcribe(video: str, subtitles: Optional[str], on_progress=None) -> List[Cue]:
+async def transcribe(subtitles: Optional[str], on_progress=None) -> List[Cue]:
     """Caption selalu dari subtitle asli YouTube; tanpa subtitle = job gagal."""
     await _emit(on_progress, "transcribe", 0, "menyiapkan transkrip")
 
@@ -197,9 +245,7 @@ async def transcribe(video: str, subtitles: Optional[str], on_progress=None) -> 
 
 def _moments_from_ranges(cues: Sequence[Cue], ranges) -> List[llm.Moment]:
     moments: List[llm.Moment] = []
-    for item in ranges:
-        if item.end <= item.start:
-            continue
+    for item in _valid_ranges(ranges):
         # Pakai judul/alasan dari tinjauan LLM bila ada; timestamp hanya fallback.
         title = (item.title or "").strip()
         reason = (item.reason or "").strip()
@@ -211,7 +257,7 @@ def _moments_from_ranges(cues: Sequence[Cue], ranges) -> List[llm.Moment]:
                 reason=reason[:200] or "manual",
             )
         )
-    return sorted(moments, key=lambda moment: moment.start)
+    return moments
 
 
 async def select(job: JobData, cues: Sequence[Cue], on_progress=None) -> List[llm.Moment]:
@@ -245,8 +291,8 @@ def _ffmpeg_filter_path(path: str) -> str:
 
 
 def _clip_cues(cues: Sequence[Cue], start: float, end: float) -> List[Cue]:
-    """Ambil cue di dalam jendela clip, geser waktunya ke 0 (termasuk kata)."""
-    limit = end - start
+    """Ambil cue di dalam jendela clip (absolut), geser waktunya ke 0 (termasuk kata)."""
+    limit = max(0.0, end - start)
     relative: List[Cue] = []
     for cue in cues:
         if cue.end <= start or cue.start >= end:
@@ -332,10 +378,14 @@ def _render_one(
     reframe: str = "face_tracking",
     captions: bool = True,
     two_speakers: bool = False,
+    timeline_offset: float = 0.0,
 ) -> None:
     out_path = os.path.join(outdir, filename)
     ass_path = os.path.join(outdir, os.path.splitext(filename)[0] + ".ass")
-    clip_cues = _clip_cues(cues, moment.start, moment.end)
+    # Teks takarir dicocokkan dengan timestamp absolut video asli.
+    absolute_start = moment.start + timeline_offset
+    absolute_end = moment.end + timeline_offset
+    clip_cues = _clip_cues(cues, absolute_start, absolute_end)
     burn_captions = captions and bool(clip_cues)
 
     if burn_captions:
@@ -405,18 +455,25 @@ def _render_one(
 async def render(
     job: JobData,
     moments: Sequence[llm.Moment],
-    video: str,
+    video: Optional[str],
     subs: Sequence[Cue],
     outdir: str,
     on_progress=None,
     should_cancel=None,
+    sections: Optional[Sequence[Tuple[str, float]]] = None,
 ) -> List[ClipResult]:
     """Render tiap momen jadi 1080x1920; subtitle terbakar bila job.captions.
 
+    Jika sections diberikan (mode manual), tiap klip membaca file section
+    terkait dengan offset start relatif (= moment.start - section_offset).
     job.two_speakers=True -> dua panel 1080x960 ditumpuk (reframe diabaikan).
     """
     if not moments:
         raise ValueError("tidak ada momen untuk dirender")
+    if not video and not sections:
+        raise ValueError("sumber video tidak tersedia untuk render")
+    if sections is not None and len(sections) != len(moments):
+        raise ValueError("jumlah section tidak sama dengan jumlah momen")
 
     os.makedirs(outdir, exist_ok=True)
     await _emit(on_progress, "render", 0, f"merender {len(moments)} clip")
@@ -426,16 +483,33 @@ async def render(
     for index, moment in enumerate(moments, start=1):
         await _check_cancel(should_cancel)  # berhenti di antara clip, bukan di tengah ffmpeg
         filename = f"clip-{index:02d}.mp4"
+
+        # Tentukan file video input dan pergeseran timestamp momen
+        if sections:
+            src_video, offset = sections[index - 1]
+            render_moment = replace(
+                moment,
+                start=max(0.0, moment.start - offset),
+                end=max(0.0, moment.end - offset),
+            )
+        else:
+            if not video:
+                raise RuntimeError("file video sumber tidak ditemukan")
+            src_video = video
+            offset = 0.0
+            render_moment = moment
+
         await asyncio.to_thread(
             _render_one,
-            video,
-            moment,
+            src_video,
+            render_moment,
             subs,
             outdir,
             filename,
             job.reframe,
             job.captions,
             job.two_speakers,
+            offset,
         )
         clips.append(
             ClipResult(
@@ -509,11 +583,20 @@ async def run_job(
         await _check_cancel(should_cancel)
         media = await download(job, workdir, on_progress)
         await _check_cancel(should_cancel)
-        cues = await transcribe(media.video, media.subtitles, on_progress)
+        cues = await transcribe(media.subtitles, on_progress)
         await _check_cancel(should_cancel)
         moments = await select(job, cues, on_progress)
         await _check_cancel(should_cancel)
-        clips = await render(job, moments, media.video, cues, output_dir, on_progress, should_cancel)
+        clips = await render(
+            job,
+            moments,
+            media.video,
+            cues,
+            output_dir,
+            on_progress,
+            should_cancel,
+            sections=media.sections or None,
+        )
         await _check_cancel(should_cancel)
         result = JobResult(clips=clips)
         await save(result, clips_dir, job.job_id, on_progress)
