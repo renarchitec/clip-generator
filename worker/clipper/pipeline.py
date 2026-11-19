@@ -168,6 +168,15 @@ def _yt_dlp_base() -> List[str]:
     ]
 
 
+def _has_video(path: str) -> bool:
+    try:
+        out = _run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
+                    "stream=index", "-of", "csv=p=0", path])
+    except Exception:
+        return False
+    return bool(str(out or "").strip())
+
+
 async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     """yt-dlp: mp4 terbaik + subtitle asli; tanpa subtitle job gagal.
 
@@ -203,7 +212,14 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
                     f"yt-dlp selesai tanpa file untuk rentang {item.start:.1f}-{item.end:.1f}"
                 )
             sections.append((path, item.start))
-    else:
+        probes = [await asyncio.to_thread(_has_video, path) for path, _ in sections]
+        if not all(probes):
+            # yt-dlp kadang menghasilkan section audio-saja (format terbatas/429).
+            log.warning("section tanpa stream video, fallback unduh video penuh")
+            for path, _ in sections:
+                os.remove(path)
+            sections = []
+    if not sections:
         await _emit(on_progress, "download", 0, "mengunduh video")
         cmd = _yt_dlp_base() + [
             "-o",

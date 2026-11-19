@@ -43,7 +43,8 @@ def test_download_manual_uses_sections_per_range(tmp_path):
             elif "section-01" in arg:
                 (tmp_path / "section-01.mp4").write_text("v1")
 
-    with patch.object(pipeline, "_run", side_effect=fake_run), \
+    with patch.object(pipeline, "_has_video", return_value=True), \
+         patch.object(pipeline, "_run", side_effect=fake_run), \
          patch.object(pipeline, "_fetch_subtitles", return_value=str(tmp_path / "source.vtt")):
         (tmp_path / "source.vtt").write_text("WEBVTT\n")
         dl = asyncio.run(pipeline.download(job, str(tmp_path)))
@@ -170,3 +171,20 @@ def test_render_one_seeks_relative_and_keeps_absolute_captions(tmp_path):
     assert cmd[cmd.index("-t") + 1] == "10.000"
     # Cue absolut 10-15 detik harus terpilih dan dibakar (bukan cue kosong).
     assert any("subtitles=" in part for part in cmd)
+
+
+def test_download_manual_falls_back_when_section_has_no_video(tmp_path):
+    job = JobData(job_id="jobnovid1", url="https://youtube.com/watch?v=dummy", mode="manual",
+                  ranges=[ManualRange(start=5.0, end=12.0)])
+
+    def fake_run(cmd, cwd=None, timeout=None):
+        name = "section-00.mp4" if "--download-sections" in cmd else "source.mp4"
+        (tmp_path / name).write_text("x")
+
+    with patch.object(pipeline, "_has_video", return_value=False), \
+         patch.object(pipeline, "_run", side_effect=fake_run), \
+         patch.object(pipeline, "_fetch_subtitles", return_value=str(tmp_path / "source.vtt")):
+        dl = asyncio.run(pipeline.download(job, str(tmp_path)))
+
+    assert dl.sections == []
+    assert dl.video == str(tmp_path / "source.mp4")
