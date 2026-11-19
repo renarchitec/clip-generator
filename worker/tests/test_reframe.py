@@ -1,3 +1,5 @@
+import pytest
+
 from clipper import reframe
 from clipper.models import REFRAME_MODES, job_data_from_dict
 
@@ -85,3 +87,50 @@ def test_job_data_defaults_to_face_tracking_and_accepts_modes():
 
     for mode in REFRAME_MODES:
         assert job_data_from_dict({**base, "reframe": mode}).reframe == mode
+
+
+def test_job_data_two_speakers_defaults_false_and_parses_tolerantly():
+    base = {"jobId": "abc", "url": "https://youtu.be/x"}
+    assert job_data_from_dict(base).two_speakers is False
+    assert job_data_from_dict({**base, "twoSpeakers": True}).two_speakers is True
+    assert job_data_from_dict({**base, "twoSpeakers": "false"}).two_speakers is False
+    assert job_data_from_dict({**base, "twoSpeakers": "1"}).two_speakers is True
+    assert job_data_from_dict({**base, "two_speakers": True}).two_speakers is True
+
+
+def test_two_speaker_centers_clusters_left_and_right_faces():
+    frames = [
+        (0.0, [(0.2, 0.4, 0.0), (0.8, 0.4, 0.0)]),
+        (0.2, [(0.22, 0.4, 0.0), (0.78, 0.4, 0.0)]),
+        (0.4, [(0.18, 0.4, 0.0), (0.82, 0.4, 0.0)]),
+    ]
+    centers = reframe.two_speaker_centers_from_frames(frames)
+
+    assert centers is not None
+    left, right = centers
+    assert left == pytest.approx(0.2, abs=0.02)
+    assert right == pytest.approx(0.8, abs=0.02)
+
+
+def test_two_speaker_centers_needs_two_distinct_faces():
+    # Satu wajah saja -> None (fallback separuh frame di pipeline).
+    single = [(t, [(0.3, 0.4, 0.0)]) for t in (0.0, 0.2, 0.4)]
+    assert reframe.two_speaker_centers_from_frames(single) is None
+
+    # Dua wajah berimpit -> anggap satu pembicara -> None.
+    overlapping = [(0.0, [(0.4, 0.4, 0.0), (0.42, 0.4, 0.0)])]
+    assert reframe.two_speaker_centers_from_frames(overlapping) is None
+
+    assert reframe.two_speaker_centers_from_frames([]) is None
+
+
+def test_panel_crop_filter_crops_9_8_and_scales_to_panel():
+    chain = reframe.panel_crop_filter(0.3)
+
+    assert chain.startswith("crop=w='min(ih*1.125,in_w)'")
+    assert "0.30000*in_w-out_w/2" in chain  # x di tengah pembicara
+    assert chain.endswith(",scale=1080:960,setsar=1")
+
+
+def test_panel_crop_filter_defaults_to_center():
+    assert "0.50000*in_w" in reframe.panel_crop_filter(None)

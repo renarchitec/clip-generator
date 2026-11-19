@@ -28,7 +28,7 @@ from .subtitles import Cue, Word, clip_words, parse_vtt, write_ass
 
 log = logging.getLogger(__name__)
 
-FONT_SIZE = 64
+FONT_SIZE = 80
 MARGIN_V = 180
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -297,6 +297,32 @@ def _reframe_filters(reframe: str, video: str, moment: llm.Moment) -> List[str]:
     return [reframe_mod.portrait_crop_filter(0.5), "setsar=1"]
 
 
+def _two_speaker_graph(
+    video: str,
+    moment: llm.Moment,
+    ass_path: Optional[str],
+) -> tuple[List[str], str]:
+    """filter_complex dua panel 1080x960 ditumpuk vertikal (1080x1920).
+
+    Panel atas = pembicara paling kiri, panel bawah = paling kanan. Tanpa dua
+    wajah dominan, pakai kuarter kiri/kanan frame (clamp crop ffmpeg mendekati
+    separuh kiri/kanan). Reframe diabaikan saat dua pembicara.
+    """
+    centers = reframe_mod.two_speaker_centers(video, moment.start, moment.end)
+    left, right = centers if centers else (0.25, 0.75)
+    graph = [
+        "[0:v]split=2[s0][s1]",
+        f"[s0]{reframe_mod.panel_crop_filter(left)}[top]",
+        f"[s1]{reframe_mod.panel_crop_filter(right)}[bottom]",
+        "[top][bottom]vstack=inputs=2[vstacked]",
+    ]
+    label = "[vstacked]"
+    if ass_path:
+        graph.append(f"[vstacked]subtitles={_ffmpeg_filter_path(ass_path)}[vout]")
+        label = "[vout]"
+    return graph, label
+
+
 def _render_one(
     video: str,
     moment: llm.Moment,
@@ -305,16 +331,25 @@ def _render_one(
     filename: str,
     reframe: str = "face_tracking",
     captions: bool = True,
+    two_speakers: bool = False,
 ) -> None:
     out_path = os.path.join(outdir, filename)
     ass_path = os.path.join(outdir, os.path.splitext(filename)[0] + ".ass")
     clip_cues = _clip_cues(cues, moment.start, moment.end)
+    burn_captions = captions and bool(clip_cues)
 
-    filters = _reframe_filters(reframe, video, moment)
-    if captions and clip_cues:
+    if burn_captions:
         with open(ass_path, "w", encoding="utf-8") as handle:
-            handle.write(write_ass(clip_cues, VIDEO_WIDTH, VIDEO_HEIGHT, FONT_SIZE, MARGIN_V))
-        filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
+            handle.write(
+                write_ass(
+                    clip_cues,
+                    VIDEO_WIDTH,
+                    VIDEO_HEIGHT,
+                    FONT_SIZE,
+                    0 if two_speakers else MARGIN_V,
+                    two_speakers=two_speakers,
+                )
+            )
 
     duration = max(0.5, moment.end - moment.start)
     cmd = [
@@ -329,12 +364,20 @@ def _render_one(
         f"{duration:.3f}",
         "-i",
         video,
-        "-vf",
-        ",".join(filters),
-        "-map",
-        "0:v:0",
-        "-map",
-        "0:a:0?",
+    ]
+
+    if two_speakers:
+        graph, label = _two_speaker_graph(
+            video, moment, ass_path if burn_captions else None
+        )
+        cmd += ["-filter_complex", ";".join(graph), "-map", label, "-map", "0:a:0?"]
+    else:
+        filters = _reframe_filters(reframe, video, moment)
+        if burn_captions:
+            filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
+        cmd += ["-vf", ",".join(filters), "-map", "0:v:0", "-map", "0:a:0?"]
+
+    cmd += [
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -368,7 +411,10 @@ async def render(
     on_progress=None,
     should_cancel=None,
 ) -> List[ClipResult]:
-    """Render tiap momen jadi 1080x1920; subtitle terbakar bila job.captions."""
+    """Render tiap momen jadi 1080x1920; subtitle terbakar bila job.captions.
+
+    job.two_speakers=True -> dua panel 1080x960 ditumpuk (reframe diabaikan).
+    """
     if not moments:
         raise ValueError("tidak ada momen untuk dirender")
 
@@ -389,6 +435,7 @@ async def render(
             filename,
             job.reframe,
             job.captions,
+            job.two_speakers,
         )
         clips.append(
             ClipResult(

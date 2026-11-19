@@ -78,4 +78,9 @@ export class CreateJobDto {
   @IsOptional()
   @IsBoolean()
   captions: boolean = true;
+
+  /** Tata letak dua pembicara (panel atas/bawah); default false. */
+  @IsOptional()
+  @IsBoolean()
+  twoSpeakers: boolean = false;
 }

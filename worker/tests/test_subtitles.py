@@ -76,34 +76,58 @@ def test_sanitize_strips_tags_and_collapses_whitespace():
     assert sanitize("a &amp; b") == "a & b"
 
 
-def test_write_ass_has_styles_and_karaoke_per_word():
-    ass = write_ass([Cue(1.0, 4.25, "Halo dunia")], 1080, 1920, 64, 180)
+def test_write_ass_styles_hook_captions_one_event_per_word():
+    ass = write_ass([Cue(1.0, 4.25, "Halo dunia")], 1080, 1920, 80, 180)
 
     assert "[Script Info]" in ass
     assert "[V4+ Styles]" in ass
-    assert "Style: Default" in ass
-    assert "Outline" in ass
     assert "[Events]" in ass
+    # Font Anton besar, outline hitam 6px, shadow lembut.
+    assert "Style: Default,Anton,80," in ass
+    assert ",1,6,2,2,80,80," in ass  # BorderStyle, Outline, Shadow, Alignment(2=bawah)
+    # Satu Dialogue per jendela kata, bukan satu event karaoke \k.
     dialogue = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
-    assert len(dialogue) == 1
-    assert "0:00:01.00,0:00:04.25" in dialogue[0]
-    # 3.25 detik dibagi bobot panjang: "Halo" (5/11) ~ 1.48s (148cs), "dunia" (6/11) ~ 1.77s (177cs)
-    assert "{\\k148}Halo" in dialogue[0]
-    assert "{\\k177}dunia" in dialogue[0]
+    assert len(dialogue) == 2
+    assert "0:00:01.00,0:00:02.48" in dialogue[0]
+    assert "0:00:02.48,0:00:04.25" in dialogue[1]
+    # UPPERCASE + hanya kata aktif yang kuning.
+    assert "{\\c&H0000FFFF&}HALO{\\c&H00FFFFFF&} DUNIA" in dialogue[0]
+    assert "HALO {\\c&H0000FFFF&}DUNIA{\\c&H00FFFFFF&}" in dialogue[1]
+
+
+def test_write_ass_two_speakers_aligns_middle_centre_without_margin():
+    ass = write_ass([Cue(0.0, 1.0, "halo")], 1080, 1920, 80, 180, two_speakers=True)
+    style = [line for line in ass.splitlines() if line.startswith("Style:")][0]
+
+    assert ",1,6,2,5,80,80,0,1" in style  # Alignment 5 (tengah), MarginV 0
 
 
 def test_write_ass_keeps_inline_word_timings_and_escapes_braces():
     words = [Word(0.0, 0.5, "kata"), Word(0.5, 1.2, "{kurung}")]
-    ass = write_ass([Cue(0.0, 1.2, "kata {kurung}", words=words)], 1080, 1920, 64, 180)
+    ass = write_ass([Cue(0.0, 1.2, "kata {kurung}", words=words)], 1080, 1920, 80, 180)
     dialogue = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
 
-    assert len(dialogue) == 1
-    assert "{\\k50}kata" in dialogue[0]
-    assert "{\\k70}\\{kurung}" in dialogue[0]
+    assert len(dialogue) == 2
+    assert "{\\c&H0000FFFF&}KATA{\\c&H00FFFFFF&} \\{KURUNG}" in dialogue[0]
+    assert "KATA {\\c&H0000FFFF&}\\{KURUNG}{\\c&H00FFFFFF&}" in dialogue[1]
+
+
+def test_write_ass_word_events_never_overlap():
+    words = [Word(0.0, 0.5, "a"), Word(0.5, 0.7, "b"), Word(0.7, 1.0, "c")]
+    ass = write_ass([Cue(0.0, 1.0, "a b c", words=words)], 1080, 1920, 80, 180)
+    spans = [
+        (line.split(",")[1], line.split(",")[2])
+        for line in ass.splitlines()
+        if line.startswith("Dialogue:")
+    ]
+
+    assert len(spans) == 3
+    for (_, end), (next_start, _) in zip(spans, spans[1:]):
+        assert end <= next_start
 
 
 def test_write_ass_skips_invalid_cues():
-    assert "Dialogue:" not in write_ass([Cue(2.0, 2.0, "kosong")], 1080, 1920, 64, 180)
+    assert "Dialogue:" not in write_ass([Cue(2.0, 2.0, "kosong")], 1080, 1920, 80, 180)
 
 
 def test_split_long_cues_splits_by_duration_and_keeps_words():
@@ -174,7 +198,9 @@ def test_clip_words_shifts_to_zero_and_drops_out_of_window():
     cues = [Cue(0.0, 4.0, "satu dua tiga empat")]
     words = clip_words(cues, 1.0, 3.0)
 
-    assert [(w.text, w.start, w.end) for w in words] == [
-        ("dua", 0.0, 1.0),
-        ("tiga", 1.0, 2.0),
+    # Kata yang mulai sebelum jendela berakhir tetap ikut, dipotong di batas clip.
+    assert [(w.text, round(w.start, 2), round(w.end, 2)) for w in words] == [
+        ("dua", 0.0, 0.8),
+        ("tiga", 0.8, 1.8),
+        ("empat", 1.8, 2.0),
     ]

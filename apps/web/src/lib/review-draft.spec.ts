@@ -16,6 +16,7 @@ const sample: ReviewDraft = {
   mode: "auto",
   reframe: "face_tracking",
   captions: true,
+  twoSpeakers: false,
   clipCount: 3,
   duration: 45,
   description: "highlights",
@@ -31,6 +32,9 @@ const sample: ReviewDraft = {
 // 1. Save and load
 saveReviewDraft(sample)
 assert.deepEqual(loadReviewDraft(), sample)
+
+store.set("clipper-review-draft", JSON.stringify({ ...sample, twoSpeakers: undefined }))
+assert.equal(loadReviewDraft()?.twoSpeakers, false)
 
 // 2. Clear
 clearReviewDraft()

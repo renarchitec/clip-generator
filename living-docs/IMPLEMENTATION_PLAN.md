@@ -48,12 +48,13 @@ clipper/
 │  │  ├─ pipeline.py          # Orkestrasi tahap: download, transcribe, select, render, save, run_preview
 │  │  ├─ worker.py            # Consumer `clip-jobs` (concurrency 1) + `previews` (concurrency 2), heartbeat LLM
 │  │  ├─ llm.py               # Pemanggilan OpenAI-compatible LLM & parsing momen
-│  │  ├─ reframe.py           # face_tracking / active speaker (FaceMesh), cut segments & crop filters
-│  │  ├─ subtitles.py         # Parser VTT, deduplikasi rolling, pembuat subtitle ASS karaoke
+│  │  ├─ reframe.py           # face_tracking / active speaker (FaceMesh), dua pembicara (2-means), crop filters
+│  │  ├─ subtitles.py         # Parser VTT, deduplikasi rolling, takarir hook ASS per kata
 │  │  └─ models.py            # Definisi dataclass & konversi data job
 │  ├─ tests/                  # Pytest unit & integration tests
+│  ├─ fonts/                  # Anton-Regular.ttf + OFL.txt (font caption hook)
 │  ├─ requirements.txt
-│  └─ Dockerfile              # ffmpeg, fonts-dejavu-core, mediapipe, opencv
+│  └─ Dockerfile              # ffmpeg, fontconfig + Anton, fonts-dejavu-core, mediapipe, opencv
 ├─ pnpm-workspace.yaml
 ├─ turbo.json
 └─ README.md
@@ -73,6 +74,7 @@ Database dikelola melalui Prisma ORM dengan PostgreSQL. Migrasi dijalankan secar
 4. `20260104000000_add_job_description`: Penambahan kolom teks `description` pada tabel `jobs` untuk arahan brief mode otomatis.
 5. `20260105000000_add_job_reframe`: Penambahan kolom `reframe` pada tabel `jobs` (default `face_tracking`).
 6. `20260106000000_add_job_captions`: Penambahan kolom boolean `captions` pada tabel `jobs` (default `true`).
+7. `20260107000000_add_job_two_speakers`: Penambahan kolom boolean `twoSpeakers` pada tabel `jobs` (default `false`).
 
 ## Pipeline Pemrosesan Worker
 
@@ -103,8 +105,9 @@ Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, w
   - `face_tracking` ("Pembicara aktif" di UI): menganalisis proxy video resolusi rendah (~360p, 5 fps) dengan MediaPipe FaceMesh (`max_num_faces=4`). Per wajah diukur bukaan bibir (landmark inner lips 13/14) dan energi geraknya; wajah paling aktif dipilih sebagai pembicara dengan hysteresis (margin skor 1.25x, ambang noise 0.003) dan minimal hold 0.9 detik per cut. Hasilnya deretan crop statis per segmen (cut, bukan pan halus) maksimal 16 segmen, dieksekusi sebagai ekspresi filter ffmpeg piecewise; tidak ada wajah sama sekali -> fallback crop tengah.
   - `black_bars`: Skala video mempertahankan rasio asli dengan padding hitam di atas dan bawah.
   - `blurred_fill`: Membagi video menjadi dua layer; layer belakang diperbesar, dipotong, dan diburamkan (`boxblur`), layer depan diletakkan di tengah dengan rasio tajam.
+  - `twoSpeakers: true` (tata letak dua pembicara, reframe diabaikan): semua pusat_x wajah dari sampling FaceMesh yang sama di-klaster 2-means menjadi dua pembicara dominan (kiri -> panel atas, kanan -> panel bawah; dua klaster wajib terpisah >= 0.08, jika kurang -> fallback kuarter kiri/kanan frame). Tiap panel = crop statis 9:8 (`w=ih*9/8` clamp ke `in_w`, `h=ih` atau lebih pendek `in_w*8/9`) di tengah pembicara, skala ke 1080x960, lalu `vstack` menjadi 1080x1920, dieksekusi lewat `-filter_complex` (`split` + `crop` + `scale` + `vstack`).
 - **Pembakaran Takarir ASS:**
-  - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` dengan gaya karaoke kata per kata (`{\k<durasi_cs>}`). Setiap event maksimal 5 kata / 26 karakter, event dipotong agar tidak tumpang tindih, margin aman bawah ≥18% tinggi frame dan samping 80px, teks putih tebal dengan outline hitam dan bayangan; kata aktif disorot kuning.
+  - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` bergaya "hook": font Anton (OFL, di-vendor di `worker/fonts/`, terpasang ke `/usr/share/fonts/truetype/anton` + `fc-cache` di image; DejaVu tetap fallback fontconfig), UPPERCASE, putih, outline hitam 6px, bayangan semi-transparan. Karaoke `\k` tidak dipakai; sebagai gantinya satu event `Dialogue` non-overlapping per jendela kata yang memuat seluruh teks chunk (maks 4 kata / 18 karakter) dengan kata aktif dibungkus `{\c&H0000FFFF&}...{\c&H00FFFFFF&}` (kuning) dan kata lain putih. Margin aman bawah >=18% tinggi frame (Alignment 2) pada mode satu pembicara; mode dua pembicara memakai Alignment 5 (tengah, tepat pada sambungan panel) dengan MarginV 0.
   - Jika `captions: false`, langkah pembakaran takarir dilewati.
 - **Encoding Video:**
   - ffmpeg dipanggil menggunakan video codec `libx264` dengan pixel format standar `yuv420p` (menjamin kompatibilitas playback di Safari/iOS dan browser Android), audio `aac` 128k, preset `veryfast`, dan `movflags +faststart`.

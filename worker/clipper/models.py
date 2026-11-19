@@ -32,6 +32,7 @@ DEFAULT_TARGET_DURATION_SEC = 45.0
 MAX_DESCRIPTION_CHARS = 500
 DEFAULT_REFRAME = "face_tracking"
 DEFAULT_CAPTIONS = True
+DEFAULT_TWO_SPEAKERS = False
 
 # Batas judul/alasan rentang manual hasil tinjauan LLM; harus sama dengan
 # MaxLength di apps/api/src/jobs/dto/create-job.dto.ts.
@@ -70,6 +71,16 @@ def _to_text(value: Any, max_chars: int) -> Optional[str]:
         return None
     trimmed = value.strip()
     return trimmed[:max_chars] or None
+
+def _to_bool(value: Any, default: bool) -> bool:
+    """Boolean toleran: bool asli, string "0/false/no/off", None -> default."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off")
+    if value is None:
+        return default
+    return bool(value)
 
 
 @dataclass
@@ -130,6 +141,7 @@ class JobData:
     mode: JobMode = "auto"
     reframe: ReframeMode = DEFAULT_REFRAME
     captions: bool = DEFAULT_CAPTIONS
+    two_speakers: bool = DEFAULT_TWO_SPEAKERS
     description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
@@ -141,6 +153,7 @@ class JobData:
             "mode": self.mode,
             "reframe": self.reframe,
             "captions": self.captions,
+            "twoSpeakers": self.two_speakers,
             "description": self.description,
             "params": self.params.to_dict(),
             "ranges": [item.to_dict() for item in self.ranges],
@@ -181,14 +194,10 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         raise ValueError(f"reframe tidak dikenal: {reframe!r} ({'/'.join(REFRAME_MODES)})")
 
     raw_captions = _first(data, "captions", default=DEFAULT_CAPTIONS)
-    if isinstance(raw_captions, bool):
-        captions = raw_captions
-    elif isinstance(raw_captions, str):
-        captions = raw_captions.strip().lower() not in ("0", "false", "no", "off")
-    elif raw_captions is None:
-        captions = DEFAULT_CAPTIONS
-    else:
-        captions = bool(raw_captions)
+    captions = _to_bool(raw_captions, DEFAULT_CAPTIONS)
+
+    raw_two_speakers = _first(data, "twoSpeakers", "two_speakers", default=DEFAULT_TWO_SPEAKERS)
+    two_speakers = _to_bool(raw_two_speakers, DEFAULT_TWO_SPEAKERS)
 
     return JobData(
         job_id=job_id,
@@ -196,6 +205,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         mode=mode,  # type: ignore[arg-type]
         reframe=reframe,  # type: ignore[arg-type]
         captions=captions,
+        two_speakers=two_speakers,
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,

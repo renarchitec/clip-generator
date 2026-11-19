@@ -15,8 +15,16 @@ _TAG_RE = re.compile(r"<[^>]*>")
 _WS_RE = re.compile(r"\s+")
 _NON_CUE_BLOCKS = {"NOTE", "STYLE", "REGION"}
 
-WRAP_CHARS = 26
-MAX_WORDS_PER_CUE = 5
+# Anton (condensed, huruf besar) jauh lebih lebar per karakter daripada DejaVu:
+# 4 kata / 18 karakter supaya takarir tetap satu baris di 1080px.
+WRAP_CHARS = 18
+MAX_WORDS_PER_CUE = 4
+
+# Gaya caption "hook": putih tebal outline hitam 6px, kata aktif kuning.
+# ASS memakai BGR: &H0000FFFF = kuning, &H00FFFFFF = putih.
+FONT_NAME = "Anton"
+HIGHLIGHT_COLOUR = "&H0000FFFF"
+TEXT_COLOUR = "&H00FFFFFF"
 
 
 @dataclass
@@ -195,22 +203,6 @@ def _ass_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "\\{")
 
 
-def _wrap(text: str, max_chars: int = WRAP_CHARS) -> List[str]:
-    words = text.split()
-    if not words:
-        return []
-    lines: List[str] = []
-    current = words[0]
-    for word in words[1:]:
-        if len(current) + 1 + len(word) <= max_chars:
-            current = f"{current} {word}"
-        else:
-            lines.append(current)
-            current = word
-    lines.append(current)
-    return lines
-
-
 def _split_words(
     cue: Cue,
     max_words: int = MAX_WORDS_PER_CUE,
@@ -312,15 +304,28 @@ def write_ass(
     cues: Sequence[Cue],
     width: int = 1080,
     height: int = 1920,
-    font_size: int = 64,
+    font_size: int = 68,
     margin_v: int = 180,
+    two_speakers: bool = False,
 ) -> str:
-    """Tulis ASS dengan format karaoke {\\k<durasi_cs>} per kata."""
-    safe_margin_v = max(int(margin_v), int(height * 0.18))
+    """Tulis ASS takarir pendek tebal (Anton, UPPERCASE, kata aktif kuning).
+
+    - two_speakers=True: Alignment 5 (tengah frame, tepat di batas panel atas/bawah),
+      margin_v di-reset ke 0.
+    - two_speakers=False: Alignment 2 (bawah tengah), margin_v aman >=18% tinggi frame.
+    - Format teks: tiap jendela kata memancarkan satu Dialogue event non-overlapping
+      berisi seluruh kata chunk dengan kata aktif berformat {\\c&H00FFFF&}...{\\c&HFFFFFF&}.
+    """
+    alignment = 5 if two_speakers else 2
+    safe_margin_v = 0 if two_speakers else max(int(margin_v), int(height * 0.18))
+    # Style: Default, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour,
+    # Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline,
+    # Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+    # Primary: &H00FFFFFF (putih), Outline: &H00000000 (hitam 6px), Shadow: &H80000000 (semi-transparan 2px)
     style = (
-        "Style: Default,DejaVu Sans,{font_size},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,"
-        "-1,0,0,0,100,100,0,0,1,3,1.5,2,80,80,{margin_v},1"
-    ).format(font_size=int(font_size), margin_v=safe_margin_v)
+        f"Style: Default,{FONT_NAME},{int(font_size)},{TEXT_COLOUR},{HIGHLIGHT_COLOUR},"
+        f"&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,{alignment},80,80,{safe_margin_v},1"
+    )
 
     lines = [
         "[Script Info]",
@@ -354,14 +359,32 @@ def _write_cue_part(cue: Cue, lines: List[str]) -> None:
     words = cue_to_words(cue)
     if not words:
         return
-    parts: List[str] = []
-    for word in words:
-        duration_cs = max(1, int(round((word.end - word.start) * 100)))
-        parts.append(f"{{\\k{duration_cs}}}{_ass_escape(word.text)}")
-    lines.append(
-        f"Dialogue: 0,{_timestamp(cue.start)},{_timestamp(cue.end)},Default,,0,0,0,,"
-        + " ".join(parts)
-    )
+
+    # Buat satu event per window kata yang berurutan dan non-overlapping.
+    # Teks seluruh chunk ditampilkan UPPERCASE; hanya kata aktif yang disorot kuning.
+    for i, active_word in enumerate(words):
+        w_start = active_word.start
+        w_end = active_word.end
+        # Clamp rentang waktu ke batas cue
+        seg_start = max(cue.start, w_start)
+        seg_end = min(cue.end, w_end)
+        if seg_end <= seg_start:
+            continue
+
+        rendered_words: List[str] = []
+        for j, w in enumerate(words):
+            word_text = _ass_escape(w.text.upper())
+            if j == i:
+                rendered_words.append(
+                    f"{{\\c{HIGHLIGHT_COLOUR}&}}{word_text}{{\\c{TEXT_COLOUR}&}}"
+                )
+            else:
+                rendered_words.append(word_text)
+
+        text_line = " ".join(rendered_words)
+        lines.append(
+            f"Dialogue: 0,{_timestamp(seg_start)},{_timestamp(seg_end)},Default,,0,0,0,,{text_line}"
+        )
 
 
 def _chunk_words(words: Sequence[str], parts: int) -> List[str]:

@@ -34,6 +34,7 @@ export class JobsService {
       dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
     const reframe = dto.reframe ?? DEFAULT_REFRAME;
     const captions = dto.captions ?? true;
+    const twoSpeakers = dto.twoSpeakers ?? false;
 
     const job = await this.prisma.job.create({
       data: {
@@ -42,6 +43,7 @@ export class JobsService {
         mode: dto.mode,
         reframe,
         captions,
+        twoSpeakers,
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
         ranges: ranges as unknown as Prisma.InputJsonValue,
@@ -55,6 +57,7 @@ export class JobsService {
       mode: dto.mode,
       reframe,
       captions,
+      twoSpeakers,
       description,
       params: {
         clipCount: dto.clipCount,
@@ -228,6 +231,7 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
     mode: job.mode,
     reframe: job.reframe,
     captions: job.captions,
+    twoSpeakers: job.twoSpeakers,
     clipCount: job.clipCount,
     targetDurationSec: job.targetDurationSec,
     ranges: job.ranges ?? null,

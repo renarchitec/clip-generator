@@ -6,6 +6,9 @@ bukaan/gerak bibir tiap wajah, lalu memilih wajah yang sedang bicara dengan
 hysteresis + minimal hold. Hasilnya bukan pan halus, melainkan deretan crop
 statis (cut) per segmen pembicara, sebagai ekspresi filter ffmpeg piecewise.
 
+Modul ini juga menyediakan `two_speaker_centers` (klaster 2-means pusat_x wajah
+untuk mode dua pembicara) dan `panel_crop_filter` (crop panel 9:8 per pembicara).
+
 Kontrak API/DB tidak berubah: nilai `face_tracking` tetap diterima dan tetap
 default; fallback crop tengah tetap ada bila tidak ada wajah sama sekali.
 
@@ -40,6 +43,7 @@ MISSING_TTL_SEC = 1.0  # wajah hilang se lama ini -> wajib pilih ulang
 MAX_SEGMENTS = 16  # batas panjang ekspresi filter ffmpeg
 MAX_SAMPLES = 1200  # batas runtime: ~4 menit pada 5 fps
 MIN_FACE_HEIGHT = 0.05  # abaikan deteksi wajah terlalu kecil
+MIN_SPEAKER_SEPARATION = 0.08  # jarak minimum dua klaster pembicara x
 
 # Landmark bibir dalam FaceMesh (inner lips): 13 atas, 14 bawah.
 LIP_UPPER, LIP_LOWER = 13, 14
@@ -63,6 +67,16 @@ def face_track_samples(
     - FaceMesh per sampel; wajah aktif dipilih dari gerak bibir (hysteresis).
     - Tidak ada wajah sama sekali -> None -> pipeline memakai crop tengah.
     """
+    frames = sample_face_frames(video_path, start, end, sample_fps)
+    return select_speaker_segments(frames)
+
+def sample_face_frames(
+    video_path: str,
+    start: float,
+    end: float,
+    sample_fps: float = SAMPLE_FPS,
+) -> List[SampledFrame]:
+    """Deteksi FaceMesh pada frame proxy ~360p ~5 fps (dipakai mode satu & dua pembicara)."""
     try:
         import cv2
         import mediapipe as mp
@@ -110,9 +124,61 @@ def face_track_samples(
                 if capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 > limit:
                     break
 
-        return select_speaker_segments(frames)
+        return frames
     finally:
         capture.release()
+
+def two_speaker_centers(
+    video_path: str,
+    start: float,
+    end: float,
+    sample_fps: float = SAMPLE_FPS,
+) -> Optional[Tuple[float, float]]:
+    """Pusat_x dua pembicara dominan (kiri, kanan); None bila <2 wajah terdeteksi."""
+    return two_speaker_centers_from_frames(
+        sample_face_frames(video_path, start, end, sample_fps)
+    )
+
+def two_speaker_centers_from_frames(
+    frames: Sequence[SampledFrame],
+) -> Optional[Tuple[float, float]]:
+    """1D 2-means atas pusat_x semua wajah di semua sampel.
+
+    Kiri -> panel atas, kanan -> panel bawah. Terpisah dari deteksi agar bisa diuji
+    tanpa mediapipe (seperti select_speaker_segments).
+    """
+    xs = [face[0] for _, faces in frames for face in faces]
+    if len(xs) < 2:
+        return None
+
+    left, right = min(xs), max(xs)
+    if right - left < MIN_SPEAKER_SEPARATION:
+        return None  # semua wajah di titik yang sama: anggap satu pembicara
+
+    for _ in range(20):
+        groups: Tuple[List[float], List[float]] = ([], [])
+        for x in xs:
+            groups[0 if abs(x - left) <= abs(x - right) else 1].append(x)
+        if not groups[0] or not groups[1]:
+            return None
+        new_left = sum(groups[0]) / len(groups[0])
+        new_right = sum(groups[1]) / len(groups[1])
+        if (new_left, new_right) == (left, right):
+            break
+        left, right = new_left, new_right
+
+    return (min(left, right), max(left, right))
+
+def panel_crop_filter(center_x: Optional[float]) -> str:
+    """Crop statis 9:8 (w=ih*9/8, h=ih; atau lebih pendek bila terlalu lebar),
+    di tengah pembicara, lalu skala ke panel 1080x960. ffmpeg meng-clamp x/y."""
+    center = 0.5 if center_x is None else max(0.0, min(1.0, center_x))
+    return (
+        "crop=w='min(ih*1.125,in_w)':h='if(gt(ih*1.125,in_w),in_w*0.88889,ih)'"
+        f":x='max(0,min({center:.5f}*in_w-out_w/2,in_w-out_w))'"
+        ":y='max(0,(in_h-out_h)/2)',scale=1080:960,setsar=1"
+    )
+
 
 
 def _detect_faces(frame, cv2, mesh) -> List[Face]:

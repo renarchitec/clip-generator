@@ -191,6 +191,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       mode: job.mode,
       reframe: job.reframe,
       captions: job.captions,
+      twoSpeakers: job.twoSpeakers,
       status: job.status,
       stage: job.stage,
       progress: job.progress,

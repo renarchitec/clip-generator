@@ -44,6 +44,8 @@ export interface JobData {
   reframe: ReframeMode;
   /** apakah subtitle dibakar ke clip; default true */
   captions: boolean;
+  /** tata letak dua pembicara (panel atas/bawah 1080x960 vstack); default false */
+  twoSpeakers: boolean;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
   description?: string | null;
   params: JobParams;

@@ -66,6 +66,7 @@ Kebutuhan utama:
    - Rentang manual: daftar 1–10 rentang waktu `{start, end}` dalam detik; `title`/`reason` opsional hanya dikirim untuk kandidat hasil tinjauan LLM. Tanpa judul, worker memakai fallback `Clip mm:ss–mm:ss`.
    - Pilihan reframe: `face_tracking` (default), `blurred_fill`, atau `black_bars`.
    - Opsi takarir (`captions`): aktif (default) atau nonaktif.
+   - Opsi dua pembicara (`twoSpeakers`): nonaktif (default) atau aktif. Bila aktif, klip 1080x1920 dibagi dua panel 1080x960 (atas/bawah) berisi dua pembicara dominan; pilihan reframe diabaikan.
 4. **Pantau** — job masuk antrean `clip-jobs` di BullMQ; dashboard dan halaman detail menampilkan tahapan nyata secara real-time via Server-Sent Events (`download` → `transcribe` → `select` → `render` → `save`).
 5. **Kontrol** — pengguna dapat membatalkan job yang sedang berjalan via tombol Batal (`POST /api/jobs/:id/cancel`).
 6. **Tinjau & Putar** — buka detail job, putar klip di player 9:16 (`GET /api/clips/:id/stream` mendukung HTTP byte-range), salin judul klip.
@@ -77,7 +78,7 @@ Kebutuhan utama:
 | Prioritas | Fitur | Status |
 | --- | --- | --- |
 | **P0** | Multi-user auth (`users` + `sessions`, scrypt, httpOnly cookie `clipper_session`, claim legacy jobs) | Selesai |
-| **P0** | Pipeline video vertikal (yt-dlp, YouTube VTT subtitles, LLM OpenAI-compatible, ASS word-by-word karaoke, ffmpeg) | Selesai |
+| **P0** | Pipeline video vertikal (yt-dlp, YouTube VTT subtitles, LLM OpenAI-compatible, takarir ASS hook per kata, ffmpeg) | Selesai |
 | **P0** | Pilihan mode reframe (`face_tracking` / pembicara aktif via MediaPipe FaceMesh, `blurred_fill`, `black_bars`) | Selesai |
 | **P0** | Web UI TanStack Start + Query + shadcn/ui + Tailwind v4 + i18n (EN/ID) + Dark/Light theme | Selesai |
 | **P0** | Real-time progress SSE (`GET /api/jobs/:id/events`) dan streaming klip byte-range | Selesai |
@@ -85,6 +86,7 @@ Kebutuhan utama:
 | **P0** | Regenerate job via prefill form (`/?from=<jobId>`) | Selesai |
 | **P0** | Indikator status LLM worker (`GET /api/system/llm-status` + Redis heartbeat `worker:status:llm`) | Selesai |
 | **P0** | Tinjau momen sebelum memotong (`POST /api/previews` + `GET /api/previews/:id`: kandidat LLM + transkrip penuh → job manual) | Selesai |
+| **P0** | Gaya takarir "hook" (Anton, UPPERCASE, kata aktif kuning) dan tata letak dua pembicara (`twoSpeakers`: panel atas/bawah 1080x960) | Selesai |
 | **P1** | Retensi otomatis terjadwal via background cron (`downloaded_at` / TTL) | Dalam antrean |
 | **P2** | Auto-posting ke TikTok dan Instagram Graph API | Masa depan |
 
@@ -109,6 +111,7 @@ Kebutuhan utama:
 | FR-2.4 | Parameter mode manual: `ranges` berisi array 1–10 rentang `{start, end}` dengan `start >= 0` dan `end > start`, serta field opsional `title` (maks. 70 karakter) dan `reason` (maks. 200 karakter) yang diawetkan dari kandidat tinjauan LLM | Validasi gagal bila rentang kosong, durasi negatif, atau melebihi 10 rentang. Rentang manual murni/transkrip tanpa judul menggunakan judul fallback timestamp `Clip mm:ss–mm:ss` |
 | FR-2.5 | Pilihan mode reframe: `face_tracking` (default), `black_bars`, `blurred_fill` | Nilai tersimpan di database dan memengaruhi filter ffmpeg |
 | FR-2.6 | Pengaturan takarir (`captions`): boolean (default `true`) | Jika `false`, render klip melewatkan pembakaran subtitle ASS |
+| FR-2.9 | Opsi dua pembicara (`twoSpeakers`): boolean (default `false`) | Nilai tersimpan di database, diteruskan ke antrean/worker, dan memengaruhi filter ffmpeg; bila `true`, output 1080x1920 dibagi dua panel 1080x960 (vstack) dan pilihan reframe diabaikan |
 | FR-2.7 | Tombol Buat Ulang (Regenerate) dari halaman detail job | Mengarahkan ke dashboard `/?from=<jobId>` dengan nilai form terisi otomatis dari job lama untuk membuat job baru |
 | FR-2.8 | Opsi "Tinjau Momen" pada mode otomatis: memindai URL untuk mendapatkan kandidat momen LLM dan transkrip penuh sebelum membuat job | `POST /api/previews` mengembalikan `{id}`; `GET /api/previews/:id` menampilkan kandidat `{start,end,title,reason}` dan cue `{start,end,text}`; pengguna memilih kandidat/rentang lalu membuat job manual via `POST /api/jobs`. Pilihan kandidat LLM mengawetkan `title` dan `reason` ke dalam payload rentang manual sehingga judul klip tidak hilang saat dirender. Preview hanya tersimpan di Redis/BullMQ dan kedaluwarsa setelah 1 jam. Mode otomatis langsung dan mode manual tidak berubah |
 
@@ -121,6 +124,7 @@ Kebutuhan utama:
 | FR-3.3 | Pengunduhan video menggunakan `yt-dlp` dengan format MP4 terbaik dan ekstraksi subtitle YouTube (manual diutamakan, fallback ke auto-subs) | Jika video tidak memiliki track subtitle YouTube, job gagal dengan pesan: `"Subtitle YouTube tidak tersedia untuk video ini."` |
 | FR-3.4 | Pemilihan momen mode otomatis mewajibkan konfigurasi LLM OpenAI-compatible (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`) | Jika LLM gagal atau tidak dikonfigurasi, job langsung gagal (tanpa fallback berbasis aturan) |
 | FR-3.5 | Subtitle diubah menjadi takarir ASS kata per kata (*karaoke style*) dengan deduplikasi *rolling auto-sub* | Teks subtitle tidak bertumpuk dan muncul sinkron per kata |
+| FR-3.8 | Gaya takarir "hook": font tebal kondensasi Anton (OFL, fallback DejaVu), teks UPPERCASE putih, outline hitam 6px, bayangan lembut, kata aktif disorot kuning via event non-overlapping per kata window. Mode dua pembicara memakai Alignment 5 (tengah, pada sambungan panel), mode satu pembicara memakai Alignment 2 (bawah) | Takarir tampil kontras tinggi, ringkas (maks 4 kata/chunk), sinkron per jendela kata |
 | FR-3.6 | Reframe potret 9:16 (1080x1920) dieksekusi dengan `libx264` format piksel `yuv420p`: <br>- `face_tracking` (UI: Pembicara aktif / Active speaker): deteksi wajah dan analisis gerak bibir MediaPipe FaceMesh pada proxy ~360p/5fps, pemilihan wajah aktif dengan hysteresis dan min hold 0.9s, dipotong statis per segmen pembicara (maks 16 cut) lewat filter crop ffmpeg (fallback crop tengah bila tanpa wajah). <br>- `black_bars`: letterbox dengan latar hitam. <br>- `blurred_fill`: latar belakang video diburamkan (`boxblur`) dengan video utama di tengah. | Hasil video dapat diputar di semua browser modern dan seluler tanpa kendala kompatibilitas piksel |
 | FR-3.7 | Pembatalan job (`POST /api/jobs/:id/cancel`): worker memeriksa kunci Redis `worker:cancel:<job_id>` di batas tahapan proses | Worker menghentikan proses secara aman, membersihkan direktori kerja sementara, dan menandai job `cancelled` |
 
@@ -141,7 +145,7 @@ Database menggunakan PostgreSQL dengan Prisma ORM.
 
 - **`users`** — `id` (UUID), `email` (unique), `name`, `passwordHash` (scrypt), `createdAt`.
 - **`sessions`** — `id` (UUID), `userId` (FK ke `users`, cascade delete), `tokenHash` (SHA-256 unique), `expiresAt`, `createdAt`.
-- **`jobs`** — `id` (UUID), `url`, `description` (opsional), `mode` (`auto` / `manual`), `reframe` (string, default `face_tracking`), `captions` (boolean, default `true`), `clipCount` (int), `targetDurationSec` (int), `ranges` (JSON), `status` (`queued`, `running`, `done`, `failed`, `cancelled`), `stage`, `progress`, `message`, `error`, `userId` (FK ke `users`, set null), `createdAt`, `startedAt`, `finishedAt`.
+- **`jobs`** — `id` (UUID), `url`, `description` (opsional), `mode` (`auto` / `manual`), `reframe` (string, default `face_tracking`), `captions` (boolean, default `true`), `twoSpeakers` (boolean, default `false`), `clipCount` (int), `targetDurationSec` (int), `ranges` (JSON), `status` (`queued`, `running`, `done`, `failed`, `cancelled`), `stage`, `progress`, `message`, `error`, `userId` (FK ke `users`, set null), `createdAt`, `startedAt`, `finishedAt`.
 - **`clips`** — `id` (UUID), `jobId` (FK ke `jobs`, cascade delete), `title`, `startSec` (float), `endSec` (float), `filePath`, `downloadedAt` (timestamp opsional), `deletedAt` (timestamp opsional), `createdAt`.
 
 Preview momen **tidak** memakai tabel database. Data preview hidup di antrean BullMQ/Redis (`previews`); job preview yang selesai/gagal dibuang otomatis setelah 1 jam.

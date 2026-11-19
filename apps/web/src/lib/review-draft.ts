@@ -5,6 +5,7 @@ export type ReviewDraft = {
   mode: "auto" | "manual"
   reframe: Reframe
   captions: boolean
+  twoSpeakers?: boolean
   clipCount: number
   duration: number
   description: string
@@ -31,7 +32,7 @@ export function loadReviewDraft(): ReviewDraft | null {
     if (d.cueRanges.length > 10) return null
     if (!Array.isArray(d.ranges) || d.ranges.some((r) => typeof r?.start !== "string" || typeof r?.end !== "string")) return null
     if (!["face_tracking", "blurred_fill", "black_bars"].includes(d.reframe)) return null
-    return { ...d, selectedCandidates: Array.isArray(d.selectedCandidates) ? d.selectedCandidates.filter((i) => Number.isInteger(i)) : [] }
+    return { ...d, twoSpeakers: typeof d.twoSpeakers === "boolean" ? d.twoSpeakers : false, selectedCandidates: Array.isArray(d.selectedCandidates) ? d.selectedCandidates.filter((i) => Number.isInteger(i)) : [] }
   } catch {
     return null
   }

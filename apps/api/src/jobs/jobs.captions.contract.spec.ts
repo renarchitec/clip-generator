@@ -36,7 +36,7 @@ test('JobSnapshot and services carry captions', async () => {
 
   const service = await readFile(join(root, 'apps/api/src/jobs/jobs.service.ts'), 'utf8');
   assert.match(service, /const captions = dto\.captions \?\? true;/);
-  assert.match(service, /captions,\s*\n\s*description,/);
+  assert.match(service, /captions,\s*\n\s*twoSpeakers,/);
 });
 
 test('worker parses captions default true and skips ASS when false', async () => {
@@ -47,6 +47,6 @@ test('worker parses captions default true and skips ASS when false', async () =>
   assert.match(models, /raw_captions = _first\(data, "captions", default=DEFAULT_CAPTIONS\)/);
 
   const pipeline = await readFile(join(root, 'worker/clipper/pipeline.py'), 'utf8');
-  assert.match(pipeline, /if captions and clip_cues:/);
+  assert.match(pipeline, /burn_captions = captions and bool\(clip_cues\)/);
   assert.match(pipeline, /job\.captions,/);
 });
