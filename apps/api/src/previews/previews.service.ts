@@ -57,6 +57,7 @@ export class PreviewsService {
     return {
       id,
       url: data.url,
+      description: data.description ?? null,
       status: toStatus(state),
       error:
         state === 'failed'
