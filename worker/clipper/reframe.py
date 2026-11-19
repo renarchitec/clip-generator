@@ -148,7 +148,7 @@ def panning_crop_filter(samples: Sequence[Tuple[float, float]]) -> str:
     for (time_a, x_a), (time_b, x_b) in zip(samples, samples[1:]):
         span = max(1e-3, time_b - time_a)
         terms.append(
-            f"lerp({x_a:.4f},{x_b:.4f},(t-{time_a:.2f})/{span:.2f})"
+            f"({x_a:.4f}+({x_b:.4f}-{x_a:.4f})*(t-{time_a:.2f})/{span:.2f})"
             f"*gte(t,{time_a:.2f})*lt(t,{time_b:.2f})"
         )
     last_time, last_x = samples[-1]
