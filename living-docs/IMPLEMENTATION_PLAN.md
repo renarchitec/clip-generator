@@ -1,181 +1,192 @@
-# Rencana implementasi
+# Rencana implementasi & Arsitektur Sistem
 
-## Ringkasan rencana
+## Ringkasan arsitektur
 
-Platform dibangun dalam empat fase: pipeline CLI dulu, lalu worker dan API, lalu web MVP, lalu fitur P1 dan auto-posting. Setiap fase baru dimulai setelah gate fase sebelumnya lolos.
+Platform dibangun dalam monorepo yang memisahkan aplikasi API, web front-end, paket tipe bersama, dan worker pemrosesan video di latar belakang.
 
 | Lapisan | Pilihan | Alasan |
 | --- | --- | --- |
-| Repo | Monorepo Turborepo + pnpm workspaces; folder Python terpisah | Satu tempat untuk API, web, tipe bersama, dan worker; task build, dev, lint, test di-cache Turborepo |
-| API | NestJS + Prisma + `@nestjs/bullmq` | Stack yang sudah kamu pakai di Spendly |
-| Web | TanStack Start + TanStack Query | Routing type-safe, SSR bila perlu; berjalan sebagai server Node |
-| Worker | Python 3.12 + package `bullmq` versi Python | Pipeline `clipper.py` dipakai ulang, tidak ditulis ulang |
-| Antrean | Redis di Dokploy | Dipakai bersama API dan worker |
-| Database | Postgres di Dokploy | Sesuai keputusan di PRD |
-| File clip | Volume Docker `clips-data` di VM | Di-mount ke API dan worker di path yang sama |
-| Auth | Satu akun pemilik, hash password di env, JWT di cookie httpOnly | Cukup untuk single user, tanpa tabel users |
-
-**Penyesuaian kecil dari PRD.** Folder clip memakai `<job_id>` (bukan `<video_id>`) supaya video yang sama bisa diproses dua kali. Tabel `clips` ditambah kolom `downloaded_at` dan `deleted_at`. API ditambah endpoint `GET /api/clips/:id/stream` untuk preview, agar memutar video tidak dihitung sebagai download.
+| Repo | Monorepo Turborepo + pnpm workspaces; folder Python terpisah | Satu repositori untuk API, web, paket tipe `@clipper/shared`, dan worker Python |
+| API | NestJS 11 + Prisma ORM + BullMQ | Framework TypeScript terstruktur, validasi DTO via `class-validator` / `zod`, dan listener event antrean |
+| Web | TanStack Start + TanStack Query + shadcn/ui + Tailwind v4 | SSR + SPA type-safe, styling atomic responsif, caching query, i18n (EN/ID), serta dark/light theme |
+| Web Server | srvx production server | Server runtime produksi performan untuk TanStack Start SSR |
+| Worker | Python 3.12 + BullMQ (`bullmq` Python) + asyncio | Menjalankan pipeline video berat secara asynchronous tanpa memblokir event loop |
+| Antrean | Redis di Dokploy | Broker antrean BullMQ (`clip-jobs`), penyimpanan sinyal pembatalan, dan heartbeat status LLM |
+| Database | PostgreSQL di Dokploy | Penyimpanan relasional pengguna, sesi, metadata job, dan klip |
+| Penyimpanan | Docker volume `clips-data` (`/data/clips`) | Di-mounted bersama ke API dan worker pada direktori yang sama |
+| Auth | Multi-user via database (`users` + `sessions`), scrypt, opaque session token | Keamanan cookie `clipper_session` (httpOnly, 30 hari), bearer token, isolasi per akun, klaim legacy jobs otomatis |
 
 ## Struktur repo
-
-Satu repo GitHub, tiga hal yang di-deploy terpisah: `apps/api`, `apps/web`, dan `worker`.
 
 ```text
 clipper/
 ├─ apps/
-│  ├─ api/                    # NestJS
-│  │  ├─ prisma/schema.prisma
-│  │  ├─ src/config/          # validasi env
-│  │  ├─ src/auth/            # login, guard JWT
-│  │  ├─ src/jobs/            # REST + SSE
-│  │  ├─ src/clips/           # stream, download, ubah timestamp
-│  │  ├─ src/queue/           # producer + listener QueueEvents
-│  │  └─ src/cleanup/         # job terjadwal hapus file
-│  └─ web/                    # TanStack Start
-│     └─ src/routes/          # login, buat job, daftar job, detail job
+│  ├─ api/                    # NestJS API
+│  │  ├─ prisma/
+│  │  │  ├─ schema.prisma     # Skema database
+│  │  │  └─ migrations/       # Riwayat migrasi SQL Prisma
+│  │  ├─ docker-entrypoint.sh # Menjalankan prisma migrate deploy sebelum boot
+│  │  ├─ Dockerfile
+│  │  └─ src/
+│  │     ├─ auth/             # scrypt hash, sessions DB, auth guard, cookie
+│  │     ├─ jobs/             # CRUD job, cancel, DTO, snapshot, SSE stream
+│  │     ├─ clips/            # stream Range, download, delete clip fisik + DB
+│  │     ├─ system/           # status LLM worker dari Redis (GET /api/system/llm-status)
+│  │     ├─ queue/            # BullMQ producer, listener QueueEvents, Redis
+│  │     └─ config/           # validasi env (Zod)
+│  └─ web/                    # TanStack Start + Vite
+│     ├─ Dockerfile
+│     └─ src/
+│        ├─ routes/           # login, register, dashboard (/), job detail (/jobs/$jobId), reverse proxy (/api/$)
+│        ├─ components/       # UI components (shadcn/ui), login-form, llm-status, chrome
+│        └─ lib/              # auth helper, i18n (EN/ID), theme (dark/light/system), api client
 ├─ packages/
-│  └─ shared/                 # tipe JobData, JobProgress, JobResult
-├─ worker/                    # Python
-│  ├─ clipper/pipeline.py     # isi clipper.py, dipecah per tahap
-│  ├─ clipper/worker.py       # consumer BullMQ
-│  ├─ tests/
+│  └─ shared/                 # Tipe TypeScript: JobData, JobProgress, JobResult, ReframeMode
+├─ worker/                    # Python 3.12 pipeline
+│  ├─ clipper/
+│  │  ├─ pipeline.py          # Orkestrasi tahap: download, transcribe, select, render, save
+│  │  ├─ worker.py            # Consumer BullMQ concurrency 1, status heartbeat loop
+│  │  ├─ llm.py               # Pemanggilan OpenAI-compatible LLM & parsing momen
+│  │  ├─ reframe.py           # face_tracking (MediaPipe), pan clamping & crop filters
+│  │  ├─ subtitles.py         # Parser VTT, deduplikasi rolling, pembuat subtitle ASS karaoke
+│  │  └─ models.py            # Definisi dataclass & konversi data job
+│  ├─ tests/                  # Pytest unit & integration tests
 │  ├─ requirements.txt
-│  └─ Dockerfile
+│  └─ Dockerfile              # ffmpeg, fonts-dejavu-core, mediapipe, opencv
 ├─ pnpm-workspace.yaml
 ├─ turbo.json
 └─ README.md
 ```
 
-Tipe di `packages/shared` adalah sumber kebenaran bentuk data job. Worker Python mengikuti bentuk yang sama, dan perubahannya dicatat di README.
+Tipe di `packages/shared` adalah sumber kebenaran kontrak data antara API dan worker. `worker/clipper/models.py` mengimplementasikan struktur data yang identik.
 
-## Fase 0 — Pipeline CLI
+## Database Schema & Migrations
 
-Tujuannya membuktikan pipeline jalan di VM dan mengukur kebutuhan RAM sebelum membangun apa pun di atasnya.
+Database dikelola melalui Prisma ORM dengan PostgreSQL. Migrasi dijalankan secara otomatis saat container API dimulai via `docker-entrypoint.sh` (`prisma migrate deploy`).
 
-- [ ] Jalankan `clipper.py` di VM dengan `--clips` manual dan `--no-upload`
-- [ ] Uji mode otomatis lewat endpoint OpenAI-compatible (key OpenCode Go) dengan `LLM_API_KEY`
-- [ ] Uji fallback Whisper pada video tanpa subtitle; catat lama proses dan puncak RAM
-- [ ] Uji video panjang (lebih dari 1 jam); catat lama proses dan ruang disk sementara
-- [ ] Ganti upload R2 dengan tulis ke direktori `CLIPS_DIR`
-- [ ] Tetapkan memory limit worker dan ambang `MIN_FREE_GB` dari hasil pengukuran
+### Daftar Riwayat Migrasi (`apps/api/prisma/migrations`)
 
-**Gate 1:** 3 clip dari 1 video layak upload tanpa diedit.
+1. `20260101000000_init`: Pembuatan tabel dasar `jobs` (enum `JobMode`: auto, manual; enum `JobStatus`: queued, running, done, failed) dan tabel `clips`.
+2. `20260102000000_add_job_cancelled`: Penambahan status `cancelled` pada enum `JobStatus`.
+3. `20260103000000_add_users_sessions_job_ownership`: Pembuatan tabel `users`, tabel `sessions`, serta penambahan relasi kepemilikan `userId` pada tabel `jobs`.
+4. `20260104000000_add_job_description`: Penambahan kolom teks `description` pada tabel `jobs` untuk arahan brief mode otomatis.
+5. `20260105000000_add_job_reframe`: Penambahan kolom `reframe` pada tabel `jobs` (default `face_tracking`).
+6. `20260106000000_add_job_captions`: Penambahan kolom boolean `captions` pada tabel `jobs` (default `true`).
 
-## Fase 1 — Worker dan API
+## Pipeline Pemrosesan Worker
 
-Hasil akhirnya: job bisa dibuat lewat API dan berjalan sampai file clip ada di volume, tanpa UI.
+Worker berjalan sebagai proses mandiri dengan concurrency 1 mengonsumsi antrean BullMQ `clip-jobs`.
 
-**Worker**
+### 1. Pengecekan Awal
+Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_GB` (default 5.0 GB), job langsung digagalkan sebelum mengunduh media.
 
-- [x] Pecah `clipper.py` jadi `pipeline.py`: satu fungsi per tahap, menerima callback progress; pemilihan momen memakai SDK openai dengan base\_url dari env, validasi JSON, dan satu kali retry bila jawaban tidak valid
-- [x] `worker.py`: consumer antrean `clip-jobs` dengan concurrency 1
-- [x] Jalankan langkah berat (yt-dlp, Whisper, ffmpeg) lewat `asyncio.to_thread` atau subprocess async, supaya worker tetap memperpanjang lock job selama proses panjang
-- [x] Kirim progress per tahap: download, transkrip, pilih momen, render, simpan
-- [x] Tulis hasil ke `CLIPS_DIR/<job_id>/`; folder sementara dihapus di blok `finally`
-- [x] Cek ruang disk sebelum mulai; gagal dengan pesan jelas bila di bawah `MIN_FREE_GB`
-- [x] Unit test untuk `parse_vtt`, `sanitize`, `write_ass`, dan parser JSON jawaban LLM
+### 2. Tahap Download (`download`)
+- Memanggil `yt-dlp` untuk mengunduh video format MP4 terbaik (`bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b`).
+- Mengunduh trek subtitle asli YouTube (mengutamakan subtitle manual, fallback ke auto-subs) dalam format VTT.
+- Jika subtitle YouTube tidak ditemukan sama sekali, job langsung digagalkan dengan error: `"Subtitle YouTube tidak tersedia untuk video ini."` (Whisper telah dihapus sepenuhnya dari worker).
 
-**API**
+### 3. Tahap Transkrip (`transcribe`)
+- Men-decode file VTT menjadi daftar cue terstruktur.
+- Menerapkan deduplikasi cue untuk auto-sub YouTube (*rolling captions*) di mana baris baru sering mengulang ekor baris sebelumnya.
+- Menghasilkan token kata (*word-level timestamps*) baik dari tag inline VTT atau aproksimasi berbasis bobot karakter.
 
-- [x] Setup Turborepo (pnpm workspaces) dengan task build, dev, lint, test di turbo.json, dan `packages/shared`
-- [x] Modul config dengan validasi env saat start
-- [x] Prisma schema `jobs` dan `clips` (termasuk `downloaded_at`, `deleted_at`), migrasi pertama
-- [x] `POST /api/jobs` dengan validasi body, `GET /api/jobs`, `GET /api/jobs/:id`
-- [x] Listener `QueueEvents`: progress → update `jobs`; completed → insert `clips`; failed → simpan error
-- [x] `GET /api/jobs/:id/events` (SSE) dari event yang sama
-- [x] `GET /api/clips/:id/stream` dengan dukungan Range, dan `GET /api/clips/:id/download` yang mengisi `downloaded_at`
-- [x] Path file selalu dibentuk dari id di database, tidak pernah dari input pengguna
+### 4. Tahap Pemilihan Momen (`select`)
+- **Mode `manual`:** Menggunakan rentang timestamp `{start, end}` yang diberikan pengguna dan mencocokkan judul ringkas dari cue terdekat.
+- **Mode `auto`:** Mengirimkan transkrip terstruktur, parameter (`clipCount`, `targetDurationSec`), dan instruksi `description` (brief konten) ke endpoint LLM OpenAI-compatible.
+- Brief pengguna menjadi instruksi prioritas utama bagi LLM untuk memilih topik/bagian yang relevan.
+- JSON dari respon LLM divalidasi ketat (dengan 1x retry jika respon rusak). Jika LLM tidak dikonfigurasi atau gagal memberikan momen valid, job langsung gagal (tanpa fallback berbasis aturan).
 
-**Deploy**
+### 5. Tahap Rendering (`render`)
+Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, worker memeriksa apakah terdapat sinyal pembatalan (`should_cancel`).
+- **Transformasi Reframe ke Potret 9:16 (1080x1920):**
+  - `face_tracking`: Menjalankan deteksi wajah MediaPipe (`FaceDetection`, model selection 1) pada proxy video resolusi rendah (~360p, 5 fps). Hasil koordinat dihaluskan menggunakan Exponential Moving Average (EMA, `alpha=0.35`) dan pergerakan dibatasi (*pan clamp*, maks 0.15 lebar frame/detik). Jumlah titik sampel dibatasi maksimal 48 sampel pan agar ekspresi filter ffmpeg tetap efisien dan stabil.
+  - `black_bars`: Skala video mempertahankan rasio asli dengan padding hitam di atas dan bawah.
+  - `blurred_fill`: Membagi video menjadi dua layer; layer belakang diperbesar, dipotong, dan diburamkan (`boxblur`), layer depan diletakkan di tengah dengan rasio tajam.
+- **Pembakaran Takarir ASS:**
+  - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` dengan gaya karaoke kata per kata (`{\k<durasi_cs>}`).
+  - Jika `captions: false`, langkah pembakaran takarir dilewati.
+- **Encoding Video:**
+  - ffmpeg dipanggil menggunakan video codec `libx264` dengan pixel format standar `yuv420p` (menjamin kompatibilitas playback di Safari/iOS dan browser Android), audio `aac` 128k, preset `veryfast`, dan `movflags +faststart`.
 
-- [ ] Redis dan Postgres sebagai Database di Dokploy
-- [ ] Volume `clips-data` di-mount ke API dan worker
-- [ ] Deploy `clipper-api` dan `clipper-worker` dari repo GitHub; Dockerfile API dan web memakai turbo prune --docker agar image hanya berisi package yang dibutuhkan
+### 6. Tahap Penyimpanan (`save`)
+- File klip disimpan di direktori `CLIPS_DIR/<job_id>/clip-01.mp4`, `clip-02.mp4`, dst.
+- Direktori kerja sementara (`temp_root/clip-<job_id>-*`) selalu dibersihkan di blok `finally`.
 
-**Gate 2:** job lewat API selesai sampai file ada di disk VM.
+### 7. Pembatalan Job & Penghapusan Klip
+- **Pembatalan (`POST /api/jobs/:id/cancel`):** Menyetel key `cancel:<job_id>` di Redis (TTL 24 jam) dan mencabut job dari status antrean BullMQ jika belum berjalan. Jika worker sedang memproses, worker akan menghentikan render di batas antar klip, melempar exception `JobCancelled`, membersihkan file temporary, dan status job tercatat `cancelled`.
+- **Penghapusan Klip (`DELETE /api/clips/:id`):** Endpoint API langsung menghapus file fisik di filesystem (mengabaikan `ENOENT` jika sudah terhapus) dan menghapus baris dari tabel `clips` di PostgreSQL.
 
-## Fase 2 — Web MVP
+## Autentikasi dan Otorisasi
 
-Hasil akhirnya: seluruh alur P0 bisa dijalankan dari browser di `clipper.rencraft.site`.
+- **Multi-user:** Menggunakan tabel `users` dan `sessions`.
+- **Registrasi Akun:**
+  - Registrasi terbuka untuk pendaftar pertama (`/api/auth/register`).
+  - Pengguna pertama yang mendaftar secara otomatis mengklaim semua job legacy yang sebelumnya belum memiliki pemilik (`userId: null`).
+  - Setelah pengguna pertama terdaftar, pendaftaran baru otomatis terkunci (403 Forbidden) kecuali variabel lingkungan `ALLOW_REGISTRATION=true` diaktifkan.
+- **Keamanan Password:** Menggunakan algoritma hash bawaan Node.js `scrypt` dengan salt acak 16 byte (`<salt_hex>:<hash_hex>`).
+- **Manajemen Sesi:**
+  - Token sesi dibuat dari 32-byte nilai acak berkode `base64url`.
+  - Nilai hash SHA-256 dari token disimpan di tabel `sessions`.
+  - Token dikirimkan ke klien melalui cookie httpOnly `clipper_session` (masa berlaku 30 hari, `SameSite=Lax`, flag `Secure` aktif di production) atau dapat dikirim melalui header `Authorization: Bearer <token>`.
+  - Guard global `AuthGuard` memeriksa validitas sesi pada setiap rute kecuali yang ditandai decorator `@Public()`.
+- **Isolasi Data:** Setiap operasi membaca, streaming, download, membatalkan, atau menghapus job/klip memverifikasi bahwa entitas tersebut terhubung dengan `userId` sesi aktif. Permintaan ke job/klip milik orang lain menghasilkan respons 404 Not Found.
 
-**Auth (API)**
+## Aplikasi Web Front-end
 
-- [ ] `POST /api/auth/login`: cek username dan hash password (argon2) dari env, set JWT di cookie httpOnly + Secure + SameSite
-- [ ] Guard JWT global; hanya login yang terbuka
-- [ ] Rate limit login dengan `@nestjs/throttler`
+Aplikasi web berada di `apps/web`:
+- **Framework:** TanStack Start (SSR dan file-based routing) + TanStack Query untuk state manajemen server.
+- **Komponen UI:** Komponen modular shadcn/ui berbasis Radix UI, ikon Lucide, dan utility `tw-animate-css`.
+- **Tailwind CSS v4:** Styling modern menggunakan engine Tailwind v4.
+- **Server Produksi:** Dijalankan menggunakan runtime `srvx` (`srvx --prod -s ../client dist/server/server.js`).
+- **Internal Reverse Proxy:** Route `/api/$` mem-proxy semua permintaan HTTP dari klien browser ke endpoint NestJS via `API_INTERNAL_URL` (default `http://localhost:3000`). Pendekatan ini membuat cookie autentikasi tetap *same-origin* tanpa kendala CORS.
+- **Internasionalisasi (i18n):** Mendukung Bahasa Inggris (EN, default) dan Bahasa Indonesia (ID), disimpan di cookie `clipper_language`.
+- **Tema:** Mendukung tema `light`, `dark`, dan `system`, disimpan di cookie `clipper_theme`.
+- **Halaman & Rute Utama:**
+  - `/login`: Masuk dengan email & password, mengarahkan ke dashboard.
+  - `/register`: Pendaftaran akun (hanya aktif jika belum ada user atau `ALLOW_REGISTRATION=true`).
+  - `/`: Dashboard utama. Memuat kartu pembuatan klip (URL sumber, mode switch, pilihan reframe, toggle captions, jumlah & durasi klip, arahan brief opsional atau rentang timestamp manual), kartu indikator status LLM, serta daftar riwayat job pengguna. Mendukung parameter pencarian `/?from=<jobId>` untuk prefill pembuatan job ulang (*regenerate*).
+  - `/jobs/$jobId`: Tampilan detail progres job via SSE, tombol pembatalan, pemutar video klip 9:16 vertikal, tombol salin judul, tombol download klip, tombol buat ulang (*regenerate*), dan tombol dialog konfirmasi hapus klip.
 
-**Web**
+## Keteramatan Status LLM
 
-- [ ] Setup TanStack Start (file-based routing) + TanStack Query; data diambil dari NestJS lewat /api
-- [ ] Halaman login
-- [ ] Halaman buat job: URL, mode, parameter, timestamp manual, pengingat soal hak cipta
-- [ ] Daftar job dengan status live lewat `EventSource`
-- [ ] Detail job: player 9:16 dari endpoint stream, tombol download, salin judul
-- [ ] Tampilan error yang jelas untuk job gagal
+Worker Python memantau konfigurasi LLM dan mengeksekusi loop berkala:
+- Setiap 30 detik (dan setiap kali panggilan inferensi selesai), worker menulis payload status ke Redis key `worker:status:llm` dengan TTL 90 detik.
+- Payload mencakup: `configured` (apakah variabel env lengkap), `model` (nama model LLM yang digunakan), `lastCall` (`{ok, at, error}`), dan `updatedAt`.
+- API menyediakan endpoint `GET /api/system/llm-status`.
+- Front-end menampilkan badge status real-time di antarmuka (LLM siap, model yang aktif, atau peringatan bila worker offline / pemanggilan gagal).
 
-**Retensi file**
+## Konfigurasi Deployment Dokploy
 
-- [ ] Job terjadwal `cleanup` di BullMQ: hapus file yang sudah didownload lewat masa tenggang, atau lewat `CLIP_TTL_HOURS`, lalu isi `deleted_at`
-- [ ] Galeri menandai clip yang filenya sudah dihapus
+Seluruh aplikasi di-deploy pada VPS tunggal di bawah project Dokploy `clipper`.
 
-**Deploy**
+| Service | Tipe | Image / Build | Volume Mount | Domain / Routing | Catatan |
+| --- | --- | --- | --- | --- | --- |
+| `clipper-api` | Application | Dockerfile `apps/api` | `clips-data` → `/data/clips` | `https://api-clipper.rencraft.site` | Menjalankan `prisma migrate deploy` saat boot |
+| `clipper-web` | Application | Dockerfile `apps/web` | — | `https://clipper.rencraft.site` | Server srvx TanStack Start, reverse proxy `/api/*` |
+| `clipper-worker` | Application | Dockerfile `worker` | `clips-data` → `/data/clips` | Tanpa domain eksternal | Python 3.12, mediapipe, ffmpeg, concurrency 1 |
+| Postgres | Database | PostgreSQL Dokploy | Volume internal | Internal | Database relasional untuk API |
+| Redis | Database | Redis Dokploy | Volume internal | Internal | Broker BullMQ, cancel keys, LLM heartbeat |
 
-- [ ] Deploy `clipper-web`; di Dokploy, domain `clipper.rencraft.site` path `/api` ke API dan sisanya ke web, supaya cookie tetap same-origin
-- [ ] Rute `clipper.rencraft.site` di Cloudflare Tunnel
+Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarahkan domain publik ke port internal container di server.
 
-**Gate 3 (MVP siap):** semua fitur P0 jalan dari browser.
+### Variabel Lingkungan
 
-## Fase 3 — Fitur P1 dan auto-posting
-
-Fitur P1 kecil dan mandiri; auto-posting paling banyak bergantung pada pihak luar, jadi riset izinnya dimulai lebih awal.
-
-**Fitur P1**
-
-- [ ] Retry job gagal dengan parameter yang sama
-- [ ] Ubah timestamp satu clip: job jenis `rerender` yang hanya merender clip itu
-- [ ] Hapus job beserta folder file-nya
-
-**Auto-posting**
-
-- [ ] Riset syarat terbaru TikTok Content Posting API dan Instagram Graph API (akun, app review, batas posting). Mulai sejak Fase 2 karena proses review bisa lama
-- [ ] Hubungkan akun lewat OAuth; simpan token terenkripsi di Postgres
-- [ ] Instagram mengambil video dari URL publik: buat link file publik yang bertanda tangan dan cepat kedaluwarsa lewat tunnel
-- [ ] Antrean terpisah `publish` dengan status posting per clip
-- [ ] Form caption dan pilihan platform di halaman detail job
-
-## Konfigurasi Dokploy
-
-Tiga Application dan dua Database, dengan satu volume yang dipakai bersama API dan worker.
-
-| Service | Build | Volume | Domain | Resource |
-| --- | --- | --- | --- | --- |
-| `clipper-api` | Dockerfile `apps/api` | `clips-data` → `/data/clips` | `clipper.rencraft.site`, path `/api` | Default |
-| `clipper-web` | Dockerfile `apps/web` (server Node TanStack Start) | — | `clipper.rencraft.site` | Default |
-| `clipper-worker` | Dockerfile `worker` | `clips-data` → `/data/clips`, `whisper-cache` → `/root/.cache/huggingface` | Tanpa domain | Memory limit dari hasil Fase 0 |
-| Redis | Database bawaan Dokploy | Bawaan | Internal | Persistence aktif |
-| Postgres | Database bawaan Dokploy | Bawaan | Internal | Backup terjadwal |
-
-**Environment variable**
-
-| Variabel | Dipakai oleh | Isi |
+| Variabel | Digunakan Oleh | Keterangan |
 | --- | --- | --- |
-| `DATABASE_URL` | API | Connection string Postgres internal Dokploy |
-| `REDIS_URL` | API, worker | Connection string Redis internal Dokploy |
-| `CLIPS_DIR` | API, worker | `/data/clips` |
-| `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` | API | Akun pemilik; hash argon2, bukan password asli |
-| `JWT_SECRET` | API | String acak panjang |
-| `CLIP_TTL_HOURS`, `DOWNLOAD_GRACE_MINUTES` | API | Batas umur clip dan masa tenggang setelah download |
-| `LLM_BASE_URL, LLM_API_KEY`, `LLM_MODEL` | Worker | Endpoint OpenAI-compatible, API key (mis. dari OpenCode Go), dan nama model |
-| `WHISPER_MODEL` | Worker | `small` |
-| `MIN_FREE_GB` | Worker | Ambang ruang disk minimum dari hasil Fase 0 |
+| `DATABASE_URL` | API | Connection string PostgreSQL Dokploy internal |
+| `REDIS_URL` | API, worker | Connection string Redis Dokploy internal |
+| `CLIPS_DIR` | API, worker | Lokasi mount volume bersama (`/data/clips`) |
+| `PORT` | API, web | Port listener HTTP (default 3000) |
+| `ALLOW_REGISTRATION` | API | Boolean (`true`/`false`), membuka pendaftaran pengguna tambahan |
+| `API_INTERNAL_URL` | Web | URL upstream API untuk reverse proxy server (mis. `http://clipper-api:3000`) |
+| `LLM_BASE_URL` | Worker | URL endpoint OpenAI-compatible (mis. OpenRouter / OpenCode Go) |
+| `LLM_API_KEY` | Worker | Kunci API untuk otentikasi LLM |
+| `LLM_MODEL` | Worker | Nama model LLM yang digunakan untuk pemilihan momen |
+| `MIN_FREE_GB` | Worker | Ambang batas ruang disk minimum (default `5.0`) |
+| `LOG_LEVEL` | Worker | Tingkat logging (`INFO`, `DEBUG`, dsb.) |
 
-## Testing dan definisi selesai
+## Testing
 
-Sebuah gate dianggap lolos bila tesnya hijau dan uji manual di VM berhasil.
-
-| Gate | Tes otomatis | Uji manual di VM |
-| --- | --- | --- |
-| Gate 1 | `pytest` untuk fungsi pipeline | 1 video berbahasa Indonesia jadi 3 clip; dicek di HP |
-| Gate 2 | Test e2e API dengan database test; worker diuji dengan video pendek | Job dibuat lewat `curl`, file muncul di volume, status `done` di database |
-| Gate 3 | Test auth dan guard; build web tanpa error | Login, buat job, pantau progress, preview, download dari HP lewat domain publik; file terhapus otomatis sesuai TTL |
+- **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, dan pembatalan job (`worker/tests/`).
+- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
+- **Verifikasi pipeline tanpa Redis:** `python -m clipper.selftest --url <url> --mode <auto|manual> [--ranges 12-40,90-130]` menjalankan pipeline penuh secara lokal (tanpa antrean) untuk uji cepat.
