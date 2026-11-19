@@ -21,6 +21,11 @@ export const REFRAME_MODES = ['face_tracking', 'black_bars', 'blurred_fill'] as 
 export type ReframeMode = (typeof REFRAME_MODES)[number];
 export const DEFAULT_REFRAME: ReframeMode = 'face_tracking';
 
+/** Rasio output klip: 9:16 (default), 1:1, 16:9. */
+export const ASPECT_RATIOS = ['9:16', '1:1', '16:9'] as const;
+export type AspectRatio = (typeof ASPECT_RATIOS)[number];
+export const DEFAULT_ASPECT: AspectRatio = '9:16';
+
 export interface ManualRange {
   /** detik */
   start: number;
@@ -44,8 +49,10 @@ export interface JobData {
   reframe: ReframeMode;
   /** apakah subtitle dibakar ke clip; default true */
   captions: boolean;
-  /** tata letak dua pembicara (panel atas/bawah 1080x960 vstack); default false */
+  /** tata letak dua pembicara (panel atas/bawah 1080x960 vstack); default false; hanya berlaku untuk 9:16 */
   twoSpeakers: boolean;
+  /** rasio output klip; default 9:16; 16:9 mengabaikan reframe */
+  aspectRatio: AspectRatio;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
   description?: string | null;
   params: JobParams;

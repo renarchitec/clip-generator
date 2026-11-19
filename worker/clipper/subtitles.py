@@ -19,6 +19,9 @@ _NON_CUE_BLOCKS = {"NOTE", "STYLE", "REGION"}
 # 4 kata / 18 karakter supaya takarir tetap satu baris di 1080px.
 WRAP_CHARS = 18
 MAX_WORDS_PER_CUE = 4
+# 16:9 (1920px lebar) bisa memuat lebih banyak kata per baris.
+WRAP_CHARS_WIDE = 32
+MAX_WORDS_PER_CUE_WIDE = 6
 
 # Gaya caption "hook": putih tebal outline hitam 6px, kata aktif kuning.
 # ASS memakai BGR: &H0000FFFF = kuning, &H00FFFFFF = putih.
@@ -247,7 +250,11 @@ def _non_overlapping_cues(cues: Sequence[Cue]) -> List[Cue]:
     return result
 
 
-def _render_cue_parts(cues: Sequence[Cue]) -> List[Cue]:
+def _render_cue_parts(
+    cues: Sequence[Cue],
+    max_words: int = MAX_WORDS_PER_CUE,
+    max_chars: int = WRAP_CHARS,
+) -> List[Cue]:
     """Normalize overlaps and split oversized captions without losing word timing."""
     parts: List[Cue] = []
     for cue in _non_overlapping_cues(cues):
@@ -261,7 +268,9 @@ def _render_cue_parts(cues: Sequence[Cue]) -> List[Cue]:
                 words.append(Word(start, end, word.text))
                 cursor = end
         if words:
-            parts.extend(_split_words(Cue(cue.start, cue.end, cue.text, words)))
+            parts.extend(
+                _split_words(Cue(cue.start, cue.end, cue.text, words), max_words, max_chars)
+            )
     return parts
 
 
@@ -307,12 +316,16 @@ def write_ass(
     font_size: int = 68,
     margin_v: int = 180,
     two_speakers: bool = False,
+    max_words: int = MAX_WORDS_PER_CUE,
+    max_chars: int = WRAP_CHARS,
 ) -> str:
     """Tulis ASS takarir pendek tebal (Anton, UPPERCASE, kata aktif kuning).
 
+    - width/height menjadi PlayResX/PlayResY (ukuran output nyata).
     - two_speakers=True: Alignment 5 (tengah frame, tepat di batas panel atas/bawah),
       margin_v di-reset ke 0.
     - two_speakers=False: Alignment 2 (bawah tengah), margin_v aman >=18% tinggi frame.
+    - max_words/max_chars mengatur pemecahan baris (16:9 memakai 6 kata / 32 karakter).
     - Format teks: tiap jendela kata memancarkan satu Dialogue event non-overlapping
       berisi seluruh kata chunk dengan kata aktif berformat {\\c&H00FFFF&}...{\\c&HFFFFFF&}.
     """
@@ -347,7 +360,7 @@ def write_ass(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
-    for part in _render_cue_parts(cues):
+    for part in _render_cue_parts(cues, max_words, max_chars):
         _write_cue_part(part, lines)
 
     return "\n".join(lines) + "\n"

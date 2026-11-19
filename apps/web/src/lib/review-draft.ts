@@ -1,4 +1,4 @@
-import type { Reframe } from "@/lib/api"
+import type { AspectRatio, Reframe } from "@/lib/api"
 
 export type ReviewDraft = {
   url: string
@@ -6,6 +6,7 @@ export type ReviewDraft = {
   reframe: Reframe
   captions: boolean
   twoSpeakers?: boolean
+  aspectRatio?: AspectRatio
   clipCount: number
   duration: number
   description: string
@@ -32,7 +33,7 @@ export function loadReviewDraft(): ReviewDraft | null {
     if (d.cueRanges.length > 10) return null
     if (!Array.isArray(d.ranges) || d.ranges.some((r) => typeof r?.start !== "string" || typeof r?.end !== "string")) return null
     if (!["face_tracking", "blurred_fill", "black_bars"].includes(d.reframe)) return null
-    return { ...d, twoSpeakers: typeof d.twoSpeakers === "boolean" ? d.twoSpeakers : false, selectedCandidates: Array.isArray(d.selectedCandidates) ? d.selectedCandidates.filter((i) => Number.isInteger(i)) : [] }
+    return { ...d, twoSpeakers: typeof d.twoSpeakers === "boolean" ? d.twoSpeakers : false, aspectRatio: ["9:16", "1:1", "16:9"].includes(d.aspectRatio ?? "") ? d.aspectRatio as AspectRatio : "9:16", selectedCandidates: Array.isArray(d.selectedCandidates) ? d.selectedCandidates.filter((i) => Number.isInteger(i)) : [] }
   } catch {
     return null
   }

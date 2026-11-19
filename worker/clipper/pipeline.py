@@ -25,14 +25,29 @@ from .models import (
     ManualRange,
     job_data_from_dict,
 )
-from .subtitles import Cue, Word, clip_words, parse_vtt, write_ass
+from .subtitles import (
+    MAX_WORDS_PER_CUE,
+    MAX_WORDS_PER_CUE_WIDE,
+    WRAP_CHARS,
+    WRAP_CHARS_WIDE,
+    Cue,
+    Word,
+    clip_words,
+    parse_vtt,
+    write_ass,
+)
 
 log = logging.getLogger(__name__)
 
+# Nilai referensi takarir 9:16 (1080x1920); format lain diskalakan relatif tinggi output.
 FONT_SIZE = 80
 MARGIN_V = 180
-VIDEO_WIDTH = 1080
-VIDEO_HEIGHT = 1920
+# Ukuran output per aspectRatio; 9:16 = perilaku lama (1080x1920).
+OUTPUT_SIZES = {
+    "9:16": (1080, 1920),
+    "1:1": (1080, 1080),
+    "16:9": (1920, 1080),
+}
 DEFAULT_MIN_FREE_GB = 5.0
 NO_SUBTITLE_ERROR = "Subtitle YouTube tidak tersedia untuk video ini."
 
@@ -357,26 +372,41 @@ def _clip_cues(cues: Sequence[Cue], start: float, end: float) -> List[Cue]:
     return relative
 
 
-def _reframe_filters(reframe: str, video: str, moment: llm.Moment) -> List[str]:
-    """Bangun filter video portrait 1080x1920 sesuai mode.
+def _reframe_filters(
+    reframe: str,
+    video: str,
+    moment: llm.Moment,
+    width: int,
+    height: int,
+    landscape: bool = False,
+) -> List[str]:
+    """Bangun filter video sesuai mode reframe dan ukuran output.
 
+    16:9 (landscape): reframe diabaikan — skala pas 1920x1080, pad hitam bila
+    sumber bukan 16:9 (mayoritas sumber YouTube sudah 16:9, jadi efektif skala saja).
     Mode centered (black_bars, blurred_fill) lewat tanpa deteksi frame.
     face_tracking memanggil MediaPipe; dep hilang -> raise RuntimeError.
     """
+    if landscape:
+        return [
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
+            "setsar=1",
+        ]
     if reframe == "black_bars":
         return [
-            f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease",
-            f"pad={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black",
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
             "setsar=1",
         ]
     if reframe == "blurred_fill":
         return [
             (
                 f"split=2[fg][bg];"
-                f"[bg]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
-                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},"
+                f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},"
                 f"boxblur=luma_radius=min(h\\,w)/10:luma_power=2[blurred];"
-                f"[fg]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease[sharp];"
+                f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[sharp];"
                 f"[blurred][sharp]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2"
             ),
             "setsar=1",
@@ -385,8 +415,8 @@ def _reframe_filters(reframe: str, video: str, moment: llm.Moment) -> List[str]:
     # Default / fallback eksplisit: face_tracking (cut per pembicara aktif)
     segments = reframe_mod.face_track_samples(video, moment.start, moment.end)
     if segments:
-        return [reframe_mod.cut_crop_filter(segments), "setsar=1"]
-    return [reframe_mod.portrait_crop_filter(0.5), "setsar=1"]
+        return [reframe_mod.cut_crop_filter(segments, width, height), "setsar=1"]
+    return [reframe_mod.portrait_crop_filter(0.5, width, height), "setsar=1"]
 
 
 def _two_speaker_graph(
@@ -425,7 +455,18 @@ def _render_one(
     captions: bool = True,
     two_speakers: bool = False,
     timeline_offset: float = 0.0,
+    aspect_ratio: str = "9:16",
 ) -> None:
+    width, height = OUTPUT_SIZES.get(str(aspect_ratio), OUTPUT_SIZES["9:16"])
+    landscape = aspect_ratio == "16:9"
+    if aspect_ratio != "9:16":
+        # Defensif: dua pembicara hanya berlaku untuk 9:16 (API sudah menormalkan).
+        two_speakers = False
+    # Font/margin diskalakan dari nilai referensi 9:16 relatif tinggi output;
+    # 16:9 boleh memuat baris lebih panjang (6 kata / 32 karakter).
+    font_size = max(1, round(FONT_SIZE * height / 1920))
+    margin_v = max(1, round(MARGIN_V * height / 1920))
+
     out_path = os.path.join(outdir, filename)
     ass_path = os.path.join(outdir, os.path.splitext(filename)[0] + ".ass")
     # Teks takarir dicocokkan dengan timestamp absolut video asli.
@@ -439,11 +480,13 @@ def _render_one(
             handle.write(
                 write_ass(
                     clip_cues,
-                    VIDEO_WIDTH,
-                    VIDEO_HEIGHT,
-                    FONT_SIZE,
-                    0 if two_speakers else MARGIN_V,
+                    width,
+                    height,
+                    font_size,
+                    0 if two_speakers else margin_v,
                     two_speakers=two_speakers,
+                    max_words=MAX_WORDS_PER_CUE_WIDE if landscape else MAX_WORDS_PER_CUE,
+                    max_chars=WRAP_CHARS_WIDE if landscape else WRAP_CHARS,
                 )
             )
 
@@ -468,7 +511,7 @@ def _render_one(
         )
         cmd += ["-filter_complex", ";".join(graph), "-map", label, "-map", "0:a:0?"]
     else:
-        filters = _reframe_filters(reframe, video, moment)
+        filters = _reframe_filters(reframe, video, moment, width, height, landscape)
         if burn_captions:
             filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
         cmd += ["-vf", ",".join(filters), "-map", "0:v:0", "-map", "0:a:0?"]
@@ -508,11 +551,14 @@ async def render(
     should_cancel=None,
     sections: Optional[Sequence[Tuple[str, float]]] = None,
 ) -> List[ClipResult]:
-    """Render tiap momen jadi 1080x1920; subtitle terbakar bila job.captions.
+    """Render tiap momen sesuai aspectRatio; subtitle terbakar bila job.captions.
+
+    9:16 -> 1080x1920 (reframe/twoSpeakers seperti biasa), 1:1 -> 1080x1080
+    (reframe dengan target persegi), 16:9 -> 1920x1080 (reframe diabaikan:
+    skala pas + pad hitam). twoSpeakers hanya berlaku untuk 9:16.
 
     Jika sections diberikan (mode manual), tiap klip membaca file section
     terkait dengan offset start relatif (= moment.start - section_offset).
-    job.two_speakers=True -> dua panel 1080x960 ditumpuk (reframe diabaikan).
     """
     if not moments:
         raise ValueError("tidak ada momen untuk dirender")
@@ -556,6 +602,7 @@ async def render(
             job.captions,
             job.two_speakers,
             offset,
+            job.aspect_ratio,
         )
         clips.append(
             ClipResult(

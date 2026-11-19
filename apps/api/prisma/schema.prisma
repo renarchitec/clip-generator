@@ -53,6 +53,7 @@ model Job {
   reframe           String    @default("face_tracking")
   captions          Boolean   @default(true)
   twoSpeakers       Boolean   @default(false)
+  aspectRatio       String    @default("9:16")
   clipCount         Int
   targetDurationSec Int
   ranges            Json?

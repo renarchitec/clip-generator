@@ -9,7 +9,7 @@ import { JobStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { unlink } from 'node:fs/promises';
 import type { JobData, ManualRange } from '@clipper/shared';
-import { DEFAULT_REFRAME } from '@clipper/shared';
+import { DEFAULT_ASPECT, DEFAULT_REFRAME } from '@clipper/shared';
 import { resolveClipPath } from '../clips/clip-path';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -34,7 +34,9 @@ export class JobsService {
       dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
     const reframe = dto.reframe ?? DEFAULT_REFRAME;
     const captions = dto.captions ?? true;
-    const twoSpeakers = dto.twoSpeakers ?? false;
+    const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
+    // twoSpeakers hanya berlaku untuk 9:16; dinormalisasi false untuk 1:1/16:9.
+    const twoSpeakers = aspectRatio === '9:16' ? (dto.twoSpeakers ?? false) : false;
 
     const job = await this.prisma.job.create({
       data: {
@@ -44,6 +46,7 @@ export class JobsService {
         reframe,
         captions,
         twoSpeakers,
+        aspectRatio,
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
         ranges: ranges as unknown as Prisma.InputJsonValue,
@@ -58,6 +61,7 @@ export class JobsService {
       reframe,
       captions,
       twoSpeakers,
+      aspectRatio,
       description,
       params: {
         clipCount: dto.clipCount,
@@ -232,6 +236,7 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
     reframe: job.reframe,
     captions: job.captions,
     twoSpeakers: job.twoSpeakers,
+    aspectRatio: job.aspectRatio,
     clipCount: job.clipCount,
     targetDurationSec: job.targetDurationSec,
     ranges: job.ranges ?? null,

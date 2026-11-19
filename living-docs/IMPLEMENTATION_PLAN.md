@@ -42,7 +42,7 @@ clipper/
 │        ├─ components/       # UI components (shadcn/ui), login-form, llm-status, chrome
 │        └─ lib/              # auth helper, i18n (EN/ID), theme (dark/light/system), api client
 ├─ packages/
-│  └─ shared/                 # Tipe TypeScript: JobData, JobProgress, JobResult, ReframeMode, PreviewJobData
+│  └─ shared/                 # Tipe TypeScript: JobData, JobProgress, JobResult, ReframeMode, AspectRatio, PreviewJobData
 ├─ worker/                    # Python 3.12 pipeline
 │  ├─ clipper/
 │  │  ├─ pipeline.py          # Orkestrasi tahap: download, transcribe, select, render, save, run_preview
@@ -76,6 +76,7 @@ Database dikelola melalui Prisma ORM dengan PostgreSQL. Migrasi dijalankan secar
 5. `20260105000000_add_job_reframe`: Penambahan kolom `reframe` pada tabel `jobs` (default `face_tracking`).
 6. `20260106000000_add_job_captions`: Penambahan kolom boolean `captions` pada tabel `jobs` (default `true`).
 7. `20260107000000_add_job_two_speakers`: Penambahan kolom boolean `twoSpeakers` pada tabel `jobs` (default `false`).
+8. `20260110000000_add_job_aspect_ratio`: Penambahan kolom string `aspectRatio` pada tabel `jobs` (default `'9:16'`; nilai sah: `9:16` / `1:1` / `16:9`, divalidasi `@IsIn(ASPECT_RATIOS)` di DTO, parse toleran di worker: tidak dikenal/hilang -> `9:16`).
 
 ## Pipeline Pemrosesan Worker
 
@@ -108,13 +109,15 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 ### 5. Tahap Rendering (`render`)
 Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, worker memeriksa apakah terdapat sinyal pembatalan (`should_cancel`).
 - **Sumber video:** mode `auto` memakai satu file `source.*` dengan timestamp absolut. Mode `manual` memakai file `section-NN.*` milik rentang terkait; timestamp momen digeser relatif ke file section (`moment - range.start`) untuk seek ffmpeg dan sampling FaceMesh, sedangkan pemilihan cue takarir tetap memakai timestamp absolut video asli. Nilai `start`/`end` yang disimpan pada hasil klip tetap absolut.
-- **Transformasi Reframe ke Potret 9:16 (1080x1920):**
-  - `face_tracking` ("Pembicara aktif" di UI): menganalisis proxy video resolusi rendah (~360p, 5 fps) dengan MediaPipe FaceMesh (`max_num_faces=4`). Per wajah diukur bukaan bibir (landmark inner lips 13/14) dan energi geraknya; wajah paling aktif dipilih sebagai pembicara dengan hysteresis (margin skor 1.25x, ambang noise 0.003) dan minimal hold 0.9 detik per cut. Hasilnya deretan crop statis per segmen (cut, bukan pan halus) maksimal 16 segmen, dieksekusi sebagai ekspresi filter ffmpeg piecewise; tidak ada wajah sama sekali -> fallback crop tengah.
-  - `black_bars`: Skala video mempertahankan rasio asli dengan padding hitam di atas dan bawah.
-  - `blurred_fill`: Membagi video menjadi dua layer; layer belakang diperbesar, dipotong, dan diburamkan (`boxblur`), layer depan diletakkan di tengah dengan rasio tajam.
-  - `twoSpeakers: true` (tata letak dua pembicara, reframe diabaikan): semua pusat_x wajah dari sampling FaceMesh yang sama di-klaster 2-means menjadi dua pembicara dominan (kiri -> panel atas, kanan -> panel bawah; dua klaster wajib terpisah >= 0.08, jika kurang -> fallback kuarter kiri/kanan frame). Tiap panel = crop statis 9:8 (`w=ih*9/8` clamp ke `in_w`, `h=ih` atau lebih pendek `in_w*8/9`) di tengah pembicara, skala ke 1080x960, lalu `vstack` menjadi 1080x1920, dieksekusi lewat `-filter_complex` (`split` + `crop` + `scale` + `vstack`).
+- **Rasio output (`aspectRatio`, default `9:16`):** menentukan ukuran render — `9:16` = 1080x1920 (perilaku lama, tidak berubah), `1:1` = 1080x1080, `16:9` = 1920x1080. Builder filter crop/pad/blur digeneralisasi menerima lebar/tinggi target (tidak di-hard-code 1080x1920).
+- **Transformasi reframe:**
+  - `face_tracking` ("Pembicara aktif" di UI): menganalisis proxy video resolusi rendah (~360p, 5 fps) dengan MediaPipe FaceMesh (`max_num_faces=4`). Per wajah diukur bukaan bibir (landmark inner lips 13/14) dan energi geraknya; wajah paling aktif dipilih sebagai pembicara dengan hysteresis (margin skor 1.25x, ambang noise 0.003) dan minimal hold 0.9 detik per cut. Hasilnya deretan crop statis per segmen (cut, bukan pan halus) maksimal 16 segmen, dieksekusi sebagai ekspresi filter ffmpeg piecewise (jendela crop mengikuti rasio target: 9:16 atau 1:1); tidak ada wajah sama sekali -> fallback crop tengah.
+  - `black_bars`: Skala video mempertahankan rasio asli dengan padding hitam di sisi yang kurang (atas/bawah untuk 9:16; kiri/kanan untuk 1:1).
+  - `blurred_fill`: Membagi video menjadi dua layer; layer belakang diperbesar, dipotong, dan diburamkan (`boxblur`), layer depan diletakkan di tengah dengan rasio tajam (target 1080x1920 atau 1080x1080).
+  - `16:9`: reframe diabaikan — sumber di-skala pas 1920x1080 (`force_original_aspect_ratio=decrease`) dan di-pad hitam bila bukan 16:9; mayoritas sumber YouTube sudah 16:9 sehingga efektif skala saja.
+- **`twoSpeakers: true` (tata letak dua pembicara, hanya `aspectRatio: 9:16`; API menormalkan `false` untuk 1:1/16:9 dan worker mengabaikannya secara defensif; reframe diabaikan):** semua pusat_x wajah dari sampling FaceMesh yang sama di-klaster 2-means menjadi dua pembicara dominan (kiri -> panel atas, kanan -> panel bawah; dua klaster wajib terpisah >= 0.08, jika kurang -> fallback kuarter kiri/kanan frame). Tiap panel = crop statis 9:8 (`w=ih*9/8` clamp ke `in_w`, `h=ih` atau lebih pendek `in_w*8/9`) di tengah pembicara, skala ke 1080x960, lalu `vstack` menjadi 1080x1920, dieksekusi lewat `-filter_complex` (`split` + `crop` + `scale` + `vstack`).
 - **Pembakaran Takarir ASS:**
-  - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` bergaya "hook": font Anton (OFL, di-vendor di `worker/fonts/`, terpasang ke `/usr/share/fonts/truetype/anton` + `fc-cache` di image; DejaVu tetap fallback fontconfig), UPPERCASE, putih, outline hitam 6px, bayangan semi-transparan. Karaoke `\k` tidak dipakai; sebagai gantinya satu event `Dialogue` non-overlapping per jendela kata yang memuat seluruh teks chunk (maks 4 kata / 18 karakter) dengan kata aktif dibungkus `{\c&H0000FFFF&}...{\c&H00FFFFFF&}` (kuning) dan kata lain putih. Margin aman bawah >=18% tinggi frame (Alignment 2) pada mode satu pembicara; mode dua pembicara memakai Alignment 5 (tengah, tepat pada sambungan panel) dengan MarginV 0.
+  - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` bergaya "hook": font Anton (OFL, di-vendor di `worker/fonts/`, terpasang ke `/usr/share/fonts/truetype/anton` + `fc-cache` di image; DejaVu tetap fallback fontconfig), UPPERCASE, putih, outline hitam 6px, bayangan semi-transparan. `PlayResX`/`PlayResY` mengikuti ukuran output nyata (1080x1920 / 1080x1080 / 1920x1080); ukuran font dan margin bawah diskalakan relatif tinggi output (referensi 9:16: font 80, margin 180; 1:1 dan 16:9 memakai font/margin lebih kecil — `round(nilai * height / 1920)`). Karaoke `\k` tidak dipakai; sebagai gantinya satu event `Dialogue` non-overlapping per jendela kata yang memuat seluruh teks chunk (9:16/1:1: maks 4 kata / 18 karakter; 16:9: maks 6 kata / 32 karakter) dengan kata aktif dibungkus `{\c&H0000FFFF&}...{\c&H00FFFFFF&}` (kuning) dan kata lain putih. Margin aman bawah >=18% tinggi frame (Alignment 2) pada mode satu pembicara; mode dua pembicara (hanya 9:16) memakai Alignment 5 (tengah, tepat pada sambungan panel) dengan MarginV 0.
   - Jika `captions: false`, langkah pembakaran takarir dilewati.
 - **Encoding Video:**
   - ffmpeg dipanggil menggunakan video codec `libx264` dengan pixel format standar `yuv420p` (menjamin kompatibilitas playback di Safari/iOS dan browser Android), audio `aac` 128k, preset `veryfast`, dan `movflags +faststart`.
@@ -213,5 +216,5 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 ## Testing
 
 - **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, refinement pass-2 dengan LLM di-mock (`LLM_REFINE` aktif/nonaktif, hasil tidak valid, error), snap deterministik batas momen (`snap.py`), dan pembatalan job (`worker/tests/`).
-- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, manual ranges/preservasi title-reason, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
+- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, aspect ratio (persistensi, normalisasi `twoSpeakers` ke `false` di luar 9:16, ukuran output worker), manual ranges/preservasi title-reason, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
 - **Verifikasi pipeline tanpa Redis:** `python -m clipper.selftest --url <url> --mode <auto|manual> [--ranges 12-40,90-130]` menjalankan pipeline penuh secara lokal (tanpa antrean) untuk uji cepat.

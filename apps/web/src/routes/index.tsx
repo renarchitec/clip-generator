@@ -30,7 +30,7 @@ export const Route = createFileRoute("/")({
 
 type ClipRange = { start: string; end: string }
 type RangePayload = { start: number; end: number; title?: string; reason?: string }
-type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[] }
+type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; aspectRatio: Job["aspectRatio"]; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[] }
 
 function formatMomentTime(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
@@ -107,6 +107,7 @@ function Dashboard() {
   const [reframe, setReframe] = useState<Job["reframe"]>(draft?.reframe ?? "face_tracking")
   const [captions, setCaptions] = useState(draft?.captions ?? true)
   const [twoSpeakers, setTwoSpeakers] = useState(draft?.twoSpeakers ?? false)
+  const [aspectRatio, setAspectRatio] = useState<Job["aspectRatio"]>(draft?.aspectRatio ?? "9:16")
   const [reviewFirst, setReviewFirst] = useState(draft?.reviewFirst ?? false)
   const [previewId, setPreviewId] = useState<string | null>(draft?.previewId ?? null)
   const [previewExpired, setPreviewExpired] = useState(false)
@@ -129,8 +130,10 @@ function Dashboard() {
     setUrl(job.url)
     setMode(job.mode === "manual" ? "manual" : "auto")
     setReframe(job.reframe)
+    setAspectRatio(job.aspectRatio ?? "9:16")
     setCaptions(job.captions)
-    setTwoSpeakers(job.twoSpeakers ?? false)
+    setTwoSpeakers(job.aspectRatio === "9:16" && (job.twoSpeakers ?? false))
+    setAspectRatio(job.aspectRatio ?? "9:16")
     if (job.clipCount) setClipCount(job.clipCount)
     if (job.targetDurationSec) setDuration(job.targetDurationSec)
     setDescription(job.description ?? "")
@@ -161,6 +164,7 @@ function Dashboard() {
       reframe,
       captions,
       twoSpeakers,
+      aspectRatio,
       clipCount,
       duration,
       description,
@@ -172,7 +176,7 @@ function Dashboard() {
       selectedCueStart,
       selectedCueEnd,
     })
-  }, [url, mode, reframe, captions, twoSpeakers, clipCount, duration, description, ranges, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
+  }, [url, mode, reframe, captions, twoSpeakers, aspectRatio, clipCount, duration, description, ranges, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
   const hasTerminalJob = jobs.data?.some((job) => ["done", "failed", "cancelled"].includes(job.status)) ?? false
   useEffect(() => { if (hasTerminalJob) void client.invalidateQueries({ queryKey: ["system", "llm-status"] }) }, [hasTerminalJob, client])
   const createPreview = useMutation({
@@ -190,9 +194,14 @@ function Dashboard() {
     onError: (e: Error) => setError((e as Error & { status?: number }).status === 401 ? t.error : t.apiError),
   })
   const updateRange = (index: number, field: keyof ClipRange, value: string) => setRanges((items) => items.map((item, i) => i === index ? { ...item, [field]: value } : item))
+  const changeAspectRatio = (value: string) => {
+    const next = value as Job["aspectRatio"]
+    setAspectRatio(next)
+    if (next !== "9:16") setTwoSpeakers(false)
+  }
   const renderSelected = (selectedRanges: RangePayload[]) => {
     if (!selectedRanges.length || selectedRanges.length > 10 || selectedRanges.some(({ start, end }) => !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start)) { setError(t.rangesInvalid); return }
-    create.mutate({ url: url.trim(), mode: "manual", ranges: selectedRanges, targetDurationSec: duration, reframe, captions, twoSpeakers, ...(description.trim() ? { description: description.trim() } : {}) })
+    create.mutate({ url: url.trim(), mode: "manual", ranges: selectedRanges, targetDurationSec: duration, reframe, captions, twoSpeakers, aspectRatio, ...(description.trim() ? { description: description.trim() } : {}) })
   }
   useEffect(() => {
     if (preview.data?.status === "done" && initializedPreview.current !== preview.data.id) {
@@ -210,7 +219,7 @@ function Dashboard() {
       createPreview.mutate({ url: url.trim(), clipCount, targetDurationSec: duration, ...(description.trim() ? { description: description.trim() } : {}) })
       return
     }
-    const body: JobInput = { url: url.trim(), mode, reframe, captions, twoSpeakers, targetDurationSec: duration }
+    const body: JobInput = { url: url.trim(), mode, reframe, captions, twoSpeakers, aspectRatio, targetDurationSec: duration }
     if (mode === "auto") {
       body.clipCount = clipCount
       if (description.trim()) body.description = description.trim()
@@ -233,8 +242,10 @@ function Dashboard() {
         <CardContent><form className="space-y-5" onSubmit={submit}>
           <Field><FieldLabel htmlFor="source-url">{t.sourceUrl}</FieldLabel><div className="relative"><Play className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input id="source-url" type="url" inputMode="url" autoComplete="url" placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} required className="h-12 rounded-xl pl-10" /></div><FieldDescription>{t.sourceHint}</FieldDescription><FieldDescription className="mt-1">{t.captionsNote}</FieldDescription></Field>
           <Field><FieldLabel>{t.creationMode}</FieldLabel><div className="grid grid-cols-2 gap-2 rounded-xl bg-secondary/70 p-1.5" role="group" aria-label={t.creationMode}><Button type="button" variant={mode === "auto" ? "default" : "ghost"} className="h-10 rounded-lg" aria-pressed={mode === "auto"} onClick={() => setMode("auto")}>{t.autoMode}</Button><Button type="button" variant={mode === "manual" ? "default" : "ghost"} className="h-10 rounded-lg" aria-pressed={mode === "manual"} onClick={() => setMode("manual")}>{t.manualMode}</Button></div></Field>
-          <Field className={twoSpeakers ? "opacity-50" : undefined}><FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup aria-disabled={twoSpeakers} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers) setReframe(value as Job["reframe"]) }} className="grid gap-2 sm:grid-cols-3">{([{ value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/80 bg-card px-3 py-3 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5" /><span><span className="block text-sm font-medium">{option.label}</span><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers && <FieldDescription>{t.reframeIgnored}</FieldDescription>}</Field>
-           <Field className="flex flex-row items-center justify-between rounded-xl border border-border/80 bg-card px-4 py-3"><div><FieldLabel htmlFor="two-speakers">{t.twoSpeakers}</FieldLabel><FieldDescription>{t.twoSpeakersHint}</FieldDescription></div><Switch id="two-speakers" checked={twoSpeakers} onCheckedChange={setTwoSpeakers} /></Field>
+          <Field><FieldLabel id="aspect-ratio-label">{t.outputFormat}</FieldLabel><RadioGroup aria-labelledby="aspect-ratio-label" value={aspectRatio} onValueChange={changeAspectRatio} className="grid gap-2 sm:grid-cols-3">{([{ value: "9:16", subtitle: t.aspectPortrait, shape: "h-8 w-5" }, { value: "1:1", subtitle: t.aspectSquare, shape: "size-6" }, { value: "16:9", subtitle: t.aspectLandscape, shape: "h-5 w-9" }] as const).map(({ value, subtitle, shape }) => <label key={value} htmlFor={`aspect-${value}`} className="group flex cursor-pointer items-center gap-3 rounded-xl border border-border/80 bg-card px-3 py-3 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 hover:bg-secondary/50"><RadioGroupItem id={`aspect-${value}`} value={value} className="shrink-0" /><span aria-hidden="true" className="grid shrink-0 place-items-center text-muted-foreground transition-colors group-has-[:checked]:text-primary"><span className={`block ${shape} rounded-[3px] border-2 border-current`} /></span><span className="min-w-0"><span className="block font-mono text-sm font-semibold">{value}</span><span className="mt-1 block text-xs leading-snug text-muted-foreground">{subtitle}</span></span></label>)}</RadioGroup></Field>
+           <Field className={twoSpeakers || aspectRatio === "16:9" ? "opacity-50" : undefined}>
+             <FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup disabled={twoSpeakers || aspectRatio === "16:9"} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers && aspectRatio !== "16:9") setReframe(value as Job["reframe"]) }} className="grid gap-2 sm:grid-cols-3">{([{ value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/80 bg-card px-3 py-3 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5" /><span><span className="block text-sm font-medium">{option.label}</span><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers ? <FieldDescription>{t.reframeIgnored}</FieldDescription> : aspectRatio === "16:9" ? <FieldDescription>{t.reframeUnavailable}</FieldDescription> : null}</Field>
+           <Field className={`flex flex-row items-center justify-between rounded-xl border border-border/80 bg-card px-4 py-3 ${aspectRatio !== "9:16" ? "opacity-50" : ""}`}><div><FieldLabel htmlFor="two-speakers">{t.twoSpeakers}</FieldLabel><FieldDescription>{aspectRatio === "9:16" ? t.twoSpeakersHint : t.twoSpeakersUnavailable}</FieldDescription></div><Switch id="two-speakers" checked={twoSpeakers} disabled={aspectRatio !== "9:16"} onCheckedChange={setTwoSpeakers} /></Field>
            <Field className="flex flex-row items-center justify-between rounded-xl border border-border/80 bg-card px-4 py-3"><div><FieldLabel htmlFor="burn-captions">{t.burnCaptions}</FieldLabel></div><Switch id="burn-captions" checked={captions} onCheckedChange={setCaptions} /></Field>
            {mode === "auto" ? <div className="grid gap-4 sm:grid-cols-2"><Field><FieldLabel htmlFor="clip-count">{t.clipCount}</FieldLabel><Input id="clip-count" type="number" min={1} max={10} step={1} required value={clipCount} onChange={(e) => setClipCount(Number(e.target.value))} className="h-11 rounded-xl" /></Field><Field><FieldLabel htmlFor="target-duration">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration" type="number" min={15} max={180} step={1} required value={duration} onChange={(e) => setDuration(Number(e.target.value))} className="h-11 rounded-xl pr-14" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field><Field className="sm:col-span-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="clip-description">{t.description}</FieldLabel><span className="text-xs tabular-nums text-muted-foreground">{description.length}/500</span></div><textarea id="clip-description" maxLength={500} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t.descriptionHint} className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" /></Field></div> : <div className="space-y-3 rounded-xl border border-border/80 bg-secondary/25 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{t.manualRanges}</p><p className="mt-1 text-xs text-muted-foreground">{t.rangeHint}</p></div><Badge variant="secondary" className="rounded-full font-normal">{ranges.length}/10</Badge></div><div className="space-y-2">{ranges.map((range, index) => <div key={index} className="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-2 rounded-lg border border-border/70 bg-card p-3"><span className="pb-3 text-xs font-medium tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><Field><FieldLabel htmlFor={`range-start-${index}`}>{t.startSec}</FieldLabel><Input id={`range-start-${index}`} type="number" min="0" step="any" required aria-label={`${t.startSec} ${index + 1}`} placeholder="0" value={range.start} onChange={(e) => updateRange(index, "start", e.target.value)} className="h-10 rounded-lg" /></Field><Field><FieldLabel htmlFor={`range-end-${index}`}>{t.endSec}</FieldLabel><Input id={`range-end-${index}`} type="number" min="0" step="any" required aria-label={`${t.endSec} ${index + 1}`} placeholder="30" value={range.end} onChange={(e) => updateRange(index, "end", e.target.value)} className="h-10 rounded-lg" /></Field><Button type="button" variant="ghost" size="icon" aria-label={`${t.removeRange} ${index + 1}`} disabled={ranges.length === 1} onClick={() => setRanges((items) => items.filter((_, i) => i !== index))} className="mb-0.5 text-muted-foreground hover:text-destructive"><X className="size-4" /></Button></div>)}</div><Button type="button" variant="outline" size="sm" disabled={ranges.length >= 10} onClick={() => setRanges((items) => [...items, { start: "", end: "" }])} className="rounded-lg"><Plus className="size-4" />{t.addRange}</Button></div>}
           {mode === "auto" && <Field className="flex flex-row items-center justify-between rounded-xl border border-border/80 bg-card px-4 py-3"><div><FieldLabel htmlFor="review-first">{t.reviewMoments}</FieldLabel><FieldDescription>{t.reviewMomentsHint}</FieldDescription></div><Switch id="review-first" checked={reviewFirst} onCheckedChange={(checked) => { setReviewFirst(checked); if (!checked) { setPreviewId(null); setPreviewExpired(false); initializedPreview.current = null; clearReviewDraft() } }} /></Field>}

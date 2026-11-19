@@ -30,7 +30,6 @@ FACE_DEPS_ERROR = (
 )
 SAMPLE_FPS = 5.0
 PROXY_HEIGHT = 360
-PORTRAIT_RATIO = 9 / 16
 
 # Pemilihan pembicara aktif
 MAX_FACES = 4
@@ -296,24 +295,35 @@ def _normalize_segments(segments: List[Segment]) -> List[Segment]:
     return merged
 
 
-def portrait_crop_filter(center_x: Optional[float]) -> str:
-    """Crop jendela 9:16 statis di sumber lalu skala penuh ke 1080x1920.
+def portrait_crop_filter(
+    center_x: Optional[float],
+    width: int = 1080,
+    height: int = 1920,
+) -> str:
+    """Crop jendela statis (rasio width:height) di sumber lalu skala ke width x height.
 
     ffmpeg clamp sendiri x ke [0, in_w - w], jadi tidak perlu hitung batas.
+    9:16 = 1080x1920 (default, perilaku lama); 1:1 = 1080x1080.
     """
+    ratio = width / height
     center = 0.5 if center_x is None else max(0.0, min(1.0, center_x))
     return (
-        f"crop=ih*{PORTRAIT_RATIO:.5f}:ih:{center:.5f}*in_w-ih*{PORTRAIT_RATIO / 2:.5f}:0,"
-        "scale=1080:1920"
+        f"crop=ih*{ratio:.5f}:ih:{center:.5f}*in_w-ih*{ratio / 2:.5f}:0,"
+        f"scale={width}:{height}"
     )
 
 
-def cut_crop_filter(segments: Sequence[Segment]) -> str:
-    """Crop 9:16 statis per segmen (cut, tanpa pan halus).
+def cut_crop_filter(
+    segments: Sequence[Segment],
+    width: int = 1080,
+    height: int = 1920,
+) -> str:
+    """Crop statis per segmen (cut, tanpa pan halus) ke width x height.
 
     x(t) konstan dalam tiap segmen: jumlah suku `x*gte(t,a)*lt(t,b)`; ffmpeg
     sendiri meng-clamp x ke rentang valid.
     """
+    ratio = width / height
     terms: List[str] = []
     for index, (t, x) in enumerate(segments):
         cond = f"gte(t,{t:.2f})"
@@ -322,11 +332,11 @@ def cut_crop_filter(segments: Sequence[Segment]) -> str:
         terms.append(f"{max(0.0, min(1.0, x)):.4f}*{cond}")
 
     x_expr = (
-        "max(0,min((" + "+".join(terms) + f")*in_w-ih*{PORTRAIT_RATIO / 2:.5f},"
-        f"in_w-ih*{PORTRAIT_RATIO:.5f}))"
+        "max(0,min((" + "+".join(terms) + f")*in_w-ih*{ratio / 2:.5f},"
+        f"in_w-ih*{ratio:.5f}))"
     )
     return (
-        f"crop=w='ih*{PORTRAIT_RATIO:.5f}':h=ih:x='{x_expr}',scale=1080:1920"
+        f"crop=w='ih*{ratio:.5f}':h=ih:x='{x_expr}',scale={width}:{height}"
     )
 
 

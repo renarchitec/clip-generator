@@ -17,6 +17,7 @@ const sample: ReviewDraft = {
   reframe: "face_tracking",
   captions: true,
   twoSpeakers: false,
+  aspectRatio: "9:16",
   clipCount: 3,
   duration: 45,
   description: "highlights",
@@ -35,6 +36,7 @@ assert.deepEqual(loadReviewDraft(), sample)
 
 store.set("clipper-review-draft", JSON.stringify({ ...sample, twoSpeakers: undefined }))
 assert.equal(loadReviewDraft()?.twoSpeakers, false)
+assert.equal(loadReviewDraft()?.aspectRatio, "9:16")
 
 // 2. Clear
 clearReviewDraft()

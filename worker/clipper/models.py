@@ -22,10 +22,13 @@ CANCEL_KEY = "cancel:{}"
 JOB_STAGES = ("download", "transcribe", "select", "render", "save")
 JOB_MODES = ("auto", "manual")
 REFRAME_MODES = ("face_tracking", "black_bars", "blurred_fill")
+# Rasio output klip; harus sama dengan ASPECT_RATIOS di packages/shared/src/index.ts.
+ASPECT_RATIOS = ("9:16", "1:1", "16:9")
 
 JobStage = Literal["download", "transcribe", "select", "render", "save"]
 JobMode = Literal["auto", "manual"]
 ReframeMode = Literal["face_tracking", "black_bars", "blurred_fill"]
+AspectRatio = Literal["9:16", "1:1", "16:9"]
 
 DEFAULT_CLIP_COUNT = 3
 DEFAULT_TARGET_DURATION_SEC = 45.0
@@ -33,6 +36,7 @@ MAX_DESCRIPTION_CHARS = 500
 DEFAULT_REFRAME = "face_tracking"
 DEFAULT_CAPTIONS = True
 DEFAULT_TWO_SPEAKERS = False
+DEFAULT_ASPECT = "9:16"
 
 # Batas judul/alasan rentang manual hasil tinjauan LLM; harus sama dengan
 # MaxLength di apps/api/src/jobs/dto/create-job.dto.ts.
@@ -142,6 +146,7 @@ class JobData:
     reframe: ReframeMode = DEFAULT_REFRAME
     captions: bool = DEFAULT_CAPTIONS
     two_speakers: bool = DEFAULT_TWO_SPEAKERS
+    aspect_ratio: AspectRatio = DEFAULT_ASPECT
     description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
@@ -154,6 +159,7 @@ class JobData:
             "reframe": self.reframe,
             "captions": self.captions,
             "twoSpeakers": self.two_speakers,
+            "aspectRatio": self.aspect_ratio,
             "description": self.description,
             "params": self.params.to_dict(),
             "ranges": [item.to_dict() for item in self.ranges],
@@ -199,6 +205,12 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
     raw_two_speakers = _first(data, "twoSpeakers", "two_speakers", default=DEFAULT_TWO_SPEAKERS)
     two_speakers = _to_bool(raw_two_speakers, DEFAULT_TWO_SPEAKERS)
 
+    # Rasio output: parse toleran — nilai tidak dikenal/hilang -> default 9:16.
+    raw_aspect = str(
+        _first(data, "aspectRatio", "aspect_ratio", default=DEFAULT_ASPECT)
+    ).strip()
+    aspect_ratio = raw_aspect if raw_aspect in ASPECT_RATIOS else DEFAULT_ASPECT
+
     return JobData(
         job_id=job_id,
         url=url,
@@ -206,6 +218,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         reframe=reframe,  # type: ignore[arg-type]
         captions=captions,
         two_speakers=two_speakers,
+        aspect_ratio=aspect_ratio,  # type: ignore[arg-type]
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,

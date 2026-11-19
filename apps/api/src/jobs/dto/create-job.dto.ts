@@ -13,8 +13,13 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import type { JobMode, ReframeMode } from '@clipper/shared';
-import { DEFAULT_REFRAME, REFRAME_MODES } from '@clipper/shared';
+import type { AspectRatio, JobMode, ReframeMode } from '@clipper/shared';
+import {
+  ASPECT_RATIOS,
+  DEFAULT_ASPECT,
+  DEFAULT_REFRAME,
+  REFRAME_MODES,
+} from '@clipper/shared';
 
 export class ManualRangeDto {
   @IsNumber()
@@ -79,8 +84,13 @@ export class CreateJobDto {
   @IsBoolean()
   captions: boolean = true;
 
-  /** Tata letak dua pembicara (panel atas/bawah); default false. */
+  /** Tata letak dua pembicara (panel atas/bawah); default false. Hanya berlaku untuk aspectRatio 9:16. */
   @IsOptional()
   @IsBoolean()
   twoSpeakers: boolean = false;
+
+  /** Rasio output klip; default 9:16. Untuk 1:1 dan 16:9, twoSpeakers dinormalisasi ke false. */
+  @IsOptional()
+  @IsIn(ASPECT_RATIOS)
+  aspectRatio: AspectRatio = DEFAULT_ASPECT;
 }

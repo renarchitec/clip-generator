@@ -35,8 +35,11 @@ test('JobSnapshot and services carry twoSpeakers', async () => {
   assert.match(listener, /twoSpeakers:\s*job\.twoSpeakers,/);
 
   const service = await readFile(join(root, 'apps/api/src/jobs/jobs.service.ts'), 'utf8');
-  assert.match(service, /const twoSpeakers = dto\.twoSpeakers \?\? false;/);
-  assert.match(service, /twoSpeakers,\s*\n\s*clipCount:/);
+  assert.match(
+    service,
+    /const twoSpeakers = aspectRatio === '9:16' \? \(dto\.twoSpeakers \?\? false\) : false;/,
+  );
+  assert.match(service, /twoSpeakers,\s*\n\s*aspectRatio,\s*\n\s*clipCount:/);
   assert.match(service, /twoSpeakers:\s*job\.twoSpeakers,/);
 });
 

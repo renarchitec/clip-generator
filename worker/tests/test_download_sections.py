@@ -106,7 +106,7 @@ def test_render_with_sections_shifts_start_and_captions(tmp_path):
 
     rendered_args = []
 
-    def fake_render_one(video, moment, subs, outdir, filename, reframe, captions, two_speakers, timeline_offset=0.0):
+    def fake_render_one(video, moment, subs, outdir, filename, reframe, captions, two_speakers, timeline_offset=0.0, aspect_ratio="9:16"):
         rendered_args.append({
             "video": video,
             "moment_start": moment.start,
