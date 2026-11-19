@@ -31,6 +31,11 @@ Migrasi pertama sudah ada di `prisma/migrations/20260101000000_init/migration.sq
 pnpm --filter api exec prisma migrate deploy
 ```
 
+Di container API, langkah ini **otomatis**: `apps/api/docker-entrypoint.sh` menjalankan
+`prisma migrate deploy` lalu `exec node apps/api/dist/main.js`. Jadi tidak perlu lagi
+menjalankan migrasi manual di Dokploy. Bila DB belum siap, container exit dan
+diulang oleh restart policy Dokploy/Docker (tanpa retry internal).
+
 ## Endpoint
 
 | Method | Path | Keterangan |

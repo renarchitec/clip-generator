@@ -6,6 +6,11 @@
 FROM node:22-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
+# openssl dibutuhkan Prisma untuk mendeteksi libssl (schema engine); tanpa ini
+# Prisma mem-fallback ke openssl-1.1.x dan memunculkan warning di runtime.
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends openssl \
+ && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 WORKDIR /app
 
@@ -30,5 +35,8 @@ FROM base AS runner
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder /app/ .
+COPY --from=pruner /app/apps/api/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 3000
-CMD ["node", "apps/api/dist/main.js"]
+# Jalankan `prisma migrate deploy` dulu, lalu start Nest (lihat skrip).
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
