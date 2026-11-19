@@ -59,6 +59,8 @@ Kebutuhan utama:
 3. **Buat job atau Tinjau Momen** — tempel URL video (YouTube, TikTok, Instagram):
    - **Mode otomatis langsung:** LLM memilih momen dan worker langsung memproses video sampai render.
    - **Opsi "Tinjau Momen" (Review Moments):** sistem memindai URL terlebih dahulu (`POST /api/previews`), worker hanya mengunduh subtitle dan memanggil LLM (tanpa unduh video/render). Pengguna melihat daftar kandidat momen LLM dan transkrip penuh (`GET /api/previews/:id`). Pengguna memilih kandidat atau rentang transkrip untuk dijadikan job manual normal (`POST /api/jobs`). Hasil preview otomatis kedaluwarsa setelah 1 jam.
+     - **Draf bertahan saat berpindah halaman:** URL, mode, reframe, takarir, jumlah klip, durasi, deskripsi, rentang manual, status tinjau momen, `previewId`, pilihan kandidat, rentang transkrip, serta cue awal/akhir disimpan di `sessionStorage` per tab browser (tanpa token/sesi) dan dipulihkan saat pengguna kembali ke dashboard. Polling `GET /api/previews/:id` otomatis berlanjut dari `previewId` tersimpan.
+     - Draf dihapus setelah job dibuat, saat pengguna mematikan opsi tinjau momen, atau bila preview sudah kedaluwarsa (404): dashboard menampilkan pesan "preview kedaluwarsa" dan tombol pindai ulang, sambil mempertahankan URL dan parameter lain.
    - **Mode manual langsung:** pengguna menentukan sendiri rentang waktu `{start, end}`.
    - Parameter auto: jumlah klip (1–10, default 3 untuk job, default 5 untuk preview), durasi target (15–180 detik, default 45), deskripsi/arahan konten singkat (opsional, maks 500 karakter).
    - Rentang manual: daftar 1–10 rentang waktu `{start, end}` dalam detik.
