@@ -3,7 +3,7 @@ openai>=1.30
 yt-dlp>=2024.4.9
 redis>=5.0
 python-dotenv>=1.0
-mediapipe>=0.10.14
+mediapipe==0.10.14
 opencv-python-headless>=4.9.0.80
 
 # dev / test
