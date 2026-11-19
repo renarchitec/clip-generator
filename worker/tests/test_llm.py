@@ -154,6 +154,41 @@ def test_select_moments_refine_error_kept_pass1(monkeypatch):
     assert moments[0].end == pytest.approx(42.0 + END_PAD, abs=0.01)
 
 
+def test_select_moments_refine_prompt_contains_brief(monkeypatch):
+    calls = []
+    refined = '[{"index": 0, "start": 12.0, "end": 42.0}]'
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        calls.append(prompt)
+        return [PASS1, refined][len(calls) - 1]
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    moments = select_moments(
+        _cues_boundaries(),
+        JobParams(clip_count=1, target_duration_sec=30.0),
+        ENV_LLM,
+        description="momen tentang membangun kebiasaan baru",
+    )
+
+    assert len(calls) == 2
+    assert "<preferensi>" in calls[1]
+    assert "membangun kebiasaan baru" in calls[1]
+    assert "relevan" in calls[1]
+    # Pass-2 gagal harusnya tidak terjadi: refinement valid tetap dipakai.
+    assert moments[0].start == pytest.approx(12.0 - START_PAD, abs=0.01)
+
+
+def test_refine_prompt_without_brief_omits_block():
+    from clipper.llm import Moment, _refine_prompt
+
+    prompt = _refine_prompt(
+        _cues_boundaries(),
+        [Moment(start=10.0, end=40.0, title="A")],
+        JobParams(clip_count=1, target_duration_sec=30.0),
+    )
+    assert "<preferensi>" not in prompt
+
+
 def test_refine_items_out_of_window_rejected():
     from clipper.llm import Moment, _refine_items
 
