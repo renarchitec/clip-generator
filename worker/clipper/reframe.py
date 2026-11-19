@@ -83,7 +83,14 @@ def face_track_samples(
 
         if not samples:
             return None
-        return _clamp_pan(samples, dt)
+        samples = _clamp_pan(samples, dt)
+        # Keep the FFmpeg expression bounded for long clips; interpolation still
+        # follows the smoothed path, just at a coarser sample rate.
+        max_samples = 48
+        if len(samples) > max_samples:
+            stride = (len(samples) - 1) / (max_samples - 1)
+            samples = [samples[round(index * stride)] for index in range(max_samples)]
+        return samples
     finally:
         capture.release()
 
