@@ -13,6 +13,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JobEventsService } from './job-events.service';
 import { QUEUE_EVENTS, QUEUE_NAME } from './queue.constants';
 
+/** Interval pemeriksaan job basi (ms). */
+const RECOVERY_INTERVAL_MS = 60_000;
+/** Umur minimum job yang hilang dari Redis sebelum ditandai gagal. */
+const STALE_JOB_MAX_AGE_MS = 3_600_000;
+
 /**
  * Satu-satunya penulis status job selain endpoint create. Setiap update menulis
  * ke database lalu mem-publish snapshot, jadi kolom DB dan SSE tidak pernah
@@ -21,6 +26,7 @@ import { QUEUE_EVENTS, QUEUE_NAME } from './queue.constants';
 @Injectable()
 export class QueueListener implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(QueueListener.name);
+  private recoveryTimer: NodeJS.Timeout | null = null;
 
   constructor(
     @Inject(QUEUE_EVENTS) private readonly events: QueueEvents,
@@ -53,9 +59,21 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
     this.events.on('error', (error) =>
       this.logger.warn(`queue events: ${errorMessage(error)}`),
     );
+
+    // Pulihkan status job basi: event BullMQ bisa hilang saat Redis/worker restart.
+    void this.recoverStaleJobs().catch((error) =>
+      this.logger.error(`recovery: ${errorMessage(error)}`),
+    );
+    this.recoveryTimer = setInterval(() => {
+      void this.recoverStaleJobs().catch((error) =>
+        this.logger.error(`recovery: ${errorMessage(error)}`),
+      );
+    }, RECOVERY_INTERVAL_MS);
+    this.recoveryTimer.unref?.();
   }
 
   async onApplicationShutdown(): Promise<void> {
+    if (this.recoveryTimer) clearInterval(this.recoveryTimer);
     await this.events.close();
     await this.queue.close();
   }
@@ -109,13 +127,22 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
         : [];
     });
 
+    // Idempoten: recovery bisa memanggil ini ulang setelah event `completed`
+    // pertama hilang. Jangan duplikasi clip dan jangan sentuh job yang sudah
+    // selesai/batal.
+    const existing = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      select: { clips: { select: { id: true }, take: 1 } },
+    });
+    if (!existing) return;
+
     await this.prisma.$transaction(async (tx) => {
-      if (clips.length > 0) {
+      if (clips.length > 0 && existing.clips.length === 0) {
         await tx.clip.createMany({ data: clips.map((clip) => ({ ...clip, jobId })) });
       }
 
-      await tx.job.update({
-        where: { id: jobId },
+      await tx.job.updateMany({
+        where: { id: jobId, status: { in: [JobStatus.queued, JobStatus.running] } },
         data: {
           status: JobStatus.done,
           stage: 'save',
@@ -137,6 +164,48 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
+   * Pulihkan job yang status DB-nya tertinggal (queued/running) padahal BullMQ
+   * sudah selesai/gagal — biasanya karena event `completed`/`failed` hilang
+   * saat Redis atau worker restart. Dijalankan saat init dan tiap 60 detik.
+   */
+  private async recoverStaleJobs(): Promise<void> {
+    const jobs = await this.prisma.job.findMany({
+      where: { status: { in: [JobStatus.queued, JobStatus.running] } },
+      select: { id: true, createdAt: true },
+    });
+
+    for (const job of jobs) {
+      try {
+        const bullJob = await this.queue.getJob(job.id);
+
+        if (!bullJob) {
+          // Job sudah hilang dari Redis; hanya gagalkan yang cukup tua agar
+          // job yang baru dibuat (race dengan queue.add) tidak ikut tersentuh.
+          if (Date.now() - job.createdAt.getTime() > STALE_JOB_MAX_AGE_MS) {
+            await this.fail(
+              job.id,
+              'Job hilang dari antrean (worker/redis restart). Jalankan ulang.',
+            );
+          }
+          continue;
+        }
+
+        const state = await bullJob.getState();
+        if (state === 'completed') {
+          await this.onCompleted(job.id, bullJob.returnvalue);
+        } else if (state === 'failed') {
+          await this.onFailed(
+            job.id,
+            bullJob.failedReason || 'Job gagal tanpa alasan yang dilaporkan.',
+          );
+        }
+      } catch (error) {
+        this.logger.warn(`recovery ${job.id}: ${errorMessage(error)}`);
+      }
+    }
+  }
+
+  /**
    * Pembatalan diklaim lewat kolom status (updateMany bersyarat), jadi job yang
    * sudah cancelled tidak pernah ditimpa progress/done/failed di belakang.
    */
@@ -150,7 +219,9 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
 
   private async fail(jobId: string, message: string): Promise<void> {
     const updated = await this.prisma.job.updateMany({
-      where: { id: jobId, status: { not: JobStatus.cancelled } },
+      // Hanya job yang masih berjalan yang boleh digagalkan; job done/cancelled
+      // tidak disentuh walau event datang terlambat.
+      where: { id: jobId, status: { in: [JobStatus.queued, JobStatus.running] } },
       data: {
         status: JobStatus.failed,
         error: message,
@@ -158,7 +229,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       },
     });
 
-    if (updated.count === 0) return; // sudah dibatalkan: biarkan status cancelled
+    if (updated.count === 0) return; // sudah selesai/dibatalkan: biarkan statusnya
 
     await this.emit(jobId);
     this.jobEvents.close(jobId);
@@ -193,6 +264,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       captions: job.captions,
       twoSpeakers: job.twoSpeakers,
       aspectRatio: job.aspectRatio,
+      maxSourceSec: job.maxSourceSec ?? null,
       status: job.status,
       stage: job.stage,
       progress: job.progress,

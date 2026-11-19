@@ -77,6 +77,7 @@ Database dikelola melalui Prisma ORM dengan PostgreSQL. Migrasi dijalankan secar
 6. `20260106000000_add_job_captions`: Penambahan kolom boolean `captions` pada tabel `jobs` (default `true`).
 7. `20260107000000_add_job_two_speakers`: Penambahan kolom boolean `twoSpeakers` pada tabel `jobs` (default `false`).
 8. `20260110000000_add_job_aspect_ratio`: Penambahan kolom string `aspectRatio` pada tabel `jobs` (default `'9:16'`; nilai sah: `9:16` / `1:1` / `16:9`, divalidasi `@IsIn(ASPECT_RATIOS)` di DTO, parse toleran di worker: tidak dikenal/hilang -> `9:16`).
+9. `20260111000000_add_job_max_source_sec`: Penambahan kolom `maxSourceSec` `INTEGER` nullable pada tabel `jobs` (batas pemindaian sumber 60–36000 detik; NULL = durasi penuh; divalidasi `@IsInt @Min(60) @Max(36000)` di DTO, parse toleran di worker: invalid/di luar rentang -> `None`).
 
 ## Pipeline Pemrosesan Worker
 
@@ -87,8 +88,8 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 
 ### 2. Tahap Download (`download`)
 - Memanggil `yt-dlp` untuk mengunduh video format MP4 terbaik (`bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b`).
-- **Mode `auto`:** mengunduh video penuh ke `source.*` seperti biasa.
-- **Mode `manual`:** hanya mengunduh rentang terpilih — satu file `section-NN.*` per rentang valid, diurutkan `start`, via `--download-sections "*start-end"` + `--force-keyframes-at-cuts` (potongan tepat pada batas rentang, dengan biaya re-encode). Timestamp file section direset ke 0 oleh yt-dlp; offset awal rentang disimpan dan dipakai render untuk menggeser `-ss`/deteksi wajah ke timeline file section, sementara timestamp absolut asli tetap dilaporkan pada hasil klip. Rentang yang tumpang tindih diunduh dua kali (satu file per rentang, tanpa deduplikasi). Tanpa rentang valid, job manual gagal cepat sebelum unduh apa pun.
+- **Mode `auto`:** mengunduh video penuh ke `source.*` seperti biasa. Bila `maxSourceSec` diisi (60–36000 detik), hanya bagian `0–limit` yang diunduh sebagai satu section `--download-sections "*0.000-limit"` + `--force-keyframes-at-cuts` ke file `source.*` (offset 0, jadi timestamp identik dengan video asli dan file itu langsung dipakai render). Section tanpa stream video (format terbatas/429) atau gagal OpenCV → transcode H.264 (`_ensure_opencv_readable`), dan bila tetap tanpa video → fallback unduh video penuh. Bila video lebih pendek dari limit, hasilnya sama dengan durasi penuh.
+- **Mode `manual`:** hanya mengunduh rentang terpilih — satu file `section-NN.*` per rentang valid, diurutkan `start`, via `--download-sections "*start-end"` + `--force-keyframes-at-cuts` (potongan tepat pada batas rentang, dengan biaya re-encode). Timestamp file section direset ke 0 oleh yt-dlp; offset awal rentang disimpan dan dipakai render untuk menggeser `-ss`/deteksi wajah ke timeline file section, sementara timestamp absolut asli tetap dilaporkan pada hasil klip. Rentang yang tumpang tindih diunduh dua kali (satu file per rentang, tanpa deduplikasi). Tanpa rentang valid, job manual gagal cepat sebelum unduh apa pun. Mode manual mengabaikan `maxSourceSec` — rentangnya sudah eksplisit.
 - Mengunduh trek subtitle asli YouTube penuh (mengutamakan subtitle manual, fallback ke auto-subs) dalam format VTT — tetap video penuh untuk kebutuhan pemilihan momen, takarir, dan transkrip.
 - Jika subtitle YouTube tidak ditemukan sama sekali, job langsung digagalkan dengan error: `"Subtitle YouTube tidak tersedia untuk video ini."` (Whisper telah dihapus sepenuhnya dari worker).
 
@@ -98,6 +99,7 @@ Worker memeriksa sisa ruang pada volume `CLIPS_DIR`. Jika kurang dari `MIN_FREE_
 - Menghasilkan token kata (*word-level timestamps*) baik dari tag inline VTT atau aproksimasi berbasis bobot karakter.
 
 ### 4. Tahap Pemilihan Momen (`select`)
+- **Batas pemindaian sumber (`maxSourceSec`, hanya mode `auto`):** sebelum pemilihan momen, cue dibatasi ke jendela `0–limit` (`_cues_within_limit`): cue yang mulai di/lewat limit dibuang; cue yang melintasi limit di-clamp `end`-nya (termasuk kata di dalamnya). Karena prompt, validasi momen, refinement, dan snap semuanya memakai `total = akhir cue terakhir`, seluruh jalur pemilihan otomatis berhenti di limit: momen berakhir ≤ limit tanpa logika tambahan. Mode manual tidak memfilter cue (rentang eksplisit diabaikan limitnya).
 - **Mode `manual`:** Menggunakan rentang timestamp `{start, end}` yang diberikan pengguna. Jika rentang memuat `title` dan `reason` (hasil tinjauan LLM), nilai tersebut digunakan langsung sebagai judul dan alasan momen; jika kosong (misal rentang manual biasa atau dari cue transkrip), judul menggunakan fallback berbasis timestamp `Clip mm:ss–mm:ss` dan reason `"manual"`.
 - **Mode `auto`:** Mengirimkan transkrip terstruktur, parameter (`clipCount`, `targetDurationSec`), dan instruksi `description` (brief konten) ke endpoint LLM OpenAI-compatible.
 - Brief pengguna menjadi instruksi prioritas utama bagi LLM untuk memilih topik/bagian yang relevan.
@@ -131,15 +133,29 @@ Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, w
 - **Penghapusan Klip (`DELETE /api/clips/:id`):** Endpoint API langsung menghapus file fisik di filesystem (mengabaikan `ENOENT` jika sudah terhapus) dan menghapus baris dari tabel `clips` di PostgreSQL.
 - **Penghapusan Job (`DELETE /api/jobs/:id`):** `JobsService.remove` memverifikasi kepemilikan via `findOne(id, userId)` (404 bila bukan milik user). Bila status job masih `queued`/`running`, endpoint menyetel key `cancel:<job_id>` di Redis (TTL 24 jam) dan mencabut job BullMQ bila masih `waiting`/`delayed`/`prioritized`. Setelah itu semua path klip di-resolve lewat `resolveClipPath(clipsDir, filePath)` (menolak path traversal) dan file fisiknya di-`unlink` (ENOENT diabaikan; error lain membatalkan operasi). Baris job lalu dihapus dengan `prisma.job.delete({ where: { id } })`; baris `clips` terhapus otomatis via FK `onDelete: Cascade`. Subscription SSE (`jobEvents.close(id)`) ditutup dan endpoint mengembalikan HTTP 204.
 
+### 8. Sinkronisasi Status Job (Queue Listener & Pemulihan Basi)
+
+`QueueListener` (`apps/api/src/queue/queue.listener.ts`) adalah satu-satunya penulis status job selain endpoint create. Setiap update menulis ke database lalu mem-publish snapshot SSE, jadi kolom DB dan SSE tidak pernah berbeda. Sumber event utama adalah `QueueEvents` BullMQ (`progress`, `completed`, `failed`).
+
+Event BullMQ bisa hilang saat Redis/worker restart (job selesai di worker, tetapi API tidak pernah menerima `completed`; klip sudah tersimpan sementara status DB tetap `running`). Karena itu listener juga menjalankan **pemulihan status basi**:
+
+- Berjalan sekali saat module init (setelah `waitUntilReady`) lalu tiap 60 detik (`setInterval`, di-`unref` dan dibersihkan saat shutdown).
+- Query semua job DB berstatus `queued`/`running`, lalu bandingkan dengan state job BullMQ:
+  - `completed` → jalankan logika `onCompleted` yang sama dengan `job.returnvalue`.
+  - `failed` → jalankan `onFailed` dengan `failedReason`.
+  - Job tidak ada di Redis dan `createdAt` lebih tua dari 1 jam → ditandai `failed` dengan pesan `"Job hilang dari antrean (worker/redis restart). Jalankan ulang."`; job yang lebih muda dibiarkan (race dengan `queue.add`).
+- **Idempoten:** `onCompleted` tidak menduplikasi clip (createMany hanya bila job belum punya clip) dan memakai update bersyarat `status in (queued, running)` sehingga job `done`/`failed`/`cancelled` tidak pernah ditimpa; `fail` juga hanya mengubah job yang masih `queued`/`running`. Job `cancelled` tidak pernah disentuh oleh pemulihan maupun event terlambat.
+
 ## Pratinjau Momen (Review Moments)
 
 Fitur "tinjau momen sebelum memotong" memungkinkan pengguna memindai URL terlebih dahulu, melihat kandidat momen LLM dan transkrip penuh, lalu membuat job manual normal. Mode otomatis langsung dan mode manual yang sudah ada tidak berubah.
 
 - **Endpoint:**
-  - `POST /api/previews` (auth, sesi) — body `{ url, description? (maks 500), clipCount? (1–10, default 5), targetDurationSec? (15–180, default 45) }`. URL divalidasi dengan allowlist yang sama seperti job (`apps/api/src/jobs/validation.ts`). Respons `201 { id }`.
+  - `POST /api/previews` (auth, sesi) — body `{ url, description? (maks 500), clipCount? (1–10, default 5), targetDurationSec? (15–180, default 45), maxSourceSec? (60–36000, default null = durasi penuh) }`. URL divalidasi dengan allowlist yang sama seperti job (`apps/api/src/jobs/validation.ts`). Respons `201 { id }`.
   - `GET /api/previews/:id` (auth, hanya pemilik) — `{ id, url, status: queued|running|done|failed, error: string|null, candidates: {start,end,title,reason}[]|null, cues: {start,end,text}[]|null }`. Mengembalikan 404 bila job tidak ada, sudah kedaluwarsa, atau milik pengguna lain.
 - **Penyimpanan:** Tanpa tabel/migrasi baru. `userId`, URL, dan parameter disimpan di data job BullMQ pada antrean `previews`. Job yang selesai/gagal dipertahankan 1 jam (`removeOnComplete`/`removeOnFail` `age: 3600`), lalu dihapus Redis. Endpoint GET membaca state, `returnvalue`, dan `failedReason` langsung dari BullMQ.
 - **Worker:** Consumer `previews` terpisah di proses Python yang sama (concurrency 2, tidak menunggu render). Handler hanya memanggil `_fetch_subtitles` (`yt-dlp --skip-download`), `_read_vtt` untuk cue terdeduplikasi, lalu `llm.select_moments` dengan brief yang sama seperti mode auto. Kandidat melewati jalur yang sama persis dengan mode auto: validasi `validate_moments` -> refinement dua-pass (`LLM_REFINE`) -> snap deterministik `snap.py`. Subtitle tidak tersedia → gagal dengan pesan `"Subtitle YouTube tidak tersedia untuk video ini."`; LLM tidak dikonfigurasi/gagal → gagal dengan pesan jelas. Worker mengembalikan `{candidates, cues}` sebagai return value job.
+- **Batas pemindaian sumber (`maxSourceSec`):** body `{ maxSourceSec? (60–36000, default null = durasi penuh) }` ikut dikirim ke data job preview. `run_preview` memotong cue ke jendela `0–limit` sebelum memanggil LLM (`_cues_within_limit`) dan mengembalikan hanya cue terpotong itu, sehingga transkrip di UI hanya berisi bagian yang dipindai dan kandidat berakhir ≤ limit (prompt/validasi/refinement/snap mengikuti akhir cue terakhir).
 - **Transkrip:** `cues` berisi baris cue (bukan kata) `{start, end, text}` hasil deduplikasi rolling auto-sub.
 - **Persistensi State Web:** State draft review (`url`, `mode`, `reframe`, `captions`, `clipCount`, `duration`, `description`, `ranges`, `reviewFirst`, `previewId`, `selectedCandidates`, `cueRanges`, `selectedCueStart`, `selectedCueEnd`) disimpan di `sessionStorage` (`clipper-review-draft`). Saat navigasi bolak-balik dalam sesi tab yang sama, state dipulihkan dan polling `GET /api/previews/:id` dilanjutkan otomatis. Preview kedaluwarsa (HTTP 404) ditangani anggun: polling dihentikan, pesan kedaluwarsa ditampilkan dengan aksi coba lagi/pindai ulang, `previewId` di-reset, dan draft dibersihkan saat job manual berhasil dibuat atau sakelar review dinonaktifkan. Data sensitif/kredensial tidak pernah disimpan di storage ini.
 
@@ -215,6 +231,6 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 
 ## Testing
 
-- **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, refinement pass-2 dengan LLM di-mock (`LLM_REFINE` aktif/nonaktif, hasil tidak valid, error), snap deterministik batas momen (`snap.py`), dan pembatalan job (`worker/tests/`).
-- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, aspect ratio (persistensi, normalisasi `twoSpeakers` ke `false` di luar 9:16, ukuran output worker), manual ranges/preservasi title-reason, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
+- **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, refinement pass-2 dengan LLM di-mock (`LLM_REFINE` aktif/nonaktif, hasil tidak valid, error), snap deterministik batas momen (`snap.py`), pembatalan job, batas pemindaian sumber `maxSourceSec` (parse toleran, potongan cue 0–limit, unduh section tunggal mode auto + fallback), dan unduhan section manual (`worker/tests/`).
+- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, description, reframe, captions, aspect ratio (persistensi, normalisasi `twoSpeakers` ke `false` di luar 9:16, ukuran output worker), manual ranges/preservasi title-reason, batas pemindaian sumber `maxSourceSec`, pemulihan status job basi, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
 - **Verifikasi pipeline tanpa Redis:** `python -m clipper.selftest --url <url> --mode <auto|manual> [--ranges 12-40,90-130]` menjalankan pipeline penuh secara lokal (tanpa antrean) untuk uji cepat.

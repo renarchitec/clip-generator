@@ -26,6 +26,10 @@ export const ASPECT_RATIOS = ['9:16', '1:1', '16:9'] as const;
 export type AspectRatio = (typeof ASPECT_RATIOS)[number];
 export const DEFAULT_ASPECT: AspectRatio = '9:16';
 
+/** Batas pemindaian sumber (detik): null/absent = durasi penuh (default). */
+export const MIN_SOURCE_SEC = 60;
+export const MAX_SOURCE_SEC = 36000;
+
 export interface ManualRange {
   /** detik */
   start: number;
@@ -55,6 +59,12 @@ export interface JobData {
   aspectRatio: AspectRatio;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
   description?: string | null;
+  /**
+   * Batas pemindaian sumber dalam detik (60–36000); null/absent = durasi penuh.
+   * Berlaku untuk mode auto & preview: hanya bagian 0–limit yang dipindai/diunduh.
+   * Mode manual mengabaikan nilai ini (rentang sudah eksplisit).
+   */
+  maxSourceSec?: number | null;
   params: JobParams;
   /** hanya dipakai mode manual */
   ranges: ManualRange[];
@@ -100,6 +110,8 @@ export interface PreviewJobData {
   description?: string | null;
   clipCount: number;
   targetDurationSec: number;
+  /** Batas pemindaian sumber (detik, 60–36000); null/absent = durasi penuh. */
+  maxSourceSec?: number | null;
 }
 
 export interface PreviewJobResult {

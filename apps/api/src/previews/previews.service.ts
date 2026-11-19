@@ -30,6 +30,7 @@ export class PreviewsService {
       description: normalizeDescription(dto.description),
       clipCount: dto.clipCount,
       targetDurationSec: dto.targetDurationSec,
+      maxSourceSec: dto.maxSourceSec ?? null,
     };
 
     await this.queue.add('preview', data, {

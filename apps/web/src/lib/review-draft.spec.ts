@@ -18,6 +18,7 @@ const sample: ReviewDraft = {
   captions: true,
   twoSpeakers: false,
   aspectRatio: "9:16",
+  maxSourceSec: null,
   clipCount: 3,
   duration: 45,
   description: "highlights",
@@ -34,9 +35,10 @@ const sample: ReviewDraft = {
 saveReviewDraft(sample)
 assert.deepEqual(loadReviewDraft(), sample)
 
-store.set("clipper-review-draft", JSON.stringify({ ...sample, twoSpeakers: undefined }))
+store.set("clipper-review-draft", JSON.stringify({ ...sample, twoSpeakers: undefined, aspectRatio: undefined, maxSourceSec: undefined }))
 assert.equal(loadReviewDraft()?.twoSpeakers, false)
 assert.equal(loadReviewDraft()?.aspectRatio, "9:16")
+assert.equal(loadReviewDraft()?.maxSourceSec, null)
 
 // 2. Clear
 clearReviewDraft()

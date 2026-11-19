@@ -38,6 +38,11 @@ DEFAULT_CAPTIONS = True
 DEFAULT_TWO_SPEAKERS = False
 DEFAULT_ASPECT = "9:16"
 
+# Batas pemindaian sumber (detik); harus sama dengan MIN_SOURCE_SEC /
+# MAX_SOURCE_SEC di packages/shared/src/index.ts.
+MIN_SOURCE_SEC = 60
+MAX_SOURCE_SEC = 36000
+
 # Batas judul/alasan rentang manual hasil tinjauan LLM; harus sama dengan
 # MaxLength di apps/api/src/jobs/dto/create-job.dto.ts.
 MAX_RANGE_TITLE_CHARS = 70
@@ -85,6 +90,17 @@ def _to_bool(value: Any, default: bool) -> bool:
     if value is None:
         return default
     return bool(value)
+
+
+def to_max_source_sec(value: Any) -> Optional[int]:
+    """Parse toleran maxSourceSec: invalid / di luar 60-36000 -> None (durasi penuh)."""
+    if value is None:
+        return None
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if MIN_SOURCE_SEC <= parsed <= MAX_SOURCE_SEC else None
 
 
 @dataclass
@@ -147,6 +163,9 @@ class JobData:
     captions: bool = DEFAULT_CAPTIONS
     two_speakers: bool = DEFAULT_TWO_SPEAKERS
     aspect_ratio: AspectRatio = DEFAULT_ASPECT
+    # Batas pemindaian sumber (detik); None = durasi penuh. Dipakai mode auto
+    # dan preview; mode manual mengabaikannya (rentang sudah eksplisit).
+    max_source_sec: Optional[int] = None
     description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
@@ -160,6 +179,7 @@ class JobData:
             "captions": self.captions,
             "twoSpeakers": self.two_speakers,
             "aspectRatio": self.aspect_ratio,
+            "maxSourceSec": self.max_source_sec,
             "description": self.description,
             "params": self.params.to_dict(),
             "ranges": [item.to_dict() for item in self.ranges],
@@ -211,6 +231,10 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
     ).strip()
     aspect_ratio = raw_aspect if raw_aspect in ASPECT_RATIOS else DEFAULT_ASPECT
 
+    max_source_sec = to_max_source_sec(
+        _first(data, "maxSourceSec", "max_source_sec")
+    )
+
     return JobData(
         job_id=job_id,
         url=url,
@@ -219,6 +243,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         captions=captions,
         two_speakers=two_speakers,
         aspect_ratio=aspect_ratio,  # type: ignore[arg-type]
+        max_source_sec=max_source_sec,
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,

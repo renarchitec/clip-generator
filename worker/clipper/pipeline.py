@@ -24,6 +24,7 @@ from .models import (
     JobResult,
     ManualRange,
     job_data_from_dict,
+    to_max_source_sec,
 )
 from .subtitles import (
     MAX_WORDS_PER_CUE,
@@ -223,6 +224,9 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     Mode manual hanya mengunduh rentang terpilih (satu `section-NN.*` per
     rentang via --download-sections), bukan video penuh. yt-dlp mereset
     timestamp file section ke 0; offset awal rentang disimpan untuk render.
+
+    Mode auto dengan `max_source_sec` hanya mengunduh 0–limit sebagai satu
+    section (offset 0) dan memakai file itu sebagai sumber render.
     """
     os.makedirs(workdir, exist_ok=True)
 
@@ -264,7 +268,29 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
                 (await asyncio.to_thread(_ensure_opencv_readable, path), offset)
                 for path, offset in sections
             ]
-    if not sections:
+    if not sections and job.mode == "auto" and job.max_source_sec:
+        # Batas pemindaian sumber: unduh hanya 0–limit sebagai satu section
+        # (offset 0, jadi timestamp identik dengan video asli). Section gagal
+        # / tanpa stream video -> jatuh ke unduhan video penuh di bawah.
+        limit = float(job.max_source_sec)
+        await _emit(on_progress, "download", 0, f"mengunduh 0-{limit:.0f} detik")
+        cmd = _yt_dlp_base() + [
+            "--download-sections",
+            f"*0.000-{limit:.3f}",
+            "--force-keyframes-at-cuts",
+            "-o",
+            os.path.join(workdir, "source.%(ext)s"),
+            job.url,
+        ]
+        await asyncio.to_thread(_run, cmd)
+        path = _find_video(workdir)
+        if path and await asyncio.to_thread(_has_video, path):
+            video = await asyncio.to_thread(_ensure_opencv_readable, path)
+        elif path:
+            log.warning("section batas sumber tanpa stream video, fallback unduh penuh")
+            os.remove(path)
+
+    if not sections and not video:
         await _emit(on_progress, "download", 0, "mengunduh video")
         cmd = _yt_dlp_base() + [
             "-o",
@@ -287,6 +313,33 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
 def _read_vtt(path: str) -> List[Cue]:
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         return parse_vtt(handle.read(), word_level=True)
+
+
+def _cues_within_limit(cues: Sequence[Cue], max_source_sec: Optional[int]) -> List[Cue]:
+    """Batasi transkrip ke jendela 0–limit.
+
+    Cue yang mulai di/lewat limit dibuang; cue yang melintasi limit di-clamp
+    end-nya (termasuk kata) supaya prompt LLM, validasi momen, refinement, dan
+    snap semuanya berhenti di limit.
+    """
+    if not max_source_sec:
+        return list(cues)
+
+    limit = float(max_source_sec)
+    kept: List[Cue] = []
+    for cue in cues:
+        if cue.start >= limit:
+            continue
+        if cue.end <= limit:
+            kept.append(cue)
+            continue
+        words = [
+            Word(start=word.start, end=min(word.end, limit), text=word.text)
+            for word in cue.words
+            if word.start < limit
+        ]
+        kept.append(replace(cue, end=limit, words=words))
+    return kept
 
 
 async def transcribe(subtitles: Optional[str], on_progress=None) -> List[Cue]:
@@ -677,6 +730,9 @@ async def run_job(
         media = await download(job, workdir, on_progress)
         await _check_cancel(should_cancel)
         cues = await transcribe(media.subtitles, on_progress)
+        if job.mode == "auto" and job.max_source_sec:
+            # Mode manual mengabaikan maxSourceSec: rentangnya sudah eksplisit.
+            cues = _cues_within_limit(cues, job.max_source_sec)
         await _check_cancel(should_cancel)
         moments = await select(job, cues, on_progress)
         await _check_cancel(should_cancel)
@@ -703,7 +759,8 @@ async def run_preview(data: Mapping[str, Any], temp_root: Optional[str] = None) 
     """Pratinjau momen: subtitle + LLM saja, tanpa unduh video dan render.
 
     Mengembalikan kandidat momen (klien & filter sama seperti mode auto) dan
-    daftar cue terdeduplikasi untuk transkrip penuh di UI.
+    daftar cue terdeduplikasi untuk transkrip penuh di UI. Bila `maxSourceSec`
+    diisi, hanya cue 0–limit yang dipindai dan dikembalikan.
     """
     url = data.get("url")
     if not isinstance(url, str) or not url.strip():
@@ -715,7 +772,11 @@ async def run_preview(data: Mapping[str, Any], temp_root: Optional[str] = None) 
         if isinstance(raw_description, str) and str(raw_description).strip()
         else None
     )
-    params = JobParams.from_dict(data.get("params") or {})
+    # Parameter preview dikirim flat (clipCount/targetDurationSec), bukan nested.
+    params = JobParams.from_dict(
+        {key: data[key] for key in ("clipCount", "targetDurationSec") if data.get(key) is not None}
+    )
+    max_source_sec = to_max_source_sec(data.get("maxSourceSec"))
 
     temp_root = temp_root or os.getenv("TEMP_ROOT") or tempfile.gettempdir()
     os.makedirs(temp_root, exist_ok=True)
@@ -728,6 +789,8 @@ async def run_preview(data: Mapping[str, Any], temp_root: Optional[str] = None) 
         cues = await asyncio.to_thread(_read_vtt, subtitles)
         if not cues:
             raise RuntimeError(NO_SUBTITLE_ERROR)
+
+        cues = _cues_within_limit(cues, max_source_sec)
 
         moments = await asyncio.to_thread(
             llm.select_moments,

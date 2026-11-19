@@ -18,6 +18,8 @@ import {
   ASPECT_RATIOS,
   DEFAULT_ASPECT,
   DEFAULT_REFRAME,
+  MAX_SOURCE_SEC,
+  MIN_SOURCE_SEC,
   REFRAME_MODES,
 } from '@clipper/shared';
 
@@ -93,4 +95,14 @@ export class CreateJobDto {
   @IsOptional()
   @IsIn(ASPECT_RATIOS)
   aspectRatio: AspectRatio = DEFAULT_ASPECT;
+
+  /**
+   * Batas pemindaian sumber dalam detik (60–36000); null/absent = durasi penuh.
+   * Hanya berlaku untuk mode auto & preview; mode manual mengabaikannya.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(MIN_SOURCE_SEC)
+  @Max(MAX_SOURCE_SEC)
+  maxSourceSec?: number | null;
 }

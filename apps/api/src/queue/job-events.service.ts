@@ -12,6 +12,8 @@ export interface JobSnapshot {
   aspectRatio: string;
   clipCount?: number;
   targetDurationSec?: number;
+  /** Batas pemindaian sumber (detik); null = durasi penuh. */
+  maxSourceSec?: number | null;
   ranges?: unknown;
   status: string;
   stage: string | null;

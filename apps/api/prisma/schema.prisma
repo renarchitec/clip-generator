@@ -56,6 +56,7 @@ model Job {
   aspectRatio       String    @default("9:16")
   clipCount         Int
   targetDurationSec Int
+  maxSourceSec      Int?
   ranges            Json?
   status            JobStatus @default(queued)
   stage             String?
