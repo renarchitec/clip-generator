@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   MessageEvent,
   Param,
   Post,
@@ -39,6 +41,15 @@ export class JobsController {
   @Post(':id/cancel')
   cancel(@Param('id') id: string, @CurrentUser() user: { id: string }) {
     return this.jobs.cancel(id, user.id);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<void> {
+    await this.jobs.remove(id, user.id);
   }
 
   @Sse(':id/events')

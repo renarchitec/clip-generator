@@ -7,8 +7,11 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
+import { unlink } from 'node:fs/promises';
 import type { JobData, ManualRange } from '@clipper/shared';
 import { DEFAULT_REFRAME } from '@clipper/shared';
+import { resolveClipPath } from '../clips/clip-path';
+import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
 import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
@@ -20,6 +23,7 @@ export class JobsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobEvents: JobEventsService,
+    private readonly config: AppConfig,
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
   ) {}
 
@@ -157,6 +161,60 @@ export class JobsService {
   async snapshot(id: string, userId: string): Promise<JobSnapshot> {
     const job = await this.findOne(id, userId);
     return toSnapshot(job);
+  }
+
+  /**
+   * Hapus job milik user:
+   * 1. Ambil job + klip untuk verifikasi kepemilikan.
+   * 2. Bila job belum selesai/gagal/batal (masih queued/running), kirim sinyal cancel Redis dan cabut dari BullMQ bila ada.
+   * 3. Hapus semua file fisik klip di disk menggunakan safe resolver (abaikan ENOENT).
+   * 4. Hapus job dari DB (klip cascade terhapus otomatis di DB).
+   * 5. Tutup subscription jobEvents bila ada.
+   */
+  async remove(id: string, userId: string): Promise<void> {
+    const job = await this.findOne(id, userId);
+
+    if (
+      job.status !== JobStatus.done &&
+      job.status !== JobStatus.failed &&
+      job.status !== JobStatus.cancelled
+    ) {
+      try {
+        const client = await this.queue.client;
+        await client.set(cancelKey(id), '1', { EX: 86400 });
+      } catch {
+        // Redis error tidak boleh menggagalkan penghapusan
+      }
+
+      try {
+        const bullJob = await this.queue.getJob(id);
+        if (bullJob) {
+          const state = await bullJob.getState();
+          if (state === 'waiting' || state === 'delayed' || state === 'prioritized') {
+            await bullJob.remove();
+          }
+        }
+      } catch {
+        // Abaikan bila job tidak ditemukan di antrean
+      }
+    }
+
+    for (const clip of job.clips) {
+      const target = resolveClipPath(this.config.clipsDir, clip.filePath);
+      if (target) {
+        try {
+          await unlink(target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+    }
+
+    await this.prisma.job.delete({
+      where: { id },
+    });
+
+    this.jobEvents.close(id);
   }
 }
 

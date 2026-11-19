@@ -68,7 +68,7 @@ Kebutuhan utama:
 5. **Kontrol** — pengguna dapat membatalkan job yang sedang berjalan via tombol Batal (`POST /api/jobs/:id/cancel`).
 6. **Tinjau & Putar** — buka detail job, putar klip di player 9:16 (`GET /api/clips/:id/stream` mendukung HTTP byte-range), salin judul klip.
 7. **Buat Ulang (Regenerate)** — klik "Buat ulang" (`/?from=<jobId>`) untuk mengisi form dashboard dengan parameter job sebelumnya guna membuat job baru.
-8. **Unduh atau Hapus** — unduh file video langsung via browser (`GET /api/clips/:id/download`) atau hapus klip seketika (`DELETE /api/clips/:id`).
+8. **Unduh atau Hapus** — unduh file video langsung via browser (`GET /api/clips/:id/download`), hapus klip seketika (`DELETE /api/clips/:id`), atau hapus keseluruhan job beserta klip dan file fisiknya (`DELETE /api/jobs/:id`).
 
 ## 7. Lingkup dan status fitur
 
@@ -79,7 +79,7 @@ Kebutuhan utama:
 | **P0** | Pilihan mode reframe (`face_tracking` MediaPipe, `blurred_fill`, `black_bars`) | Selesai |
 | **P0** | Web UI TanStack Start + Query + shadcn/ui + Tailwind v4 + i18n (EN/ID) + Dark/Light theme | Selesai |
 | **P0** | Real-time progress SSE (`GET /api/jobs/:id/events`) dan streaming klip byte-range | Selesai |
-| **P0** | Pembatalan job (`POST /api/jobs/:id/cancel`) dan penghapusan klip (`DELETE /api/clips/:id`) | Selesai |
+| **P0** | Pembatalan job (`POST /api/jobs/:id/cancel`), penghapusan job (`DELETE /api/jobs/:id`), dan penghapusan klip (`DELETE /api/clips/:id`) | Selesai |
 | **P0** | Regenerate job via prefill form (`/?from=<jobId>`) | Selesai |
 | **P0** | Indikator status LLM worker (`GET /api/system/llm-status` + Redis heartbeat `worker:status:llm`) | Selesai |
 | **P0** | Tinjau momen sebelum memotong (`POST /api/previews` + `GET /api/previews/:id`: kandidat LLM + transkrip penuh → job manual) | Selesai |
@@ -131,6 +131,7 @@ Kebutuhan utama:
 | FR-4.3 | Pratinjau video di browser dengan dukungan HTTP byte-range (`GET /api/clips/:id/stream`) | Video dapat di-seek tanpa harus mengunduh keseluruhan file |
 | FR-4.4 | Unduhan klip via `GET /api/clips/:id/download` mencatat cap waktu `downloadedAt` | File diunduh dengan nama bersih dari judul klip |
 | FR-4.5 | Penghapusan klip via `DELETE /api/clips/:id` | Mengembalikan HTTP 204, menghapus file video fisik dari disk, dan menghapus baris dari tabel `clips` |
+| FR-4.6 | Penghapusan job via `DELETE /api/jobs/:id` | Mengembalikan HTTP 204, menghapus semua file klip fisik dari disk, membatalkan job yang masih mengantre/berjalan (sinyal Redis + cabut dari BullMQ), dan menghapus baris job beserta klipnya (cascade). 404 bila bukan milik user |
 
 ## 9. Model Data (Ringkas)
 
@@ -157,6 +158,7 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | `/api/jobs` | POST | Membuat job baru | Sesi |
 | `/api/jobs` | GET | Mengambil daftar job milik pengguna | Sesi |
 | `/api/jobs/:id` | GET | Mengambil detail job beserta daftar klip miliknya | Sesi (hanya pemilik) |
+| `/api/jobs/:id` | DELETE | Menghapus job: membatalkan bila masih queued/running, menghapus semua file klip, lalu menghapus baris job (klip cascade) | Sesi (hanya pemilik) |
 | `/api/jobs/:id/cancel` | POST | Membatalkan job yang sedang mengantre atau berjalan | Sesi (hanya pemilik) |
 | `/api/jobs/:id/events` | GET | Aliran Server-Sent Events (SSE) status & progres job | Sesi (hanya pemilik) |
 | `/api/previews` | POST | Memindai URL untuk preview momen: kandidat LLM + transkrip (tanpa render), body `{url, description?, clipCount? (1–10, default 5), targetDurationSec? (15–180, default 45)}` | Sesi |
