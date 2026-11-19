@@ -171,11 +171,20 @@ def _fetch_subtitles(url: str, workdir: str) -> Optional[str]:
     return None
 
 
-def _yt_dlp_base() -> List[str]:
+def _yt_dlp_base(sections: bool = False) -> List[str]:
+    if sections:
+        # Section wajib format http/mp4 terindeks: fallback HLS/TS memotong video
+        # di keyframe berikutnya sehingga video lebih lambat dari audio (A/V offset).
+        fmt = (
+            "bv*[ext=mp4][protocol^=http]+ba[ext=mp4][protocol^=http]"
+            "/b[ext=mp4][protocol^=http]"
+        )
+    else:
+        fmt = "bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b"
     return [
         "yt-dlp",
         "-f",
-        "bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b",
+        fmt,
         "--merge-output-format",
         "mp4",
         "--no-playlist",
@@ -191,6 +200,47 @@ def _has_video(path: str) -> bool:
     except Exception:
         return False
     return bool(str(out or "").strip())
+
+
+def _probe_start(path: str, stream: str) -> Optional[float]:
+    """start_time stream terpilih; None bila stream tidak ada atau tak terbaca."""
+    try:
+        out = _run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                stream,
+                "-show_entries",
+                "stream=start_time",
+                "-of",
+                "csv=p=0",
+                path,
+            ]
+        )
+    except Exception:
+        return None
+    lines = str(out or "").strip().splitlines()
+    if not lines:
+        return None
+    try:
+        return float(lines[0].strip())
+    except ValueError:
+        return None  # "N/A" dsb.
+
+
+def _section_video_lags_audio(path: str) -> bool:
+    """Video section mulai lebih lambat dari audio > 0.05s (keyframe offset HLS).
+
+    True berarti A/V tidak sinkron dan section harus dibuang. Tanpa stream
+    audio/video yang terbaca, anggap aman (jangan gagal job).
+    """
+    video_start = _probe_start(path, "v:0")
+    audio_start = _probe_start(path, "a:0")
+    if video_start is None or audio_start is None:
+        return False
+    return video_start - audio_start > 0.05
 
 
 def _opencv_readable(path: str) -> bool:
@@ -240,7 +290,7 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     if ranges:
         await _emit(on_progress, "download", 0, f"mengunduh {len(ranges)} rentang")
         for index, item in enumerate(ranges):
-            cmd = _yt_dlp_base() + [
+            cmd = _yt_dlp_base(sections=True) + [
                 "--download-sections",
                 f"*{item.start:.3f}-{item.end:.3f}",
                 # Re-encode keyframe agar potongan tepat pada batas rentang.
@@ -249,7 +299,20 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
                 os.path.join(workdir, f"section-{index:02d}.%(ext)s"),
                 job.url,
             ]
-            await asyncio.to_thread(_run, cmd)
+            try:
+                await asyncio.to_thread(_run, cmd)
+            except Exception as exc:
+                log.warning(
+                    "gagal unduh section %d (%.1f-%.1f), fallback unduh video penuh: %s",
+                    index,
+                    item.start,
+                    item.end,
+                    exc,
+                )
+                for path, _ in sections:
+                    os.remove(path)
+                sections = []
+                break
             path = _find_media(workdir, f"section-{index:02d}")
             if not path:
                 raise RuntimeError(
@@ -263,6 +326,13 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
             for path, _ in sections:
                 os.remove(path)
             sections = []
+        elif any(
+            [await asyncio.to_thread(_section_video_lags_audio, path) for path, _ in sections]
+        ):
+            log.warning("section A/V tidak sinkron (video mulai lebih lambat), fallback unduh video penuh")
+            for path, _ in sections:
+                os.remove(path)
+            sections = []
         else:
             sections = [
                 (await asyncio.to_thread(_ensure_opencv_readable, path), offset)
@@ -271,10 +341,11 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     if not sections and job.mode == "auto" and job.max_source_sec:
         # Batas pemindaian sumber: unduh hanya 0–limit sebagai satu section
         # (offset 0, jadi timestamp identik dengan video asli). Section gagal
-        # / tanpa stream video -> jatuh ke unduhan video penuh di bawah.
+        # / tanpa stream video / A/V tidak sinkron -> jatuh ke unduhan video
+        # penuh di bawah.
         limit = float(job.max_source_sec)
         await _emit(on_progress, "download", 0, f"mengunduh 0-{limit:.0f} detik")
-        cmd = _yt_dlp_base() + [
+        cmd = _yt_dlp_base(sections=True) + [
             "--download-sections",
             f"*0.000-{limit:.3f}",
             "--force-keyframes-at-cuts",
@@ -282,13 +353,21 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
             os.path.join(workdir, "source.%(ext)s"),
             job.url,
         ]
-        await asyncio.to_thread(_run, cmd)
-        path = _find_video(workdir)
-        if path and await asyncio.to_thread(_has_video, path):
-            video = await asyncio.to_thread(_ensure_opencv_readable, path)
-        elif path:
-            log.warning("section batas sumber tanpa stream video, fallback unduh penuh")
-            os.remove(path)
+        try:
+            await asyncio.to_thread(_run, cmd)
+        except Exception as exc:
+            log.warning("gagal unduh section batas sumber, fallback unduh penuh: %s", exc)
+        else:
+            path = _find_video(workdir)
+            if path and await asyncio.to_thread(_has_video, path):
+                if await asyncio.to_thread(_section_video_lags_audio, path):
+                    log.warning("section batas sumber A/V tidak sinkron, fallback unduh penuh")
+                    os.remove(path)
+                else:
+                    video = await asyncio.to_thread(_ensure_opencv_readable, path)
+            elif path:
+                log.warning("section batas sumber tanpa stream video, fallback unduh penuh")
+                os.remove(path)
 
     if not sections and not video:
         await _emit(on_progress, "download", 0, "mengunduh video")
