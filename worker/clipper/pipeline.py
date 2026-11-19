@@ -98,8 +98,13 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
         "--no-playlist",
         "--write-subs",
         "--write-auto-subs",
+        # 429 pada subtitle tidak boleh menggagalkan unduhan video.
+        "--no-abort-on-error",
+        # Jangan minta subtitle hasil terjemahan otomatis (sumber 429).
+        "--extractor-args",
+        "youtube:skip=translated_subs",
         "--sub-langs",
-        "id.*,en.*",
+        "id,id-orig,en,en-orig",
         "--sub-format",
         "vtt",
         "--convert-subs",
