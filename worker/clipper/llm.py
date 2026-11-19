@@ -182,10 +182,12 @@ def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> floa
 
 
 def title_from_cues(cues: Sequence[Cue], start: float, end: float) -> str:
-    for cue in cues:
-        if cue.start < end and cue.end > start and cue.text.strip():
-            return cue.text.strip()[:70]
-    return f"Clip {start:.0f}-{end:.0f} detik"
+    """Judul fallback: timestamp ringkas, bukan transkrip mentah."""
+    def clock(seconds: float) -> str:
+        total = max(0, int(seconds))
+        return f"{total // 60:02d}:{total % 60:02d}"
+
+    return f"Clip {clock(start)}\u2013{clock(end)}"
 
 
 def validate_moments(

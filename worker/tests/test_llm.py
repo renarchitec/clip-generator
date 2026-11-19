@@ -66,3 +66,13 @@ def test_fallback_moments_fills_requested_count():
 
 def test_fallback_moments_no_cues():
     assert fallback_moments([], JobParams()) == []
+
+
+def test_fallback_moments_titles_use_timestamp_not_transcript():
+    cues = [Cue(0.0, 30.0, "halo semua selamat datang"), Cue(30.0, 60.0, "lanjut")]
+    moments = fallback_moments(cues, JobParams(clip_count=1, target_duration_sec=30.0))
+    assert moments
+    for moment in moments:
+        assert moment.title.startswith("Clip ")
+        assert "halo" not in moment.title
+        assert moment.title.count(":") == 2
