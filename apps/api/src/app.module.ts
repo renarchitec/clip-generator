@@ -6,6 +6,7 @@ import { AppConfigModule } from './config/app-config.module';
 import { validateEnv } from './config/env.validation';
 import { JobsModule } from './jobs/jobs.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SystemModule } from './system/system.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { PrismaModule } from './prisma/prisma.module';
     AuthModule,
     JobsModule,
     ClipsModule,
+    SystemModule,
   ],
 })
 export class AppModule {}

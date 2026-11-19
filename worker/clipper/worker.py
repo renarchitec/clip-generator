@@ -6,23 +6,59 @@ Kontrak data mengikuti packages/shared/src/index.ts.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
+from datetime import datetime, timezone
 
 import redis.asyncio as redis
 from bullmq import Worker
 
-from . import models, pipeline
+from . import llm, models, pipeline
 
 log = logging.getLogger("clipper.worker")
 
 QUEUE_NAME = models.QUEUE_NAME
 CONCURRENCY = 1
 
+# Kunci status LLM untuk UI. Harus sama dengan apps/api/src/system/llm-status.constants.ts.
+LLM_STATUS_KEY = "worker:status:llm"
+LLM_STATUS_TTL = 90
+LLM_STATUS_INTERVAL = 30
+
 
 def clips_dir() -> str:
     return os.getenv("CLIPS_DIR", "/data/clips")
+
+
+def build_llm_status_payload() -> dict:
+    base_url = (os.getenv("LLM_BASE_URL") or "").strip()
+    api_key = (os.getenv("LLM_API_KEY") or "").strip()
+    model = (os.getenv("LLM_MODEL") or "").strip()
+    configured = bool(base_url and api_key and model)
+
+    return {
+        "configured": configured,
+        "model": model or None,
+        "lastCall": llm.last_llm_call(),
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def write_llm_status(redis_client: redis.Redis | None) -> None:
+    """Best-effort tulis status LLM ke Redis; jangan pernah lempar error ke pemanggil."""
+    if redis_client is None:
+        return
+    try:
+        payload = build_llm_status_payload()
+        await redis_client.set(
+            LLM_STATUS_KEY,
+            json.dumps(payload),
+            ex=LLM_STATUS_TTL,
+        )
+    except Exception as exc:
+        log.warning("gagal memperbarui status LLM di redis: %s", exc)
 
 
 async def handle_job(job, token: str | None = None, redis_client: redis.Redis | None = None):
@@ -64,6 +100,7 @@ async def handle_job(job, token: str | None = None, redis_client: redis.Redis | 
                 await redis_client.delete(models.CANCEL_KEY.format(data.job_id))
             except Exception:
                 pass
+        await write_llm_status(redis_client)
 
 
 async def main() -> None:
@@ -86,6 +123,16 @@ async def main() -> None:
         },
     )
 
+    async def _status_loop():
+        while True:
+            await write_llm_status(redis_client)
+            try:
+                await asyncio.sleep(LLM_STATUS_INTERVAL)
+            except asyncio.CancelledError:
+                break
+
+    status_task = asyncio.create_task(_status_loop())
+
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
@@ -102,6 +149,11 @@ async def main() -> None:
         await stop.wait()
     finally:
         log.info("worker berhenti, menunggu job aktif selesai")
+        status_task.cancel()
+        try:
+            await status_task
+        except asyncio.CancelledError:
+            pass
         await worker.close()
 
 

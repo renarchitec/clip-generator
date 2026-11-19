@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .models import DEFAULT_CLIP_COUNT, DEFAULT_TARGET_DURATION_SEC, JobParams
@@ -26,6 +27,32 @@ MAX_TRANSCRIPT_CHARS = 24000
 _FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.S)
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 _LIST_KEYS = ("moments", "clips", "results", "result", "data")
+
+# Hasil panggilan LLM terakhir, dipakai worker untuk mengisi status. Tidak
+# menyimpan api key maupun isi prompt.
+_LAST_CALL: Optional[Dict[str, Any]] = None
+
+
+def last_llm_call() -> Optional[Dict[str, Any]]:
+    """Salinan hasil panggilan LLM terakhir atau None bila belum pernah ada."""
+    return dict(_LAST_CALL) if _LAST_CALL is not None else None
+
+
+def _record_call(ok: bool, error: str = "") -> None:
+    global _LAST_CALL
+    payload: Dict[str, Any] = {
+        "ok": ok,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not ok and error:
+        payload["error"] = error[:200]
+    _LAST_CALL = payload
+
+
+def _short_error(exc: BaseException) -> str:
+    text = str(exc).strip()
+    first = text.splitlines()[0].strip() if text else exc.__class__.__name__
+    return first[:200]
 
 
 @dataclass
@@ -312,6 +339,10 @@ def select_moments(
         try:
             raw = _complete(base_url, api_key, model, prompt, temperature=0.2 if attempt == 1 else 0.0)
         except Exception as exc:
+            detail = _short_error(exc)
+            if api_key:
+                detail = detail.replace(api_key, "***")[:200]
+            _record_call(False, detail)
             raise RuntimeError(f"panggilan LLM gagal: {exc}") from exc
 
         try:
@@ -322,7 +353,9 @@ def select_moments(
 
         moments = validate_moments(items, cues, params)
         if moments:
+            _record_call(True)
             return moments
         log.warning("tidak ada momen valid dari LLM pada percobaan %s", attempt)
 
+    _record_call(False, "LLM tidak menghasilkan momen valid setelah 2 percobaan")
     raise RuntimeError("LLM tidak menghasilkan momen valid setelah 2 percobaan")
