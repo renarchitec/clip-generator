@@ -84,23 +84,13 @@ def _find_subtitles(workdir: str) -> Optional[str]:
     return files[0]
 
 
-async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
-    """yt-dlp: mp4 terbaik + subtitle id/en (auto maupun manual) dalam VTT."""
-    os.makedirs(workdir, exist_ok=True)
-    await _emit(on_progress, "download", 0, "mengunduh video")
-
+def _fetch_subtitles_best_effort(url: str, workdir: str) -> None:
+    """Subtitle best-effort: YouTube rate-limit (429) tidak boleh batalkan job."""
     cmd = [
         "yt-dlp",
-        "-f",
-        "bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b",
-        "--merge-output-format",
-        "mp4",
-        "--no-playlist",
+        "--skip-download",
         "--write-subs",
         "--write-auto-subs",
-        # 429 pada subtitle tidak boleh menggagalkan unduhan video.
-        "--no-abort-on-error",
-        # Jangan minta subtitle hasil terjemahan otomatis (sumber 429).
         "--extractor-args",
         "youtube:skip=translated_subs",
         "--sub-langs",
@@ -113,6 +103,31 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
         "--no-warnings",
         "-o",
         os.path.join(workdir, "source.%(ext)s"),
+        url,
+    ]
+    try:
+        _run(cmd)
+    except Exception as exc:
+        log.warning("gagal unduh subtitle yt-dlp (lanjut fallback Whisper): %s", exc)
+
+
+async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
+    """yt-dlp: mp4 terbaik; subtitle via best-effort terpisah (fallback ke Whisper)."""
+    os.makedirs(workdir, exist_ok=True)
+    await _emit(on_progress, "download", 0, "mengunduh video")
+
+    # 1. Download video murni — kebal dari subtitle 429
+    cmd = [
+        "yt-dlp",
+        "-f",
+        "bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b",
+        "--merge-output-format",
+        "mp4",
+        "--no-playlist",
+        "--no-progress",
+        "--no-warnings",
+        "-o",
+        os.path.join(workdir, "source.%(ext)s"),
         job.url,
     ]
     await asyncio.to_thread(_run, cmd)
@@ -120,6 +135,9 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     video = _find_video(workdir)
     if not video:
         raise RuntimeError("yt-dlp selesai tanpa menghasilkan file video")
+
+    # 2. Coba ambil subtitle (best-effort); gagal = fallback Whisper di transcribe()
+    await asyncio.to_thread(_fetch_subtitles_best_effort, job.url, workdir)
 
     subtitles = _find_subtitles(workdir)
     await _emit(on_progress, "download", 100, "video siap diunduh")
