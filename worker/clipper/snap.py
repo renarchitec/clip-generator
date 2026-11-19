@@ -12,6 +12,9 @@ from .subtitles import Cue
 
 # Geseran maksimum yang masih diterima saat mencari batas cue.
 SNAP_WINDOW = 3.0
+# Batas akhir boleh melihat lebih jauh: lebih baik memanjang sampai kalimat
+# selesai daripada berhenti di cue arbitrer di tengah pemikiran.
+END_SNAP_WINDOW = 6.0
 # Jeda antar-cue yang dianggap batas pemikiran.
 PAUSE_GAP = 0.4
 # Bantalan kecil: jangan memotong konsonan pertama / ekor kata terakhir.
@@ -52,18 +55,27 @@ def _end_candidates(cues: Sequence[Cue]) -> List[Tuple[float, bool]]:
     return result
 
 
-def _pick(candidates: Sequence[Tuple[float, bool]], target: float, forward: bool) -> float:
-    """Batas terdekat dalam jendela; batas kuat diutamakan."""
-    inside = [
-        item
-        for item in candidates
-        if abs(item[0] - target) <= SNAP_WINDOW and (item[0] >= target if forward else item[0] <= target)
-    ]
+def _nearest(items: Sequence[Tuple[float, bool]], target: float) -> float:
+    return min(items, key=lambda item: abs(item[0] - target))[0]
+
+
+def _pick_start(candidates: Sequence[Tuple[float, bool]], target: float) -> float:
+    """Batas terdekat <= target dalam SNAP_WINDOW; batas kuat diutamakan."""
+    inside = [item for item in candidates if target - SNAP_WINDOW <= item[0] <= target]
     if not inside:
         return target
     strong = [item for item in inside if item[1]]
-    pool = strong or inside
-    return min(pool, key=lambda item: abs(item[0] - target))[0]
+    return _nearest(strong or inside, target)
+
+
+def _pick_end(candidates: Sequence[Tuple[float, bool]], target: float) -> float:
+    """Batas kuat (kalimat selesai / jeda) dicari sampai END_SNAP_WINDOW;
+    tanpa batas kuat, jatuh ke cue terdekat dalam SNAP_WINDOW saja."""
+    strong = [item for item in candidates if item[1] and target <= item[0] <= target + END_SNAP_WINDOW]
+    if strong:
+        return _nearest(strong, target)
+    inside = [item for item in candidates if target <= item[0] <= target + SNAP_WINDOW]
+    return _nearest(inside, target) if inside else target
 
 
 def _clamp(start: float, end: float, min_duration: float, max_duration: float, total: float) -> Tuple[float, float]:
@@ -84,14 +96,15 @@ def snap_window(
     min_duration: float,
     max_duration: float,
 ) -> Tuple[float, float]:
-    """Geser start ke awal cue terdekat (<= start) dan end ke akhir cue
-    terdekat (>= end) dalam SNAP_WINDOW, beri bantalan, jaga durasi."""
+    """Geser start ke awal cue terdekat (<= start) dalam SNAP_WINDOW dan end ke
+    batas kuat terdekat (>= end) sampai END_SNAP_WINDOW, beri bantalan, jaga
+    durasi, clamp ke rentang transkrip."""
     if not cues:
         return start, end
 
     total = cues[-1].end
-    start = _pick(_start_candidates(cues), start, forward=False) - START_PAD
-    end = _pick(_end_candidates(cues), end, forward=True) + END_PAD
+    start = _pick_start(_start_candidates(cues), start) - START_PAD
+    end = _pick_end(_end_candidates(cues), end) + END_PAD
     return _clamp(start, end, min_duration, max_duration, total)
 
 

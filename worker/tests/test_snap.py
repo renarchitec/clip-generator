@@ -77,3 +77,60 @@ def test_snap_windows_trims_overlap():
 
 def test_snap_windows_no_cues_passthrough():
     assert snap_windows([], [(1.0, 2.0), (3.0, 4.0)], 1.0, 10.0) == [(1.0, 2.0), (3.0, 4.0)]
+
+
+# --- Batas akhir: utamakan kalimat/jeda selesai, bukan cue arbitrer ---
+
+
+def test_snap_end_extends_to_sentence_boundary_beyond_window():
+    cues = [
+        Cue(0.0, 2.0, "intro."),
+        Cue(2.0, 6.0, "dan kemudian dia"),
+        Cue(6.0, 9.0, "mulai bercerita"),
+        Cue(9.0, 10.0, "tentang masa kecilnya."),
+        Cue(10.0, 13.0, "sisa transkrip."),
+    ]
+    _, end = snap_window(cues, 1.0, 5.0, 1.0, 100.0)
+    # Target jatuh di tengah pemikiran: batas kuat 10.0 (kalimat selesai,
+    # 5s dari target, di luar SNAP_WINDOW) menang atas cue arbitrer 6.0.
+    assert end == pytest.approx(10.0 + END_PAD)
+
+
+def test_snap_end_extends_to_pause_boundary_beyond_window():
+    cues = [
+        Cue(0.0, 3.0, "tanpa tanda baca"),
+        Cue(3.0, 6.0, "masih satu pemikiran"),
+        Cue(6.0, 9.0, "cerita berlanjut"),
+        Cue(9.5, 11.0, "topik baru"),  # jeda 0.5s >= PAUSE_GAP setelah 9.0
+    ]
+    _, end = snap_window(cues, 1.0, 5.0, 1.0, 100.0)
+    # Jeda 0.5s dianggap batas pemikiran: end ditarik ke 9.0, bukan 6.0.
+    assert end == pytest.approx(9.0 + END_PAD)
+
+
+def test_snap_end_without_strong_keeps_nearby_cue():
+    cues = [Cue(i * 5.0, i * 5.0 + 5.0, "tanpa titik") for i in range(4)]
+    _, end = snap_window(cues, 0.0, 8.0, 1.0, 100.0)
+    # Tidak ada batas kuat sama sekali: jatuh ke cue terdekat (10.0),
+    # tidak memaksakan geseran jauh.
+    assert end == pytest.approx(10.0 + END_PAD)
+
+
+def test_snap_end_extension_respects_max_duration():
+    cues = [
+        Cue(0.0, 5.0, "intro."),
+        Cue(5.0, 9.9, "isi tanpa titik"),
+        Cue(10.0, 11.0, "payoff."),
+    ]
+    start, end = snap_window(cues, 4.0, 8.0, 1.0, 5.0)
+    # End tetap sampai kalimat selesai (cue 11.0 = akhir transkrip,
+    # pad di-clamp), durasi maksimum dijaga.
+    assert end == pytest.approx(11.0)
+    assert end - start <= 5.0 + 1e-9
+
+
+def test_snap_end_never_exceeds_transcript_end():
+    cues = [Cue(0.0, 9.9, "hampir akhir"), Cue(10.0, 12.0, "kalimat penutup.")]
+    _, end = snap_window(cues, 1.0, 9.0, 1.0, 100.0)
+    assert end <= cues[-1].end + 1e-9
+    assert end == pytest.approx(12.0)
