@@ -1,11 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Response } from 'express';
 import type { Clip } from '@prisma/client';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveClipPath } from './clip-path';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.mp4': 'video/mp4',
@@ -87,6 +88,33 @@ export class ClipsService {
     this.send(absolutePath, res);
   }
 
+  /** Hapus clip milik user: file di CLIPS_DIR (ENOENT diabaikan) lalu baris DB. */
+  async remove(id: string, userId: string): Promise<void> {
+    const clip = await this.prisma.clip.findFirst({
+      where: { id, job: { userId } },
+    });
+    if (!clip) throw new NotFoundException(`Clip ${id} tidak ditemukan.`);
+
+    const absolutePath = this.clipPath(clip);
+
+    try {
+      await unlink(absolutePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
+    await this.prisma.clip.deleteMany({ where: { id, job: { userId } } });
+  }
+
+  /** Path selalu dibentuk dari id database, lalu diverifikasi tetap di dalam CLIPS_DIR. */
+  private clipPath(clip: Clip): string {
+    const target = resolveClipPath(this.config.clipsDir, clip.filePath);
+    if (!target) {
+      throw new NotFoundException(`Clip ${clip.id} tidak ditemukan.`);
+    }
+    return target;
+  }
+
   private send(
     absolutePath: string,
     res: Response,
@@ -115,12 +143,7 @@ export class ClipsService {
       throw new NotFoundException(`Clip ${id} tidak ditemukan.`);
     }
 
-    const base = path.resolve(this.config.clipsDir);
-    const absolutePath = path.resolve(base, clip.filePath);
-
-    if (absolutePath !== base && !absolutePath.startsWith(base + path.sep)) {
-      throw new NotFoundException(`Clip ${id} tidak ditemukan.`);
-    }
+    const absolutePath = this.clipPath(clip);
 
     let size: number;
     try {

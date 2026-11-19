@@ -25,6 +25,7 @@ JobMode = Literal["auto", "manual"]
 
 DEFAULT_CLIP_COUNT = 3
 DEFAULT_TARGET_DURATION_SEC = 60.0
+MAX_DESCRIPTION_CHARS = 500
 
 # job_id dipakai sebagai nama folder di CLIPS_DIR. Batasi keras supaya nilai
 # dari antrean tidak bisa keluar dari CLIPS_DIR.
@@ -95,6 +96,7 @@ class JobData:
     job_id: str
     url: str
     mode: JobMode = "auto"
+    description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
 
@@ -103,6 +105,7 @@ class JobData:
             "jobId": self.job_id,
             "url": self.url,
             "mode": self.mode,
+            "description": self.description,
             "params": self.params.to_dict(),
             "ranges": [item.to_dict() for item in self.ranges],
         }
@@ -129,10 +132,18 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
     raw_ranges = _first(data, "ranges", default=[]) or []
     ranges = [ManualRange.from_dict(item) for item in raw_ranges if isinstance(item, MappingABC)]
 
+    description = _first(data, "description")
+    description = (
+        str(description).strip()[:MAX_DESCRIPTION_CHARS]
+        if isinstance(description, str) and str(description).strip()
+        else None
+    )
+
     return JobData(
         job_id=job_id,
         url=url,
         mode=mode,  # type: ignore[arg-type]
+        description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,
     )

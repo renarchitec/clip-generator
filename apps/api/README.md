@@ -40,12 +40,13 @@ diulang oleh restart policy Dokploy/Docker (tanpa retry internal).
 
 | Method | Path | Keterangan |
 | --- | --- | --- |
-| POST | `/api/jobs` | Body: `url`, `mode` (`auto`\|`manual`), `clipCount` 1-10 (default 3), `targetDurationSec` 15-180 (default 45), `ranges` (`{start,end}`, wajib saat `manual`) |
-| GET | `/api/jobs` | Daftar job, terbaru dulu, plus `clipsCount` |
+| POST | `/api/jobs` | Body: `url`, `mode` (`auto`\|`manual`), `clipCount` 1-10 (default 3), `targetDurationSec` 15-180 (default 45), `ranges` (`{start,end}`, wajib saat `manual`), `description` opsional (trim, maks 500 karakter, kosong -> null) |
+| GET | `/api/jobs` | Daftar job, terbaru dulu, plus `clipsCount`, `description` |
 | GET | `/api/jobs/:id` | Job beserta clip |
 | GET | `/api/jobs/:id/events` | SSE; state sekarang dikirim dulu, lalu setiap update |
 | GET | `/api/clips/:id/stream` | Preview, mendukung `Range` (206) |
 | GET | `/api/clips/:id/download` | Unduh, mengisi `downloaded_at` |
+| DELETE | `/api/clips/:id` | Hapus file di `CLIPS_DIR` (ENOENT diabaikan) lalu baris DB. 204; 404 bila tidak ada / bukan milik user |
 
 Host URL yang diterima: `youtube.com`, `youtu.be`, `tiktok.com`, `instagram.com` (termasuk subdomain). Selain itu 400.
 

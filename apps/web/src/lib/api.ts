@@ -1,7 +1,7 @@
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled"
-export type Job = { id: string; url: string; mode: string; clipCount: number; targetDurationSec: number; status: JobStatus; stage: "download" | "transcribe" | "select" | "render" | "save" | null; progress: number; message: string | null; error: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null; clipsCount: number }
+export type Job = { id: string; url: string; mode: string; clipCount: number; targetDurationSec: number; description: string | null; status: JobStatus; stage: "download" | "transcribe" | "select" | "render" | "save" | null; progress: number; message: string | null; error: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null; clipsCount: number }
 export type Clip = { id: string; title: string; startSec: number; endSec: number; downloadedAt: string | null; deletedAt: string | null }
-export type JobSnapshot = { id: string; url: string; mode: string; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
+export type JobSnapshot = { id: string; url: string; mode: string; description: string | null; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
 export type User = { id: string; email: string; name: string | null }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

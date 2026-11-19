@@ -30,6 +30,8 @@ export interface JobData {
   jobId: string;
   url: string;
   mode: JobMode;
+  /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
+  description?: string | null;
   params: JobParams;
   /** hanya dipakai mode manual */
   ranges: ManualRange[];

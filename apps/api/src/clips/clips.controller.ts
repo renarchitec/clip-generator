@@ -1,4 +1,12 @@
-import { Controller, Get, Headers, Param, Res } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  HttpCode,
+  Param,
+  Res,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { ClipsService } from './clips.service';
@@ -24,5 +32,14 @@ export class ClipsController {
     @CurrentUser() user: { id: string },
   ) {
     return this.clips.download(id, res, user.id);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<void> {
+    await this.clips.remove(id, user.id);
   }
 }

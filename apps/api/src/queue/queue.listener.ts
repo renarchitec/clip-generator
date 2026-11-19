@@ -187,6 +187,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
     this.jobEvents.publish({
       id: job.id,
       url: job.url,
+      description: job.description ?? null,
       mode: job.mode,
       status: job.status,
       stage: job.stage,

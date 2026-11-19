@@ -4,6 +4,7 @@ import { Observable, Subject } from 'rxjs';
 export interface JobSnapshot {
   id: string;
   url: string;
+  description: string | null;
   mode: string;
   status: string;
   stage: string | null;

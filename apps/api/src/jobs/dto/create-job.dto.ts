@@ -5,6 +5,7 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  IsString,
   IsUrl,
   Max,
   Min,
@@ -47,4 +48,9 @@ export class CreateJobDto {
   @ValidateNested({ each: true })
   @Type(() => ManualRangeDto)
   ranges?: ManualRangeDto[];
+
+  /** Instruksi preferensi konten untuk pemilihan momen; opsional. */
+  @IsOptional()
+  @IsString()
+  description?: string;
 }

@@ -231,7 +231,13 @@ async def select(job: JobData, cues: Sequence[Cue], on_progress=None) -> List[ll
         if not moments:
             raise ValueError("semua range manual tidak valid (end harus > start)")
     else:
-        moments = await asyncio.to_thread(llm.select_moments, cues, job.params, os.environ)
+        moments = await asyncio.to_thread(
+            llm.select_moments,
+            cues,
+            job.params,
+            os.environ,
+            job.description,
+        )
 
     if not moments:
         raise RuntimeError("tidak ada momen yang bisa dirender")

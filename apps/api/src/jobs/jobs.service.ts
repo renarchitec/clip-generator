@@ -30,10 +30,12 @@ export class JobsService {
   async create(dto: CreateJobDto, userId: string) {
     const url = assertAllowedUrl(dto.url);
     const ranges = normalizeRanges(dto);
+    const description = normalizeDescription(dto.description);
 
     const job = await this.prisma.job.create({
       data: {
         url,
+        description,
         mode: dto.mode,
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
@@ -46,6 +48,7 @@ export class JobsService {
       jobId: job.id,
       url,
       mode: dto.mode,
+      description,
       params: {
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
@@ -160,6 +163,7 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
   return {
     id: job.id,
     url: job.url,
+    description: job.description ?? null,
     mode: job.mode,
     status: job.status,
     stage: job.stage,
@@ -202,6 +206,19 @@ function assertAllowedUrl(raw: string): string {
   }
 
   return url.toString();
+}
+
+/** trim + batas 500 karakter; kosong -> null. */
+function normalizeDescription(raw: string | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 500) {
+    throw new BadRequestException(
+      `description maksimal 500 karakter (diterima ${trimmed.length}).`,
+    );
+  }
+  return trimmed;
 }
 
 function normalizeRanges(dto: CreateJobDto): ManualRange[] {
