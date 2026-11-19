@@ -177,6 +177,31 @@ def _has_video(path: str) -> bool:
     return bool(str(out or "").strip())
 
 
+def _opencv_readable(path: str) -> bool:
+    try:
+        import cv2
+    except Exception:
+        return True  # tanpa OpenCV tidak ada face tracking yang perlu dilindungi
+    capture = cv2.VideoCapture(path)
+    try:
+        ok, frame = capture.read() if capture.isOpened() else (False, None)
+        return bool(ok and frame is not None)
+    finally:
+        capture.release()
+
+
+def _ensure_opencv_readable(path: str) -> str:
+    """Section yt-dlp bisa ber-codec (mis. AV1) yang tak didekode OpenCV; transcode ke H.264."""
+    if _opencv_readable(path):
+        return path
+    fixed = os.path.splitext(path)[0] + "-h264.mp4"
+    _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", path,
+          "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast",
+          "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", fixed])
+    os.remove(path)
+    return fixed
+
+
 async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     """yt-dlp: mp4 terbaik + subtitle asli; tanpa subtitle job gagal.
 
@@ -219,6 +244,11 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
             for path, _ in sections:
                 os.remove(path)
             sections = []
+        else:
+            sections = [
+                (await asyncio.to_thread(_ensure_opencv_readable, path), offset)
+                for path, offset in sections
+            ]
     if not sections:
         await _emit(on_progress, "download", 0, "mengunduh video")
         cmd = _yt_dlp_base() + [
