@@ -263,6 +263,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       reframe: job.reframe,
       captions: job.captions,
       twoSpeakers: job.twoSpeakers,
+      facecam: job.facecam,
       aspectRatio: job.aspectRatio,
       maxSourceSec: job.maxSourceSec ?? null,
       status: job.status,

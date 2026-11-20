@@ -9,6 +9,7 @@ export interface JobSnapshot {
   reframe: string;
   captions: boolean;
   twoSpeakers: boolean;
+  facecam: boolean;
   aspectRatio: string;
   clipCount?: number;
   targetDurationSec?: number;

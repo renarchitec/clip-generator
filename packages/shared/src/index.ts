@@ -55,6 +55,8 @@ export interface JobData {
   captions: boolean;
   /** tata letak dua pembicara (panel atas/bawah 1080x960 vstack); default false; hanya berlaku untuk 9:16 */
   twoSpeakers: boolean;
+  /** tata letak streamer (facecam di atas, gameplay di bawah); default false; hanya 9:16 dan eksklusif dengan twoSpeakers */
+  facecam: boolean;
   /** rasio output klip; default 9:16; 16:9 mengabaikan reframe */
   aspectRatio: AspectRatio;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */

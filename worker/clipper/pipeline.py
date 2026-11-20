@@ -138,7 +138,9 @@ def _find_subtitles(workdir: str) -> Optional[str]:
 
 
 def _subtitle_cmd(url: str, workdir: str, auto: bool) -> List[str]:
-    cmd = ["yt-dlp", "--skip-download"]
+    # --ignore-errors: satu bahasa kena 429 (mis. `id` hasil terjemahan) tidak boleh
+    # membatalkan bahasa lain (en-orig) dalam perintah yang sama.
+    cmd = ["yt-dlp", "--skip-download", "--ignore-errors"]
     cmd.append("--write-auto-subs" if auto else "--write-subs")
     cmd += [
         "--extractor-args",
@@ -577,6 +579,42 @@ def _two_speaker_graph(
     return graph, label
 
 
+def _facecam_box_for(video: str, moment: llm.Moment) -> Optional[Tuple[int, int, int, int]]:
+    """Kotak wajah facecam (piksel sumber); None -> fallback reframe biasa."""
+    out = _run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "csv=p=0", video,
+        ]
+    )
+    src_w, src_h = (int(part) for part in out.strip().split(",")[:2])
+    frames = reframe_mod.sample_face_frames(video, moment.start, moment.end)
+    return reframe_mod.facecam_box(frames, src_w, src_h)
+
+
+def _facecam_graph(
+    box: Tuple[int, int, int, int],
+    ass_path: Optional[str],
+) -> tuple[List[str], str]:
+    """filter_complex facecam: panel wajah 1080x640 di atas gameplay 1080x1280.
+
+    Kotak dari `facecam_box` (piksel sumber); panel bawah crop 27:32 full-height
+    di tengah frame, keduanya diskalakan lalu ditumpuk (total 1080x1920).
+    """
+    x, y, w, h = box
+    graph = [
+        "[0:v]split=2[fc0][fc1]",
+        f"[fc0]crop={w}:{h}:{x}:{y},scale=1080:640[top]",
+        "[fc1]crop=w='min(ih*27/32,in_w)':h=ih:x='(in_w-out_w)/2':y=0,scale=1080:1280[bot]",
+        "[top][bot]vstack=inputs=2[v]",
+    ]
+    label = "[v]"
+    if ass_path:
+        graph.append(f"[v]subtitles={_ffmpeg_filter_path(ass_path)}[vout]")
+        label = "[vout]"
+    return graph, label
+
+
 def _render_one(
     video: str,
     moment: llm.Moment,
@@ -586,14 +624,18 @@ def _render_one(
     reframe: str = "face_tracking",
     captions: bool = True,
     two_speakers: bool = False,
+    facecam: bool = False,
     timeline_offset: float = 0.0,
     aspect_ratio: str = "9:16",
 ) -> None:
     width, height = OUTPUT_SIZES.get(str(aspect_ratio), OUTPUT_SIZES["9:16"])
     landscape = aspect_ratio == "16:9"
     if aspect_ratio != "9:16":
-        # Defensif: dua pembicara hanya berlaku untuk 9:16 (API sudah menormalkan).
+        # Defensif: dua pembicara/facecam hanya berlaku untuk 9:16 (API sudah menormalkan).
         two_speakers = False
+        facecam = False
+    elif two_speakers:
+        facecam = False  # dua pembicara menang atas facecam
     # Font/margin diskalakan dari nilai referensi 9:16 relatif tinggi output;
     # 16:9 boleh memuat baris lebih panjang (6 kata / 32 karakter).
     font_size = max(1, round(FONT_SIZE * height / 1920))
@@ -643,10 +685,23 @@ def _render_one(
         )
         cmd += ["-filter_complex", ";".join(graph), "-map", label, "-map", "0:a:0?"]
     else:
-        filters = _reframe_filters(reframe, video, moment, width, height, landscape)
-        if burn_captions:
-            filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
-        cmd += ["-vf", ",".join(filters), "-map", "0:v:0", "-map", "0:a:0?"]
+        graph: Optional[tuple[List[str], str]] = None
+        if facecam:
+            try:
+                box = _facecam_box_for(video, moment)
+            except Exception as exc:
+                log.warning("facecam: deteksi wajah gagal, fallback reframe biasa: %s", exc)
+                box = None
+            if box:
+                graph = _facecam_graph(box, ass_path if burn_captions else None)
+        if graph:
+            filters, label = graph
+            cmd += ["-filter_complex", ";".join(filters), "-map", label, "-map", "0:a:0?"]
+        else:
+            filters = _reframe_filters(reframe, video, moment, width, height, landscape)
+            if burn_captions:
+                filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
+            cmd += ["-vf", ",".join(filters), "-map", "0:v:0", "-map", "0:a:0?"]
 
     cmd += [
         "-c:v",
@@ -733,6 +788,7 @@ async def render(
             job.reframe,
             job.captions,
             job.two_speakers,
+            job.facecam,
             offset,
             job.aspect_ratio,
         )

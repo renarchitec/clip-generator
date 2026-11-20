@@ -68,6 +68,7 @@ Kebutuhan utama:
    - Opsi takarir (`captions`): aktif (default) atau nonaktif.
    - Pilihan rasio output (`aspectRatio`): `9:16` (default, 1080x1920), `1:1` (1080x1080, reframe diterapkan ke target persegi), atau `16:9` (1920x1080 landscape; sumber di-skala pas dan di-pad hitam bila bukan 16:9 — reframe diabaikan).
    - Opsi dua pembicara (`twoSpeakers`): nonaktif (default) atau aktif; hanya berlaku untuk rasio 9:16 (API menormalkan ke `false` untuk 1:1/16:9). Bila aktif, klip 1080x1920 dibagi dua panel 1080x960 (atas/bawah) berisi dua pembicara dominan; pilihan reframe diabaikan.
+   - Opsi layout streamer (`facecam`): nonaktif (default) atau aktif; hanya 9:16 dan eksklusif dengan `twoSpeakers` (API menormalkan ke `false` bila rasio bukan 9:16 atau `twoSpeakers` aktif). Bila aktif, facecam (wajah terkecil yang terdeteksi FaceMesh) di-crop ke panel atas 1080x640 dan gameplay (crop tengah) ke panel bawah 1080x1280; pilihan reframe diabaikan. Bila wajah tidak terdeteksi (<50% sampel), fallback ke reframe biasa.
 4. **Pantau** — job masuk antrean `clip-jobs` di BullMQ; dashboard dan halaman detail menampilkan tahapan nyata secara real-time via Server-Sent Events (`download` → `transcribe` → `select` → `render` → `save`).
 5. **Kontrol** — pengguna dapat membatalkan job yang sedang berjalan via tombol Batal (`POST /api/jobs/:id/cancel`), atau mengulang job `failed`/`cancelled` langsung (`POST /api/jobs/:id/retry` membuat job baru dari konfigurasi lama tanpa mengubah job lama).
 6. **Tinjau & Putar** — buka detail job, putar klip di player 9:16 (`GET /api/clips/:id/stream` mendukung HTTP byte-range), salin judul klip.
@@ -89,6 +90,7 @@ Kebutuhan utama:
 | **P0** | Indikator status LLM worker (`GET /api/system/llm-status` + Redis heartbeat `worker:status:llm`) | Selesai |
 | **P0** | Tinjau momen sebelum memotong (`POST /api/previews` + `GET /api/previews/:id`: kandidat LLM + transkrip penuh → job manual) | Selesai |
 | **P0** | Gaya takarir "hook" (Anton, UPPERCASE, kata aktif kuning) dan tata letak dua pembicara (`twoSpeakers`: panel atas/bawah 1080x960) | Selesai |
+| **P0** | Layout streamer (`facecam`): facecam 1080x640 di atas, gameplay 1080x1280 di bawah | Selesai |
 | **P0** | Pilihan rasio output (`aspectRatio`): 9:16 (default) / 1:1 / 16:9 dengan takarir terskala per format | Selesai |
 | **P0** | Batas pemindaian sumber (`maxSourceSec`, 60–36000 detik, opsional): hanya bagian 0–limit yang dipindai/diunduh | Selesai |
 | **P0** | Pemulihan status job basi (rekonsiliasi DB ↔ state BullMQ tiap 60 detik, onCompleted idempoten) | Selesai |
@@ -156,7 +158,7 @@ Database menggunakan PostgreSQL dengan Prisma ORM.
 
 - **`users`** — `id` (UUID), `email` (unique), `name`, `passwordHash` (scrypt), `createdAt`.
 - **`sessions`** — `id` (UUID), `userId` (FK ke `users`, cascade delete), `tokenHash` (SHA-256 unique), `expiresAt`, `createdAt`.
-- **`jobs`** — `id` (UUID), `url`, `description` (opsional), `mode` (`auto` / `manual`), `reframe` (string, default `face_tracking`), `captions` (boolean, default `true`), `twoSpeakers` (boolean, default `false`, hanya berlaku untuk 9:16), `aspectRatio` (string, default `9:16`), `clipCount` (int), `targetDurationSec` (int), `maxSourceSec` (int opsional, 60–36000 detik, NULL = durasi penuh; hanya dipakai mode auto), `ranges` (JSON), `status` (`queued`, `running`, `done`, `failed`, `cancelled`), `stage`, `progress`, `message`, `error`, `userId` (FK ke `users`, set null), `createdAt`, `startedAt`, `finishedAt`.
+- **`jobs`** — `id` (UUID), `url`, `description` (opsional), `mode` (`auto` / `manual`), `reframe` (string, default `face_tracking`), `captions` (boolean, default `true`), `twoSpeakers` (boolean, default `false`, hanya berlaku untuk 9:16), `facecam` (boolean, default `false`, hanya 9:16 dan bila `twoSpeakers` nonaktif), `aspectRatio` (string, default `9:16`), `clipCount` (int), `targetDurationSec` (int), `maxSourceSec` (int opsional, 60–36000 detik, NULL = durasi penuh; hanya dipakai mode auto), `ranges` (JSON), `status` (`queued`, `running`, `done`, `failed`, `cancelled`), `stage`, `progress`, `message`, `error`, `userId` (FK ke `users`, set null), `createdAt`, `startedAt`, `finishedAt`.
 - **`clips`** — `id` (UUID), `jobId` (FK ke `jobs`, cascade delete), `title`, `startSec` (float), `endSec` (float), `filePath`, `downloadedAt` (timestamp opsional), `deletedAt` (timestamp opsional), `createdAt`.
 
 Preview momen **tidak** memakai tabel database. Data preview hidup di antrean BullMQ/Redis (`previews`); job preview yang selesai/gagal dibuang otomatis setelah 1 jam.

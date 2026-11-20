@@ -1,0 +1,1 @@
+ALTER TABLE "jobs" ADD COLUMN "facecam" BOOLEAN NOT NULL DEFAULT false;

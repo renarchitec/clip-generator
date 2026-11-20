@@ -17,6 +17,7 @@ const sample: ReviewDraft = {
   reframe: "face_tracking",
   captions: true,
   twoSpeakers: false,
+  facecam: false,
   aspectRatio: "9:16",
   maxSourceSec: null,
   clipCount: 3,
@@ -35,8 +36,9 @@ const sample: ReviewDraft = {
 saveReviewDraft(sample)
 assert.deepEqual(loadReviewDraft(), sample)
 
-store.set("clipper-review-draft", JSON.stringify({ ...sample, twoSpeakers: undefined, aspectRatio: undefined, maxSourceSec: undefined }))
+store.set("clipper-review-draft", JSON.stringify({ ...sample, twoSpeakers: undefined, facecam: undefined, aspectRatio: undefined, maxSourceSec: undefined }))
 assert.equal(loadReviewDraft()?.twoSpeakers, false)
+assert.equal(loadReviewDraft()?.facecam, false)
 assert.equal(loadReviewDraft()?.aspectRatio, "9:16")
 assert.equal(loadReviewDraft()?.maxSourceSec, null)
 

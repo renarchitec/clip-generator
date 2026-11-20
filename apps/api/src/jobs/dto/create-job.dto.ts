@@ -91,6 +91,11 @@ export class CreateJobDto {
   @IsBoolean()
   twoSpeakers: boolean = false;
 
+  /** Tata letak streamer (facecam di atas); default false. Hanya 9:16; eksklusif dengan twoSpeakers. */
+  @IsOptional()
+  @IsBoolean()
+  facecam: boolean = false;
+
   /** Rasio output klip; default 9:16. Untuk 1:1 dan 16:9, twoSpeakers dinormalisasi ke false. */
   @IsOptional()
   @IsIn(ASPECT_RATIOS)

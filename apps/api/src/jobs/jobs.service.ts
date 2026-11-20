@@ -42,6 +42,9 @@ export class JobsService {
     const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
     // twoSpeakers hanya berlaku untuk 9:16; dinormalisasi false untuk 1:1/16:9.
     const twoSpeakers = aspectRatio === '9:16' ? (dto.twoSpeakers ?? false) : false;
+    // facecam eksklusif dengan twoSpeakers; hanya berlaku untuk 9:16.
+    const facecam =
+      aspectRatio === '9:16' && !twoSpeakers ? (dto.facecam ?? false) : false;
     // Batas pemindaian sumber: null = durasi penuh; hanya dipakai mode auto.
     const maxSourceSec = dto.mode === 'auto' ? (dto.maxSourceSec ?? null) : null;
 
@@ -57,6 +60,7 @@ export class JobsService {
         clipCount: dto.clipCount,
         targetDurationSec: dto.targetDurationSec,
         maxSourceSec,
+        facecam,
         ranges: ranges as unknown as Prisma.InputJsonValue,
         userId,
       },
@@ -69,6 +73,7 @@ export class JobsService {
       reframe,
       captions,
       twoSpeakers,
+      facecam,
       aspectRatio,
       description,
       maxSourceSec,
@@ -199,6 +204,7 @@ export class JobsService {
     dto.reframe = old.reframe as ReframeMode;
     dto.captions = old.captions;
     dto.twoSpeakers = old.twoSpeakers;
+    dto.facecam = old.facecam;
     dto.aspectRatio = old.aspectRatio as AspectRatio;
     dto.description = old.description ?? undefined;
     dto.ranges = (old.ranges as ManualRange[] | null) ?? undefined;
@@ -279,6 +285,7 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
     reframe: job.reframe,
     captions: job.captions,
     twoSpeakers: job.twoSpeakers,
+    facecam: job.facecam,
     aspectRatio: job.aspectRatio,
     clipCount: job.clipCount,
     targetDurationSec: job.targetDurationSec,

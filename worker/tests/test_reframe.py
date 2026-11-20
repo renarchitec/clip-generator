@@ -5,12 +5,16 @@ from clipper.models import REFRAME_MODES, job_data_from_dict
 
 
 def _frames(speakers, duration=4.0, fps=5.0):
-    """speakers(t) -> list[(cx, height, mouth_openness)]."""
+    """speakers(t) -> list[(cx, height, mouth_openness)]; cy default 0.5."""
     frames = []
     steps = int(duration * fps)
     for index in range(steps):
         t = index / fps
-        frames.append((t, speakers(t, index)))
+        faces = [
+            face if len(face) == 4 else (face[0], 0.5, face[1], face[2])
+            for face in speakers(t, index)
+        ]
+        frames.append((t, faces))
     return frames
 
 
@@ -134,3 +138,80 @@ def test_panel_crop_filter_crops_9_8_and_scales_to_panel():
 
 def test_panel_crop_filter_defaults_to_center():
     assert "0.50000*in_w" in reframe.panel_crop_filter(None)
+
+
+def test_job_data_facecam_defaults_false_and_parses_tolerantly():
+    base = {"jobId": "abc", "url": "https://youtu.be/x"}
+    assert job_data_from_dict(base).facecam is False
+    assert job_data_from_dict({**base, "facecam": True}).facecam is True
+    assert job_data_from_dict({**base, "facecam": "false"}).facecam is False
+    assert job_data_from_dict({**base, "facecam": "1"}).facecam is True
+    assert job_data_from_dict({**base, "facecam": 0}).facecam is False
+
+
+def test_facecam_box_pinned_corner_face_clamps_to_corner():
+    # Wajah menempel sudut kiri atas: kotak dijepit ke (0,0), tetap di dalam frame.
+    frames = _frames(lambda t, i: [(0.05, 0.05, 0.08, 0.0)])
+    box = reframe.facecam_box(frames, 1920, 1080)
+
+    assert box is not None
+    x, y, w, h = box
+    assert (x, y) == (0, 0)
+    assert 0 < w <= 1920 and 0 < h <= 1080
+    assert w % 2 == 0 and h % 2 == 0
+
+
+def test_facecam_box_empty_or_rare_faces_returns_none():
+    assert reframe.facecam_box(_frames(lambda t, i: []), 1920, 1080) is None
+    assert reframe.facecam_box([], 1920, 1080) is None
+
+    # Wajah hanya di 2 dari 10 sampel (<50%) -> None.
+    def sparse(t, i):
+        return [(0.5, 0.5, 0.3, 0.0)] if i < 2 else []
+
+    assert reframe.facecam_box(_frames(sparse, duration=2.0), 1920, 1080) is None
+
+
+def test_facecam_box_centers_and_stays_in_bounds():
+    # Wajah besar di tengah: kotak full-width (1080), rasio tetap 27:16, di dalam frame.
+    frames = _frames(lambda t, i: [(0.5, 0.5, 0.4, 0.0)])
+    x, y, w, h = reframe.facecam_box(frames, 1080, 1920)
+
+    assert w == 1080 and h == 640  # 27:16 dijaga saat clamp ke lebar frame
+    assert 0 <= x <= 1080 - w and 0 <= y <= 1920 - h
+
+
+def test_facecam_box_picks_smallest_face_per_frame():
+    # Dua wajah per frame: ambil yang paling kecil (cx=0.7) sebagai wajah facecam.
+    def two(t, i):
+        return [(0.3, 0.5, 0.4, 0.0), (0.7, 0.4, 0.1, 0.0)]
+
+    x, y, w, h = reframe.facecam_box(_frames(two), 1920, 1080)
+
+    face_h = 3 * 0.1 * 1080  # tinggi kotak = 3x tinggi wajah terkecil
+    assert h == pytest.approx(face_h, abs=2)
+    assert x == pytest.approx(0.7 * 1920 - w / 2, abs=2)
+
+
+def test_facecam_graph_vstacks_face_panel_over_gameplay():
+    from clipper import pipeline
+
+    graph, label = pipeline._facecam_graph((12, 34, 546, 324), None)
+
+    joined = ";".join(graph)
+    assert "split=2" in joined
+    assert "crop=546:324:12:34" in joined
+    assert "min(ih*27/32,in_w)" in joined
+    assert "scale=1080:640" in joined
+    assert "scale=1080:1280" in joined
+    assert "vstack" in joined
+    assert label == "[v]"
+
+
+def test_facecam_graph_burns_subtitles_with_vout_label():
+    from clipper import pipeline
+
+    graph, label = pipeline._facecam_graph((0, 0, 1080, 640), "/tmp/sub.ass")
+
+    assert label == "[vout]"
+    assert any("subtitles=" in line for line in graph)

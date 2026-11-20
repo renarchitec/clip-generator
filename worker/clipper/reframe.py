@@ -7,7 +7,8 @@ hysteresis + minimal hold. Hasilnya bukan pan halus, melainkan deretan crop
 statis (cut) per segmen pembicara, sebagai ekspresi filter ffmpeg piecewise.
 
 Modul ini juga menyediakan `two_speaker_centers` (klaster 2-means pusat_x wajah
-untuk mode dua pembicara) dan `panel_crop_filter` (crop panel 9:8 per pembicara).
+untuk mode dua pembicara), `panel_crop_filter` (crop panel 9:8 per pembicara),
+dan `facecam_box` (kotak panel wajah 27:16 untuk layout facecam).
 
 Kontrak API/DB tidak berubah: nilai `face_tracking` tetap diterima dan tetap
 default; fallback crop tengah tetap ada bila tidak ada wajah sama sekali.
@@ -19,6 +20,7 @@ pesan jelas — bukan fallback diam-diam ke mode lain.
 from __future__ import annotations
 
 import logging
+from statistics import median
 from typing import List, Optional, Sequence, Tuple
 
 log = logging.getLogger(__name__)
@@ -47,8 +49,8 @@ MIN_SPEAKER_SEPARATION = 0.08  # jarak minimum dua klaster pembicara x
 # Landmark bibir dalam FaceMesh (inner lips): 13 atas, 14 bawah.
 LIP_UPPER, LIP_LOWER = 13, 14
 
-# Face tuple: (cx 0..1, tinggi relatif, bukaan mulut relatif thd tinggi wajah)
-Face = Tuple[float, float, float]
+# Face tuple: (cx 0..1, cy 0..1, tinggi relatif, bukaan mulut relatif thd tinggi wajah)
+Face = Tuple[float, float, float, float]
 # Frame sampel: (t_rel, daftar wajah terdeteksi)
 SampledFrame = Tuple[float, List[Face]]
 # Segmen cut: (t_mulai, pusat_x 0..1) — x statis sampai segmen berikutnya
@@ -168,6 +170,51 @@ def two_speaker_centers_from_frames(
 
     return (min(left, right), max(left, right))
 
+FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 640  # panel atas 27:16
+FACECAM_FACE_SCALE = 3.0  # tinggi panel = 3x tinggi wajah
+FACECAM_MIN_PANEL_H = 64  # piksel; di bawah ini upscale terlalu kasar
+
+
+def facecam_box(
+    frames: Sequence[SampledFrame],
+    src_w: int,
+    src_h: int,
+) -> Optional[Tuple[int, int, int, int]]:
+    """Kotak crop panel wajah (x, y, w, h piksel) dari sampel `sample_face_frames`.
+
+    Wajah per frame: pilih yang paling kecil (paling statis/jauh). Butuh wajah di
+    >=50% sampel, kalau tidak -> None (pipeline pakai reframe biasa). Kotak
+    27:16 (1080x640), tinggi ~3x wajah, di tengah wajah, dijepit ke dalam frame,
+    dimensi genap.
+    """
+    if not frames or src_w <= 0 or src_h <= 0:
+        return None
+    hits = [min(faces, key=lambda face: face[2]) for _, faces in frames if faces]
+    if not hits or len(hits) * 2 < len(frames):
+        return None
+
+    cx = median(face[0] for face in hits)
+    cy = median(face[1] for face in hits)
+    face_h = median(face[2] for face in hits)
+
+    h = max(FACECAM_MIN_PANEL_H, int(round(face_h * FACECAM_FACE_SCALE * src_h)))
+    w = int(round(h * FACECAM_PANEL_W / FACECAM_PANEL_H))
+    # Jaga rasio 27:16 bila kotak lebih besar dari frame.
+    if w > src_w:
+        h = int(round(h * src_w / w))
+        w = src_w
+    if h > src_h:
+        w = int(round(w * src_h / h))
+        h = src_h
+    w, h = max(2, w - w % 2), max(2, h - h % 2)  # dimensi genap untuk x264
+
+    x = int(round(cx * src_w - w / 2))
+    y = int(round(cy * src_h - h / 2))
+    x = min(max(0, x), max(0, src_w - w))
+    y = min(max(0, y), max(0, src_h - h))
+    return (x, y, w, h)
+
+
 def panel_crop_filter(center_x: Optional[float]) -> str:
     """Crop statis 9:8 (w=ih*9/8, h=ih; atau lebih pendek bila terlalu lebar),
     di tengah pembicara, lalu skala ke panel 1080x960. ffmpeg meng-clamp x/y."""
@@ -198,25 +245,26 @@ def _detect_faces(frame, cv2, mesh) -> List[Face]:
         if face_height < MIN_FACE_HEIGHT:
             continue
         cx = (max(xs) + min(xs)) / 2
+        cy = (max(ys) + min(ys)) / 2
         mouth = (landmarks.landmark[LIP_LOWER].y - landmarks.landmark[LIP_UPPER].y) / face_height
-        faces.append((float(cx), float(face_height), max(0.0, float(mouth))))
+        faces.append((float(cx), float(cy), float(face_height), max(0.0, float(mouth))))
     return faces
 
 
 class _Track:
     """Wajah yang diikuti antar sampel: posisi, ukuran, energi gerak bibir."""
 
-    __slots__ = ("cx", "height", "mouth", "score", "last_seen")
+    __slots__ = ("cx", "cy", "height", "mouth", "score", "last_seen")
 
     def __init__(self, face: Face, t: float) -> None:
-        self.cx, self.height, self.mouth = face
+        self.cx, self.cy, self.height, self.mouth = face
         self.score = 0.0
         self.last_seen = t
 
     def update(self, face: Face, t: float) -> None:
-        cx, height, mouth = face
+        cx, cy, height, mouth = face
         self.score = MOTION_ALPHA * abs(mouth - self.mouth) + (1 - MOTION_ALPHA) * self.score
-        self.cx, self.height, self.mouth, self.last_seen = cx, height, mouth, t
+        self.cx, self.cy, self.height, self.mouth, self.last_seen = cx, cy, height, mouth, t
 
 
 def select_speaker_segments(
