@@ -192,6 +192,12 @@ def _yt_dlp_base(sections: bool = False) -> List[str]:
         "--no-playlist",
         "--no-progress",
         "--no-warnings",
+        # Unduhan paralel: fragmen HLS/DASH (default 1) + range HTTP untuk file
+        # tunggal. Tanpa ini yt-dlp menunggu satu koneksi per chunk.
+        "-N",
+        "8",
+        "--http-chunk-size",
+        "10M",
     ]
 
 
@@ -291,7 +297,8 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
 
     if ranges:
         await _emit(on_progress, "download", 0, f"mengunduh {len(ranges)} rentang")
-        for index, item in enumerate(ranges):
+
+        async def fetch(index: int, item) -> Tuple[str, float]:
             cmd = _yt_dlp_base(sections=True) + [
                 "--download-sections",
                 f"*{item.start:.3f}-{item.end:.3f}",
@@ -301,26 +308,28 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
                 os.path.join(workdir, f"section-{index:02d}.%(ext)s"),
                 job.url,
             ]
-            try:
-                await asyncio.to_thread(_run, cmd)
-            except Exception as exc:
-                log.warning(
-                    "gagal unduh section %d (%.1f-%.1f), fallback unduh video penuh: %s",
-                    index,
-                    item.start,
-                    item.end,
-                    exc,
-                )
-                for path, _ in sections:
-                    os.remove(path)
-                sections = []
-                break
+            await asyncio.to_thread(_run, cmd)
             path = _find_media(workdir, f"section-{index:02d}")
             if not path:
                 raise RuntimeError(
                     f"yt-dlp selesai tanpa file untuk rentang {item.start:.1f}-{item.end:.1f}"
                 )
-            sections.append((path, item.start))
+            return path, item.start
+
+        results = await asyncio.gather(
+            *(fetch(index, item) for index, item in enumerate(ranges)),
+            return_exceptions=True,
+        )
+        failed = [r for r in results if isinstance(r, BaseException)]
+        if failed:
+            log.warning(
+                "gagal unduh section, fallback unduh video penuh: %s", failed[0]
+            )
+            for result in results:
+                if not isinstance(result, BaseException):
+                    os.remove(result[0])
+        else:
+            sections = list(results)
         probes = [await asyncio.to_thread(_has_video, path) for path, _ in sections]
         if not all(probes):
             # yt-dlp kadang menghasilkan section audio-saja (format terbatas/429).
