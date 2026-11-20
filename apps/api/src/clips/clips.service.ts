@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Response } from 'express';
-import type { Clip } from '@prisma/client';
+import { JobStatus, type Clip } from '@prisma/client';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveClipPath } from './clip-path';
@@ -28,6 +28,27 @@ export class ClipsService {
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
   ) {}
+
+  /**
+   * Klip siap terbaru milik user lintas job (job status done) untuk grid beranda.
+   * Limit di-clamp 1..24; default 8.
+   */
+  async recent(userId: string, limit = 8) {
+    const take = Math.min(Math.max(Math.trunc(limit) || 8, 1), 24);
+    return this.prisma.clip.findMany({
+      where: { deletedAt: null, job: { userId, status: JobStatus.done } },
+      orderBy: { createdAt: 'desc' },
+      take,
+      select: {
+        id: true,
+        title: true,
+        startSec: true,
+        endSec: true,
+        createdAt: true,
+        job: { select: { id: true, url: true, aspectRatio: true } },
+      },
+    });
+  }
 
   async stream(
     id: string,

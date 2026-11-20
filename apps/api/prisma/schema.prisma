@@ -89,5 +89,6 @@ model Clip {
   createdAt    DateTime  @default(now())
 
   @@index([jobId])
+  @@index([createdAt])
   @@map("clips")
 }

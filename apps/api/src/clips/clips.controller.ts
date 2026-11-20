@@ -5,6 +5,7 @@ import {
   Headers,
   HttpCode,
   Param,
+  Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
@@ -14,6 +15,16 @@ import { ClipsService } from './clips.service';
 @Controller('clips')
 export class ClipsController {
   constructor(private readonly clips: ClipsService) {}
+
+  /** Harus di atas rute :id agar tidak tertangkap sebagai id clip. */
+  @Get('recent')
+  recent(
+    @Query('limit') limit: string | undefined,
+    @CurrentUser() user: { id: string },
+  ) {
+    const parsed = Number.parseInt(limit ?? '', 10);
+    return this.clips.recent(user.id, Number.isFinite(parsed) ? parsed : 8);
+  }
 
   @Get(':id/stream')
   stream(
