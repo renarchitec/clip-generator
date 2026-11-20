@@ -194,6 +194,8 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 - **Penyimpanan:** Bind mount bersama `/srv/storage/clips` ke `/data/clips` pada kontainer API dan worker. File sementara dalam `temp_root` selalu dibersihkan di blok `finally`.
 - **Keamanan:** Hash password menggunakan `scrypt`. Token sesi berupa string acak `base64url` yang disimpan dalam bentuk hash SHA-256. Semua path file di disk dibentuk dari ID database dan divalidasi tidak keluar dari direktori `CLIPS_DIR`.
 - **UI/UX & Desain:** Antarmuka web modern dibangun dengan TanStack Start, TanStack Query, shadcn/ui, dan Tailwind v4. Mendukung dwibahasa (Inggris sebagai default, Bahasa Indonesia via cookie `clipper_language`), serta tema gelap, terang, dan sistem via cookie `clipper_theme`.
+- **Standar library:** Fitur yang butuh library memakai produk TanStack lebih dulu bila tersedia (routing, state server, form + validasi, tabel, virtualisasi). Form dan validasi memakai `@tanstack/react-form`; validasi skema mengikuti aturan API (batas nilai, pesan error) agar pesan klien dan server konsisten.
+- **Standar kerja UI:** Pembuatan atau perubahan UI wajib mengikuti skills Antislop (core + UI) — tanpa gradient dekoratif tanpa alasan, tanpa kartu berlebih, hierarki tipografi dan jarak yang konsisten.
 - **Jaringan & Proksi:** Aplikasi web bertindak sebagai reverse proxy yang meneruskan permintaan `/api/*` ke `API_INTERNAL_URL`, menjaga cookie tetap berada di domain origin yang sama.
 
 ## 12. Batasan dan Dependensi Eksternal

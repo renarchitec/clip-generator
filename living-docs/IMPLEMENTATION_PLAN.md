@@ -183,10 +183,12 @@ Fitur "tinjau momen sebelum memotong" memungkinkan pengguna memindai URL terlebi
 
 Aplikasi web berada di `apps/web`:
 - **Framework:** TanStack Start (SSR dan file-based routing) + TanStack Query untuk state manajemen server.
+- **Standar library — TanStack-first:** Setiap fitur baru memilih library TanStack sebelum dependency lain bila ada padanannya (Router/Start = routing, Query = state server, Form = form + validasi, Table = tabel, Virtual = virtualisasi). Form dan validasi ke depan memakai `@tanstack/react-form` — belum ter-install; install bersamaan dengan migrasi form pertama (`login`, `register`, kartu pembuatan job di `/`).
 - **Komponen UI:** Komponen modular shadcn/ui berbasis Radix UI, ikon Lucide, dan utility `tw-animate-css`.
 - **Tailwind CSS v4:** Styling modern menggunakan engine Tailwind v4.
 - **Server Produksi:** Dijalankan menggunakan runtime `srvx` (`srvx --prod -s ../client dist/server/server.js`).
 - **Internal Reverse Proxy:** Route `/api/$` mem-proxy semua permintaan HTTP dari klien browser ke endpoint NestJS via `API_INTERNAL_URL` (default `http://localhost:3000`). Pendekatan ini membuat cookie autentikasi tetap *same-origin* tanpa kendala CORS.
+- **Standar UI (Antislop):** Setiap pekerjaan pembuatan/perubahan UI diwajibkan memuat skills Antislop (core `antislop` + `antislop-ui`, dan skill turunannya sesuai konteks: `antislop-layoutmobile`, `antislop-human`, `antislop-copywriting`) sebelum menulis komponen.
 - **Internasionalisasi (i18n):** Mendukung Bahasa Inggris (EN, default) dan Bahasa Indonesia (ID), disimpan di cookie `clipper_language`.
 - **Tema:** Mendukung tema `light`, `dark`, dan `system`, disimpan di cookie `clipper_theme`.
 - **Halaman & Rute Utama:**
