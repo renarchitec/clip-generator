@@ -597,8 +597,18 @@ def _facecam_box_for(video: str, moment: llm.Moment) -> Optional[Tuple[int, int,
         ]
     )
     src_w, src_h = (int(part) for part in out.strip().split(",")[:2])
-    frames = reframe_mod.sample_face_frames(video, moment.start, moment.end)
-    return reframe_mod.facecam_box(frames, src_w, src_h)
+    frames = reframe_mod.facecam_face_frames(video, moment.start, moment.end)
+    box = reframe_mod.facecam_box(frames, src_w, src_h)
+    seen = sum(1 for _, faces in frames if faces)
+    if box:
+        log.info("facecam: wajah di %d/%d sampel, box=%s", seen, len(frames), box)
+    else:
+        log.info(
+            "facecam: wajah hanya di %d/%d sampel (<50%%), fallback reframe biasa",
+            seen,
+            len(frames),
+        )
+    return box
 
 
 def _facecam_graph(

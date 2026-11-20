@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from statistics import median
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -213,6 +213,242 @@ def facecam_box(
     x = min(max(0, x), max(0, src_w - w))
     y = min(max(0, y), max(0, src_h - h))
     return (x, y, w, h)
+
+
+# Wajah facecam streamer kecil: FaceMesh di proxy 360 (sample_face_frames) hanya
+# menemukan 3/100 sampel pada video streamer nyata, sehingga facecam_box selalu
+# None -> fallback reframe diam-diam. Deteksi dua tahap dengan BlazeFace:
+# (1) grid tile kecil diperbesar menemukan wajah kecil (teruji 100/100 pada video
+# yang sama), (2) crop ketat sekitar kandidat dilacak per sampel (murah).
+# BlazeFace mengecilkan input apa pun ke ~128px: wajah kecil hanya terdeteksi di
+# dalam tile kecil, bukan di frame utuh — jadi grid diperlukan.
+FACECAM_TILE_UP = 3.0
+FACECAM_MIN_FACE_HEIGHT = 0.03  # relatif tinggi frame utuh
+FACECAM_SAMPLE_FPS = 1.0  # panel facecam statis: 1 sampel/detik cukup
+FACECAM_MAX_SAMPLES = 240
+FACECAM_KEYFRAMES = 6  # jumlah frame fase pencarian kandidat
+
+
+def _facecam_proxy(frame, cv2):
+    """Frame dikecilkan ke ~360p seperti deteksi lain."""
+    height = frame.shape[0]
+    if height > PROXY_HEIGHT:
+        scale = PROXY_HEIGHT / height
+        frame = cv2.resize(
+            frame,
+            (int(frame.shape[1] * scale), PROXY_HEIGHT),
+            interpolation=cv2.INTER_AREA,
+        )
+    return frame
+
+
+def _facecam_tiles(proxy, cv2) -> List[Tuple[Any, int, int, int, int]]:
+    """Tile per-1/4 frame dengan langkah setengah tile (overlap 50%), diperbesar.
+
+    Tiap tile dibawa (ox, oy, w_region, h_region) di proxy agar deteksi bisa
+    dipetakan balik ke koordinat frame utuh.
+    """
+    h, w = proxy.shape[:2]
+    tw, th = max(32, w // 4), max(24, h // 4)
+    stride_x, stride_y = max(8, tw // 2), max(6, th // 2)
+    xs = list(range(0, w - tw + 1, stride_x)) or [0]
+    ys = list(range(0, h - th + 1, stride_y)) or [0]
+    if xs[-1] != w - tw:
+        xs.append(w - tw)
+    if ys[-1] != h - th:
+        ys.append(h - th)
+    tiles: List[Tuple[Any, int, int, int, int]] = [(proxy, 0, 0, w, h)]
+    for oy in ys:
+        for ox in xs:
+            region = proxy[oy : oy + th, ox : ox + tw]
+            tiles.append(
+                (
+                    cv2.resize(
+                        region,
+                        None,
+                        fx=FACECAM_TILE_UP,
+                        fy=FACECAM_TILE_UP,
+                        interpolation=cv2.INTER_CUBIC,
+                    ),
+                    ox,
+                    oy,
+                    tw,
+                    th,
+                )
+            )
+    return tiles
+
+
+def facecam_faces_from_detections(
+    detections: Sequence[Any],
+    ox: int,
+    oy: int,
+    region_w: int,
+    region_h: int,
+    frame_w: int,
+    frame_h: int,
+) -> List[Face]:
+    """Peta kotak deteksi BlazeFace (relatif tile) ke wajah relatif frame utuh."""
+    faces: List[Face] = []
+    for detection in detections:
+        box = detection.location_data.relative_bounding_box
+        height = box.height * region_h / frame_h
+        if height < FACECAM_MIN_FACE_HEIGHT:
+            continue
+        cx = (ox + (box.xmin + box.width / 2) * region_w) / frame_w
+        cy = (oy + (box.ymin + box.height / 2) * region_h) / frame_h
+        faces.append(
+            (
+                float(min(1.0, max(0.0, cx))),
+                float(min(1.0, max(0.0, cy))),
+                float(height),
+                0.0,
+            )
+        )
+    return faces
+
+
+def _facecam_candidate(candidates: Sequence[Face]) -> Optional[Face]:
+    """Wajah kandidat terkecil yang muncul >=2x di posisi mirip; None bila tidak ada."""
+    for face in sorted(candidates, key=lambda item: item[2]):
+        near = [
+            other
+            for other in candidates
+            if abs(other[0] - face[0]) < 0.08
+            and abs(other[1] - face[1]) < 0.08
+            and 0.6 * face[2] <= other[2] <= 1.6 * face[2]
+        ]
+        if len(near) >= 2:
+            return (
+                median(item[0] for item in near),
+                median(item[1] for item in near),
+                median(item[2] for item in near),
+                0.0,
+            )
+    return None
+
+
+def _iter_samples(capture, cv2, start: float, end: float, sample_fps: float, limit_n: int):
+    """Yield (t_rel, frame) tiap 1/sample_fps detik dalam jendela start..end."""
+    if not capture.set(cv2.CAP_PROP_POS_MSEC, start * 1000):
+        raise RuntimeError(f"tidak bisa seek ke {start:.2f}s di video")
+    fps = capture.get(cv2.CAP_PROP_FPS) or 0.0
+    step = 1 if fps <= 0 else max(1, round(fps / sample_fps))
+    dt = step / fps if fps > 0 else 1.0 / sample_fps
+    stop = end + 0.5 * dt
+    count = 0
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        timestamp = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+        if timestamp > stop:
+            break
+        yield max(0.0, timestamp - start), frame
+        count += 1
+        if count >= limit_n:
+            break
+        grabbed = True
+        for _ in range(step - 1):
+            if not capture.grab():
+                grabbed = False
+                break
+        if not grabbed:
+            break
+        if capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 > stop:
+            break
+
+
+def facecam_face_frames(
+    video_path: str,
+    start: float,
+    end: float,
+    sample_fps: float = FACECAM_SAMPLE_FPS,
+) -> List[SampledFrame]:
+    """Sampel wajah khusus layout facecam (BlazeFace dua tahap).
+
+    `sample_face_frames` (FaceMesh + landmark) tidak bisa diandalkan untuk wajah
+    facecam streamer yang kecil; `facecam_box` atas hasilnya selalu None.
+    Fase 1: grid tile diperbesar pada beberapa keyframe menemukan wajah kecil
+    terkecil yang stabil. Fase 2: crop ketat sekitar kandidat itu dideteksi per
+    sampel jendela clip.
+    """
+    try:
+        import cv2
+        import mediapipe as mp
+    except ImportError as exc:
+        raise RuntimeError(FACE_DEPS_ERROR) from exc
+
+    capture = cv2.VideoCapture(video_path)
+    if not capture.isOpened():
+        raise RuntimeError(f"tidak bisa membuka video untuk facecam: {video_path}")
+
+    try:
+        with mp.solutions.face_detection.FaceDetection(
+            model_selection=0,
+            min_detection_confidence=0.5,
+        ) as detection:
+            duration = max(0.5, end - start)
+            key_fps = max(0.05, FACECAM_KEYFRAMES / duration)
+            candidates: List[Face] = []
+            proxy_w = proxy_h = 0
+            for _, frame in _iter_samples(
+                capture, cv2, start, end, key_fps, FACECAM_KEYFRAMES
+            ):
+                proxy = _facecam_proxy(frame, cv2)
+                proxy_h, proxy_w = proxy.shape[:2]
+                for tile, ox, oy, region_w, region_h in _facecam_tiles(proxy, cv2):
+                    result = detection.process(cv2.cvtColor(tile, cv2.COLOR_BGR2RGB))
+                    candidates.extend(
+                        facecam_faces_from_detections(
+                            getattr(result, "detections", None) or [],
+                            ox,
+                            oy,
+                            region_w,
+                            region_h,
+                            proxy_w,
+                            proxy_h,
+                        )
+                    )
+
+            face = _facecam_candidate(candidates)
+            if face is None or proxy_w <= 0:
+                return []
+
+            # Crop ketat sekitar kandidat: lebar ~6x tinggi wajah, tinggi ~4x.
+            face_px = max(1.0, face[2] * proxy_h)
+            region_w = min(proxy_w, max(80, int(round(face_px * 6))))
+            region_h = min(proxy_h, max(60, int(round(face_px * 4))))
+            x0 = int(min(max(0.0, face[0] * proxy_w - region_w / 2), proxy_w - region_w))
+            y0 = int(min(max(0.0, face[1] * proxy_h - region_h / 2), proxy_h - region_h))
+
+            frames: List[SampledFrame] = []
+            for t, frame in _iter_samples(
+                capture, cv2, start, end, sample_fps, FACECAM_MAX_SAMPLES
+            ):
+                proxy = _facecam_proxy(frame, cv2)
+                region = proxy[y0 : y0 + region_h, x0 : x0 + region_w]
+                big = cv2.resize(
+                    region,
+                    None,
+                    fx=FACECAM_TILE_UP,
+                    fy=FACECAM_TILE_UP,
+                    interpolation=cv2.INTER_CUBIC,
+                )
+                result = detection.process(cv2.cvtColor(big, cv2.COLOR_BGR2RGB))
+                faces = facecam_faces_from_detections(
+                    getattr(result, "detections", None) or [],
+                    x0,
+                    y0,
+                    region_w,
+                    region_h,
+                    proxy_w,
+                    proxy_h,
+                )
+                frames.append((t, faces))
+            return frames
+    finally:
+        capture.release()
 
 
 def panel_crop_filter(center_x: Optional[float]) -> str:

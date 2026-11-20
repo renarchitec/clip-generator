@@ -1,3 +1,5 @@
+import types
+
 import pytest
 
 from clipper import reframe
@@ -215,3 +217,67 @@ def test_facecam_graph_burns_subtitles_with_vout_label():
 
     assert label == "[vout]"
     assert any("subtitles=" in line for line in graph)
+
+
+class _FakeBox:
+    def __init__(self, xmin, ymin, width, height):
+        self.xmin, self.ymin, self.width, self.height = xmin, ymin, width, height
+
+
+def _fake_detection(xmin, ymin, width, height):
+    return types.SimpleNamespace(
+        location_data=types.SimpleNamespace(
+            relative_bounding_box=_FakeBox(xmin, ymin, width, height)
+        )
+    )
+
+
+def test_facecam_faces_from_detections_maps_tile_to_full_frame():
+    # Deteksi di tile (0,100)-(120,195) pada frame 640x360 (video repro asli):
+    # kotak relatif tile (0.44, 0.59, 0.17, 0.21) -> wajah di sudut frame.
+    faces = reframe.facecam_faces_from_detections(
+        [_fake_detection(0.44, 0.59, 0.17, 0.21)], 0, 100, 120, 95, 640, 360
+    )
+
+    assert len(faces) == 1
+    cx, cy, height, mouth = faces[0]
+    assert cx == pytest.approx((0.44 + 0.17 / 2) * 120 / 640, abs=1e-9)
+    assert cy == pytest.approx((100 + (0.59 + 0.21 / 2) * 95) / 360, abs=1e-9)
+    assert height == pytest.approx(0.21 * 95 / 360, abs=1e-9)
+    assert mouth == 0.0
+
+    # Wajah di bawah ambang kecil dibuang.
+    tiny = reframe.facecam_faces_from_detections(
+        [_fake_detection(0.4, 0.5, 0.05, 0.01)], 0, 0, 320, 180, 640, 360
+    )
+    assert tiny == []
+
+
+def test_facecam_candidate_needs_two_similar_occurrences():
+    # Wajah facecam muncul 3x di posisi yang sama (0.10, 0.46, 0.059);
+    # false positive sekecil 0.03 yang muncul sekali tidak boleh menang.
+    candidates = [(0.1, 0.46, 0.059, 0.0)] * 3 + [(0.5, 0.2, 0.03, 0.0)]
+
+    face = reframe._facecam_candidate(candidates)
+
+    assert face is not None
+    assert face[0] == pytest.approx(0.1)
+    assert face[2] == pytest.approx(0.059)
+
+    # Kandidat tunggal tanpa pengulangan -> None.
+    assert reframe._facecam_candidate([(0.1, 0.46, 0.059, 0.0)]) is None
+    assert reframe._facecam_candidate([]) is None
+
+
+def test_facecam_box_from_corner_facecam_sizes_returns_panel_not_none():
+    # Regresi video nyata: wajah facecam kecil (tinggi ~0.059 dari frame) yang
+    # muncul di hampir semua sampel harus menghasilkan kotak panel di sudut,
+    # bukan None (fallback reframe diam-diam).
+    frames = [(t, [(0.1, 0.46, 0.059, 0.0)]) for t in range(10)]
+
+    box = reframe.facecam_box(frames, 640, 360)
+
+    assert box is not None
+    x, y, w, h = box
+    assert 0 <= x and x + w <= 640 and 0 <= y and y + h <= 360
+    assert h == pytest.approx(3 * 0.059 * 360, abs=3)
