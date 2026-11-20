@@ -77,7 +77,7 @@ Kebutuhan utama:
 
 ## 7. Lingkup dan status fitur
 
-Dashboard kini memakai shell dua kolom dengan navigasi ke rute yang tersedia, preferensi bahasa dan tema tetap di header, pencarian klien-side untuk job terbaru, composer mode otomatis/manual, serta grid kartu riwayat. Tema terang memakai surface putih di kanvas abu terang, tema gelap memakai surface arang dengan aksen mint untuk kontrol aktif dan tombol utama.
+Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile) dengan preferensi bahasa (EN/ID) dan tema di header, pencarian klien-side klip terbaru (`⌘K`), dan satu composer: URL sebagai jangkar, satu pilihan mode otomatis/manual, opsi bertanda teks (bukan ikon saja), serta tombol yang menyebut hasilnya ("Buat {n} klip"). Di bawahnya ada bagian **Sedang diproses** (job antre/berjalan dengan tahap, persen, dan bar progres; job gagal ditampilkan ringkas dengan alasannya) dan grid **Klip terbaru** yang mengutamakan video (pill durasi, judul maks 2 baris, sumber + umur relatif). Halaman detail job menampilkan lima tahap berurutan (selesai/berjalan/menunggu), aksi lanjut untuk job gagal/dibatalkan, dan kartu klip dengan rank `#n`, durasi, rentang waktu sumber, unduh, dan hapus. Login/daftar berupa form ringkas tanpa dekorasi. Gaya visual mengacu ke produk clipper gelap: kanvas `#09090B`, surface `#121214`, garis tipis `#27272A`, tombol utama putih, aksen mint `#5CE1C4` hanya untuk state aktif/progres/fokus, radius kontrol 6px, tanpa shadow/gradient; angka dan durasi memakai font mono tabular. Tema terang memakai padanan putih/zinc dengan aksen teal `#087f68`.
 
 | Prioritas | Fitur | Status |
 | --- | --- | --- |
