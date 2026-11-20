@@ -18,7 +18,7 @@ export function LoginForm({ className, title, description, emailLabel, passwordL
     defaultValues: { email: "", password: "" } as Values,
     onSubmit: ({ value }) => onSubmit(value),
   })
-  return <div className={cn("flex flex-col gap-6", className)} {...props}><Card><CardHeader className="space-y-4 px-7 pt-8 sm:px-8"><CardTitle className="font-display text-3xl font-medium tracking-[-.05em]">{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader><CardContent className="px-7 pb-8 sm:px-8"><form noValidate onSubmit={(event) => { event.preventDefault(); void form.handleSubmit() }}><FieldGroup>
+  return <div className={cn("flex flex-col gap-6", className)} {...props}><Card className="rounded-lg border-border bg-card shadow-none"><CardHeader className="space-y-2 px-6 pt-6 sm:px-7 sm:pt-7"><CardTitle className="font-display text-2xl font-medium tracking-[-.04em]">{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader><CardContent className="px-6 pb-6 sm:px-7 sm:pb-7"><form noValidate onSubmit={(event) => { event.preventDefault(); void form.handleSubmit() }}><FieldGroup>
     <form.Field name="email" validators={{ onChange: ({ value }) => !value.trim() ? t.emailRequired : !EMAIL.test(value.trim()) ? t.emailInvalid : undefined }}>
       {(field) => <Field data-invalid={field.state.meta.isTouched && !field.state.meta.isValid}>
         <FieldLabel htmlFor="email">{emailLabel}</FieldLabel>
@@ -35,7 +35,7 @@ export function LoginForm({ className, title, description, emailLabel, passwordL
     </form.Field>
     {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
     <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-      {([canSubmit, isSubmitting]) => <Field><Button type="submit" className="mt-1 h-11 w-full rounded-xl" disabled={pending || isSubmitting || !canSubmit}>{pending && <LoaderCircle className="mr-2 size-4 animate-spin" />}{submitLabel}</Button><FieldDescription className="pt-2 text-center">{footer}</FieldDescription></Field>}
+      {([canSubmit, isSubmitting]) => <Field><Button type="submit" className="mt-1 h-11 w-full rounded-md" disabled={pending || isSubmitting || !canSubmit}>{pending && <LoaderCircle className="mr-2 size-4 animate-spin" />}{submitLabel}</Button><FieldDescription className="pt-2 text-center">{footer}</FieldDescription></Field>}
     </form.Subscribe>
   </FieldGroup></form></CardContent></Card></div>
 }
