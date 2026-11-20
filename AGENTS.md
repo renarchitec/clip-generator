@@ -3,7 +3,7 @@
 ## Standar library: TanStack-first
 
 - Kalau sebuah fitur butuh library, pakai produk TanStack lebih dulu bila ada padanannya: Router/Start (routing), Query (state server & cache), Form (form + validasi), Table (tabel), Virtual (virtualisasi).
-- Form dan validasi memakai `@tanstack/react-form`. Saat ini belum ter-install — install sebelum memigrasi form pertama (`apps/web/src/components/login-form.tsx`, `apps/web/src/routes/register.tsx`, kartu pembuatan job di `apps/web/src/routes/index.tsx`).
+- Form dan validasi memakai `@tanstack/react-form` (sudah ter-install, dipakai di form `login` dan `register`). Kartu pembuatan job di `apps/web/src/routes/index.tsx` belum termigrasi: state-nya terikat draf review dan prefill regenerate; migrasikan saat form itu diubah berikutnya.
 - Jangan tambahkan dependency lain untuk fungsi yang sudah dicakup library TanStack yang terpasang.
 
 ## Standar kerja UI: Antislop

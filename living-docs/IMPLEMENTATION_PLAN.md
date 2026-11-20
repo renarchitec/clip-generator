@@ -183,7 +183,7 @@ Fitur "tinjau momen sebelum memotong" memungkinkan pengguna memindai URL terlebi
 
 Aplikasi web berada di `apps/web`:
 - **Framework:** TanStack Start (SSR dan file-based routing) + TanStack Query untuk state manajemen server.
-- **Standar library — TanStack-first:** Setiap fitur baru memilih library TanStack sebelum dependency lain bila ada padanannya (Router/Start = routing, Query = state server, Form = form + validasi, Table = tabel, Virtual = virtualisasi). Form dan validasi ke depan memakai `@tanstack/react-form` — belum ter-install; install bersamaan dengan migrasi form pertama (`login`, `register`, kartu pembuatan job di `/`).
+- **Standar library — TanStack-first:** Setiap fitur baru memilih library TanStack sebelum dependency lain bila ada padanannya (Router/Start = routing, Query = state server, Form = form + validasi, Table = tabel, Virtual = virtualisasi). Form dan validasi memakai `@tanstack/react-form` (v1, ter-install): form `login` (email wajib + format, password wajib) dan `register` (name opsional maks 100, email wajib + format, password wajib min 8) memvalidasi klien sesuai DTO API dengan pesan error per-bahasa. Kartu pembuatan job di `/` masih memakai state kustom karena nilainya terikat draf review (`saveReviewDraft`) dan prefill regenerate (`/?from`); migrasinya menyusul bersama revamp UI.
 - **Komponen UI:** Komponen modular shadcn/ui berbasis Radix UI, ikon Lucide, dan utility `tw-animate-css`.
 - **Tailwind CSS v4:** Styling modern menggunakan engine Tailwind v4.
 - **Server Produksi:** Dijalankan menggunakan runtime `srvx` (`srvx --prod -s ../client dist/server/server.js`).
