@@ -588,8 +588,27 @@ def _two_speaker_graph(
     return graph, label
 
 
-def _facecam_box_for(video: str, moment: llm.Moment) -> Optional[Tuple[int, int, int, int]]:
-    """Kotak wajah facecam (piksel sumber); None -> fallback reframe biasa."""
+_FACECAM_BOX_CACHE: Dict[str, Optional[Tuple[int, int, int, int]]] = {}
+
+
+def _facecam_sample_fps(duration: float) -> float:
+    """Jarak sampling facecam sepanjang video, dibatasi jumlah sampel maksimum."""
+    return min(
+        reframe_mod.FACECAM_SAMPLE_FPS,
+        reframe_mod.FACECAM_MAX_SAMPLES / max(1.0, duration),
+    )
+
+
+def _facecam_box_for(video: str) -> Optional[Tuple[int, int, int, int]]:
+    """Kotak wajah facecam (piksel sumber); None -> fallback reframe biasa.
+
+    Dihitung sekali per file video, bukan per klip: panel facecam statis, jadi
+    satu kotak dipakai semua klip pada video itu. Deteksi per klip membuat
+    sebagian klip jatuh ke reframe biasa dan kotaknya bergeser antar klip.
+    """
+    if video in _FACECAM_BOX_CACHE:
+        return _FACECAM_BOX_CACHE[video]
+
     out = _run(
         [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -597,17 +616,24 @@ def _facecam_box_for(video: str, moment: llm.Moment) -> Optional[Tuple[int, int,
         ]
     )
     src_w, src_h = (int(part) for part in out.strip().split(",")[:2])
-    frames = reframe_mod.facecam_face_frames(video, moment.start, moment.end)
+    duration_out = _run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", video]
+    )
+    duration = float(duration_out.strip() or 0.0) or 1.0
+    frames = reframe_mod.facecam_face_frames(
+        video, 0.0, duration, sample_fps=_facecam_sample_fps(duration)
+    )
     box = reframe_mod.facecam_box(frames, src_w, src_h)
     seen = sum(1 for _, faces in frames if faces)
     if box:
-        log.info("facecam: wajah di %d/%d sampel, box=%s", seen, len(frames), box)
+        log.info("facecam: wajah di %d/%d sampel video, box=%s", seen, len(frames), box)
     else:
         log.info(
-            "facecam: wajah hanya di %d/%d sampel (<50%%), fallback reframe biasa",
+            "facecam: wajah hanya di %d/%d sampel video (<50%%), fallback reframe biasa",
             seen,
             len(frames),
         )
+    _FACECAM_BOX_CACHE[video] = box
     return box
 
 
@@ -707,7 +733,7 @@ def _render_one(
         graph: Optional[tuple[List[str], str]] = None
         if facecam:
             try:
-                box = _facecam_box_for(video, moment)
+                box = _facecam_box_for(video)
             except Exception as exc:
                 log.warning("facecam: deteksi wajah gagal, fallback reframe biasa: %s", exc)
                 box = None
@@ -774,6 +800,7 @@ async def render(
         raise ValueError("jumlah section tidak sama dengan jumlah momen")
 
     os.makedirs(outdir, exist_ok=True)
+    _FACECAM_BOX_CACHE.clear()
     await _emit(on_progress, "render", 0, f"merender {len(moments)} clip")
 
     clips: List[ClipResult] = []

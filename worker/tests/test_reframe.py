@@ -281,3 +281,37 @@ def test_facecam_box_from_corner_facecam_sizes_returns_panel_not_none():
     x, y, w, h = box
     assert 0 <= x and x + w <= 640 and 0 <= y and y + h <= 360
     assert h == pytest.approx(3 * 0.059 * 360, abs=3)
+
+def test_facecam_sample_fps_spreads_max_samples_over_video():
+    from clipper import pipeline
+
+    # Video sedang: 1 sampel/detik.
+    assert pipeline._facecam_sample_fps(100) == pytest.approx(1.0)
+    # Video panjang: sampel menyebar agar total tetap <= FACECAM_MAX_SAMPLES.
+    for duration in (600.0, 2400.0, 7200.0):
+        fps = pipeline._facecam_sample_fps(duration)
+        assert fps * duration <= reframe.FACECAM_MAX_SAMPLES + 1e-6
+    assert pipeline._facecam_sample_fps(2400.0) == pytest.approx(0.1)
+
+def test_facecam_box_for_samples_whole_video_once(monkeypatch):
+    from clipper import pipeline
+
+    pipeline._FACECAM_BOX_CACHE.clear()
+    calls = []
+
+    def fake_run(cmd):
+        return "640,360\n" if "stream=width,height" in cmd else "600.0\n"
+
+    def fake_frames(video, start, end, sample_fps=None):
+        calls.append((start, end, sample_fps))
+        return [(t, [(0.1, 0.46, 0.059, 0.0)]) for t in range(10)]
+
+    monkeypatch.setattr(pipeline, "_run", fake_run)
+    monkeypatch.setattr(pipeline.reframe_mod, "facecam_face_frames", fake_frames)
+
+    first = pipeline._facecam_box_for("/tmp/video.mp4")
+    second = pipeline._facecam_box_for("/tmp/video.mp4")
+
+    assert first is not None and first == second
+    # Satu deteksi untuk seluruh video, bukan per klip.
+    assert calls == [(0.0, 600.0, pipeline._facecam_sample_fps(600.0))]

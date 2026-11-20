@@ -222,6 +222,8 @@ def facecam_box(
 # yang sama), (2) crop ketat sekitar kandidat dilacak per sampel (murah).
 # BlazeFace mengecilkan input apa pun ke ~128px: wajah kecil hanya terdeteksi di
 # dalam tile kecil, bukan di frame utuh — jadi grid diperlukan.
+# Jendela sampling adalah video penuh (dipanggil pipeline sekali per file),
+# karena panel facecam statis: satu kotak berlaku untuk semua klip.
 FACECAM_TILE_UP = 3.0
 FACECAM_MIN_FACE_HEIGHT = 0.03  # relatif tinggi frame utuh
 FACECAM_SAMPLE_FPS = 1.0  # panel facecam statis: 1 sampel/detik cukup
@@ -371,7 +373,7 @@ def facecam_face_frames(
     facecam streamer yang kecil; `facecam_box` atas hasilnya selalu None.
     Fase 1: grid tile diperbesar pada beberapa keyframe menemukan wajah kecil
     terkecil yang stabil. Fase 2: crop ketat sekitar kandidat itu dideteksi per
-    sampel jendela clip.
+    sampel jendela video.
     """
     try:
         import cv2
