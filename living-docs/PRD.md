@@ -77,6 +77,8 @@ Kebutuhan utama:
 
 ## 7. Lingkup dan status fitur
 
+Dashboard kini memakai shell dua kolom dengan navigasi ke rute yang tersedia, preferensi bahasa dan tema tetap di header, pencarian klien-side untuk job terbaru, composer mode otomatis/manual, serta grid kartu riwayat. Tema terang memakai surface putih di kanvas abu terang, tema gelap memakai surface arang dengan aksen mint untuk kontrol aktif dan tombol utama.
+
 | Prioritas | Fitur | Status |
 | --- | --- | --- |
 | **P0** | Multi-user auth (`users` + `sessions`, scrypt, httpOnly cookie `clipper_session`, claim legacy jobs) | Selesai |
