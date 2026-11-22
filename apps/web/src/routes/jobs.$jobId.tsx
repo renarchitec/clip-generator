@@ -14,6 +14,7 @@ import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
 import { LlmStatus } from "@/components/llm-status"
+import { JobAssembly } from "@/components/job-assembly"
 
 export const Route = createFileRoute("/jobs/$jobId")({
   beforeLoad: async () => {
@@ -192,6 +193,7 @@ function JobDetail() {
               </div>
             ) : (
               <>
+                {job.data.status === "queued" || job.data.status === "running" ? <JobAssembly job={job.data} t={t} /> : <>
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="font-medium">{job.data.status === "done" ? `${job.data.clips.filter((clip) => !clip.deletedAt).length} ${t.clipsReady}` : stage}</h2>
@@ -216,6 +218,7 @@ function JobDetail() {
                     </li>
                   })}
                 </ol>
+                </>}
                 {(job.data.status === "queued" || job.data.status === "running") && <div className="mt-5 flex justify-end border-t border-border pt-4">
                   <Button variant="outline" className="min-h-11" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
                     {cancel.isPending && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin" />}{t.cancel}
