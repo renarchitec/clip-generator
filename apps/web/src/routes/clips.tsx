@@ -1,6 +1,6 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowUpRight, Library, Play, Search, X } from "lucide-react"
+import { ArrowUpRight, Play, Search, X } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -41,7 +41,7 @@ function ClipsPage() {
 
   return <WorkspaceShell user={user}>
     <div className="mb-7 flex flex-col gap-5 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
-      <div><p className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[.18em] text-primary"><Library className="size-3.5"/>{t.library}</p><h2 className="font-display text-3xl font-medium tracking-[-.045em]">{t.clips}</h2><p className="mt-2 text-sm text-muted-foreground">{t.latestFirst}</p></div>
+      <div><h2 className="font-display text-3xl font-medium tracking-[-.045em]">{t.clips}</h2><p className="mt-2 text-sm text-muted-foreground">{t.latestFirst}</p></div>
       <div className="relative w-full sm:max-w-xs"><Search aria-hidden className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/><label className="sr-only" htmlFor="clip-search">{t.searchClips}</label><Input ref={searchRef} id="clip-search" type="search" placeholder={t.searchClips} value={search} onChange={(event) => setSearch(event.target.value)} className="h-11 bg-card pl-9 pr-16"/><kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{t.searchShortcut}</kbd></div>
     </div>
     {clips.isPending ? <div role="status" aria-label={t.loading} className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{[0,1,2,3,4,5,6,7].map((item) => <div key={item}><Skeleton className="aspect-[9/16] w-full rounded-lg"/><Skeleton className="mt-3 h-4 w-4/5"/><Skeleton className="mt-2 h-3 w-2/3"/></div>)}</div> : clips.isError ? <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{t.apiError}</span><Button variant="outline" onClick={() => clips.refetch()}>{t.retry}</Button></AlertDescription></Alert> : filtered.length ? <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{filtered.map((clip, index) => {
