@@ -8,6 +8,41 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@keyframes assembly-drift {
+  0%, 100% { transform: translate3d(-2%, 1%, 0) scale(1.02); }
+  50% { transform: translate3d(2%, -1%, 0) scale(1.06); }
+}
+
+@keyframes assembly-scan {
+  0% { transform: translateX(0); opacity: 0; }
+  15%, 75% { opacity: .85; }
+  100% { transform: translateX(320%); opacity: 0; }
+}
+
+@keyframes assembly-wave {
+  0%, 100% { transform: scaleY(.42); opacity: .45; }
+  50% { transform: scaleY(1); opacity: .9; }
+}
+
+.job-assembly__frame { filter: blur(var(--frame-blur, 7px)); opacity: var(--frame-opacity, .72); animation: assembly-drift 8s ease-in-out infinite; animation-delay: calc(var(--card-index) * -1.3s); transition: filter 900ms ease, opacity 900ms ease; }
+.job-assembly__art { background: radial-gradient(ellipse at 30% 25%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 38%), linear-gradient(145deg, var(--assembly-frame-a), var(--assembly-frame-b) 70%); }
+.job-assembly__bar { background: color-mix(in srgb, var(--foreground) 28%, transparent); }
+.job-assembly__scan { background: linear-gradient(to right, transparent, color-mix(in srgb, var(--foreground) 10%, transparent), transparent); animation: assembly-scan 3.8s ease-in-out infinite; animation-delay: calc(var(--card-index) * .55s); }
+.job-assembly__timecode { background: color-mix(in srgb, var(--background) 75%, transparent); color: var(--foreground); }
+.job-assembly__wave { transform-origin: center; animation: assembly-wave 1.1s ease-in-out infinite; animation-delay: calc(var(--bar-index) * -90ms + var(--card-index) * -140ms); }
+.job-stage-select .job-assembly__frame { opacity: .84; }
+.job-assembly__real { animation: assembly-arrive 700ms cubic-bezier(.2,.75,.25,1) both; }
+.job-assembly__placeholder .job-assembly__art { --assembly-frame-a: #e4e4e7; --assembly-frame-b: #f4f4f5; }
+.dark .job-assembly__placeholder .job-assembly__art { --assembly-frame-a: #292d32; --assembly-frame-b: #101114; }
+.dark .job-assembly__placeholder .job-assembly__bar { background: color-mix(in srgb, white 28%, transparent); }
+.dark .job-assembly__placeholder .job-assembly__scan { background: linear-gradient(to right, transparent, rgb(255 255 255 / 10%), transparent); }
+.dark .job-assembly__placeholder .job-assembly__timecode { background: rgb(0 0 0 / 50%); color: rgb(255 255 255 / 88%); }
+@keyframes assembly-arrive { from { opacity: .2; filter: blur(8px); transform: translateY(6px); } to { opacity: 1; filter: blur(0); transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .job-assembly__frame, .job-assembly__scan, .job-assembly__wave, .job-assembly__real { animation: none !important; transition: none !important; }
+  .job-assembly__frame { filter: blur(4px); opacity: .75; }
+}
+
 @theme inline {
   --font-sans: "Geist Variable", sans-serif;
   --font-display: "Geist Variable", sans-serif;
@@ -44,6 +79,8 @@
 }
 
 :root {
+  --monitor-empty-center: #f4f4f5;
+  --monitor-empty-edge: #e4e4e7;
   --background: #ffffff;
   --foreground: #18181b;
   --card: #ffffff;
@@ -74,6 +111,8 @@
 }
 
 .dark {
+  --monitor-empty-center: #202126;
+  --monitor-empty-edge: #101114;
   --background: #09090b;
   --foreground: #fafafa;
   --card: #121214;
