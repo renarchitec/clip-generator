@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { Monitor, Moon, Sun } from "lucide-react"
 import { useT } from "@/lib/i18n"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
 type Theme = "light" | "dark" | "system"
 const ThemeContext = createContext<{ theme: Theme; setTheme: (theme: Theme) => void } | null>(null)
@@ -30,5 +31,14 @@ export function ThemeSelect() {
   const context = useContext(ThemeContext)
   const t = useT()
   if (!context) throw new Error("ThemeSelect must be used within ThemeProvider")
-  return <Select value={context.theme} onValueChange={(value) => context.setTheme(value as Theme)}><SelectTrigger aria-label={t.theme} className="w-[120px] border-0 bg-transparent shadow-none"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="light">{t.light}</SelectItem><SelectItem value="dark">{t.dark}</SelectItem><SelectItem value="system">{t.system}</SelectItem></SelectContent></Select>
+  const Icon = context.theme === "light" ? Sun : context.theme === "dark" ? Moon : Monitor
+  return <DropdownMenu>
+    <DropdownMenuTrigger aria-label={t.theme} title={t.theme} className="inline-flex size-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Icon className="size-[18px]" aria-hidden="true"/><span className="sr-only">{t.theme}</span></DropdownMenuTrigger>
+    <DropdownMenuContent align="end" className="min-w-36">
+      <DropdownMenuLabel>{t.theme}</DropdownMenuLabel><DropdownMenuSeparator/>
+      <DropdownMenuItem onSelect={() => context.setTheme("light")}><Sun className="size-4"/>{t.light}{context.theme === "light" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => context.setTheme("dark")}><Moon className="size-4"/>{t.dark}{context.theme === "dark" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => context.setTheme("system")}><Monitor className="size-4"/>{t.system}{context.theme === "system" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>
 }
