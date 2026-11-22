@@ -1,7 +1,12 @@
 FROM python:3.12-slim
 
+# Jalur ISP homeserver ke CDN PyPI (Fastly) cuma ~1-2 Mbps; mirror Aliyun ~12 Mbps.
+# Override saat build: --build-arg PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DEFAULT_TIMEOUT=60 \
+    PIP_RETRIES=5
 
 # ffmpeg dipakai untuk render clip + burn subtitle ASS.
 # fonts-dejavu-core wajib sebagai fallback. fontconfig + fc-cache untuk registrasi Anton.
@@ -22,7 +27,9 @@ COPY worker/fonts/ /usr/share/fonts/truetype/anton/
 RUN fc-cache -f -v
 
 COPY worker/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Cache pip BuildKit: wheel yang sudah pernah di-download tidak diambil ulang saat layer ini rebuild.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 COPY worker/clipper/ /app/clipper/
 
