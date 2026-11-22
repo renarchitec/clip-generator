@@ -2,6 +2,9 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "swiper/css";
+@import "swiper/css/navigation";
+@import "swiper/css/pagination";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -98,6 +101,13 @@
   --sidebar-border: #27272a;
   --sidebar-ring: #5ce1c4;
 }
+
+.recent-clips-swiper { --swiper-theme-color: var(--accent); --swiper-pagination-bullet-inactive-color: var(--muted-foreground); --swiper-pagination-bullet-inactive-opacity: .55; }
+.recent-clips-swiper .swiper-pagination-bullet { transition: width 180ms ease, opacity 180ms ease; }
+.recent-clips-pagination .swiper-pagination-bullet-active { width: 18px; border-radius: 999px; }
+.recent-clips-prev.swiper-button-disabled, .recent-clips-next.swiper-button-disabled { opacity: .4; }
+.recent-clips-pagination .swiper-pagination-bullet { margin: 0 3px; }
+.recent-clips-pagination { --swiper-theme-color: var(--accent); --swiper-pagination-bullet-inactive-color: var(--muted-foreground); --swiper-pagination-bullet-inactive-opacity: .55; display: flex; justify-content: center; gap: 2px; padding-top: 4px; }
 
 @layer base {
   button:not(:disabled), [role="button"]:not([aria-disabled="true"]), a[href], label[for], select { cursor: pointer; }

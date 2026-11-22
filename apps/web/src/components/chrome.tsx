@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
-import { Film, Languages, LogOut, Scissors } from "lucide-react"
+import { Film, Languages, ListVideo, LogOut, Scissors } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api, type User } from "@/lib/api"
@@ -27,11 +27,14 @@ function SignOut() {
 export function Topbar({ user }: { user?: User }) {
   const t = useT()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  const pageTitle = pathname.startsWith("/jobs/") ? t.jobDetails : t.dashboard
+  const pageTitle = pathname === "/jobs/" || pathname === "/jobs" ? t.jobs : pathname.startsWith("/jobs/") ? t.jobDetails : t.dashboard
   return <header className="sticky top-0 z-20 border-b border-border bg-background">
-    <div className="flex min-h-14 items-center justify-between gap-2 px-4 sm:px-7">
-      <div className="flex min-w-0 items-center gap-4"><span className="md:hidden"><Brand/></span><h1 className="hidden truncate font-display text-sm font-medium tracking-[-.01em] text-muted-foreground md:block">{pageTitle}</h1></div>
-      <div className="flex shrink-0 items-center gap-1 sm:gap-3"><Preferences />{user && <><span className="hidden max-w-44 truncate text-sm text-muted-foreground lg:block">{user.name || user.email}</span><SignOut/></>}</div>
+    <div className="px-4 sm:px-7">
+      <div className="flex min-h-14 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-4"><span className="md:hidden"><Brand/></span><h1 className="hidden truncate font-display text-sm font-medium tracking-[-.01em] text-muted-foreground md:block">{pageTitle}</h1></div>
+        <div className="flex shrink-0 items-center gap-1 sm:gap-3"><Preferences />{user && <><span className="hidden max-w-44 truncate text-sm text-muted-foreground lg:block">{user.name || user.email}</span><SignOut/></>}</div>
+      </div>
+      <nav aria-label={t.mainNavigation} className="flex gap-1 pb-2 md:hidden"><Link to="/" activeOptions={{ exact: true }} activeProps={{ className: "bg-secondary text-foreground" }} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"><Film className="size-4"/><span>{t.dashboard}</span></Link><Link to="/jobs" activeOptions={{ exact: true }} activeProps={{ className: "bg-secondary text-foreground" }} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"><ListVideo className="size-4"/><span>{t.jobs}</span></Link></nav>
     </div>
   </header>
 }
@@ -40,7 +43,7 @@ export function WorkspaceShell({ children, user }: { children: React.ReactNode; 
   const t = useT()
   return <div className="min-h-screen bg-background md:grid md:grid-cols-[184px_minmax(0,1fr)]">
     <aside className="hidden border-r border-sidebar-border bg-sidebar px-3 py-5 md:flex md:min-h-screen md:flex-col">
-      <div><Brand/><nav aria-label={t.mainNavigation} className="mt-8"><Link to="/" activeOptions={{ exact: true }} activeProps={{ className: "bg-sidebar-accent font-medium text-sidebar-accent-foreground" }} className="flex min-h-10 items-center gap-3 rounded-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"><Film className="size-4"/>{t.dashboard}</Link></nav></div>
+      <div><Brand/><nav aria-label={t.mainNavigation} className="mt-8 space-y-1"><Link to="/" activeOptions={{ exact: true }} activeProps={{ className: "bg-sidebar-accent font-medium text-sidebar-accent-foreground" }} className="flex min-h-10 items-center gap-3 rounded-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"><Film className="size-4"/>{t.dashboard}</Link><Link to="/jobs" activeOptions={{ exact: true }} activeProps={{ className: "bg-sidebar-accent font-medium text-sidebar-accent-foreground" }} className="flex min-h-10 items-center gap-3 rounded-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"><ListVideo className="size-4"/>{t.jobs}</Link></nav></div>
     </aside>
     <div className="flex min-h-screen min-w-0 flex-col">
       <Topbar user={user}/>

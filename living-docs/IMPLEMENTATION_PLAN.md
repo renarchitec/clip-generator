@@ -38,9 +38,9 @@ clipper/
 │  └─ web/                    # TanStack Start + Vite
 │     ├─ Dockerfile
 │     └─ src/
-│        ├─ routes/           # login, register, dashboard (/), job detail (/jobs/$jobId), reverse proxy (/api/$)
+│        ├─ routes/           # login, register, dashboard (/), job index (/jobs/), job detail (/jobs/$jobId), reverse proxy (/api/$)
 │        ├─ components/       # UI components (shadcn/ui), login-form, llm-status, chrome
-│        └─ lib/              # auth helper, i18n (EN/ID), theme (dark/light/system), api client
+│        └─ lib/              # auth helper, i18n (EN/ID), theme (dark/light/system), api client, formatting helpers
 ├─ packages/
 │  └─ shared/                 # Tipe TypeScript: JobData, JobProgress, JobResult, ReframeMode, AspectRatio, PreviewJobData
 ├─ worker/                    # Python 3.12 pipeline
@@ -182,10 +182,10 @@ Fitur "tinjau momen sebelum memotong" memungkinkan pengguna memindai URL terlebi
 ## Aplikasi Web Front-end
 
 Aplikasi web berada di `apps/web`:
-- **Framework:** TanStack Start (SSR dan file-based routing) + TanStack Query untuk state manajemen server.
+- **Framework:** TanStack Start (SSR dan file-based routing) + TanStack Query untuk state manajemen server; Swiper React untuk carousel klip (Navigation, Pagination, A11y, breakpoint responsif).
 - **Standar library — TanStack-first:** Setiap fitur baru memilih library TanStack sebelum dependency lain bila ada padanannya (Router/Start = routing, Query = state server, Form = form + validasi, Table = tabel, Virtual = virtualisasi). Form `login`, `register`, dan kartu pembuatan job di `/` memakai `@tanstack/react-form` untuk validasi klien berpesan EN/ID. Kartu job memakai nilai field TanStack Form sebagai satu-satunya sumber kebenaran; mode, reframe, takarir, dan opsi terkait tetap state komponen. Draft review (`saveReviewDraft`) membaca store form, sementara prefill regenerate (`/?from`) mengisi field lewat `form.setFieldValue`; alur preview tetap menggunakan nilai form terkini. Validasi mencakup URL wajib, batas pindai kustom 1–600 menit, jumlah klip 1–10, durasi 15–180 detik, dan rentang manual 1–10 dengan end > start.
-- **Shell dan dashboard:** Area aplikasi memakai sidebar navigasi menuju dashboard yang nyata, header sticky dengan pencarian klien-side atas URL job terbaru, preferensi bahasa/tema, dan sign out. Dashboard menampilkan composer tunggal dengan mode otomatis/manual tersegmen serta kartu job terbaru dalam grid. Light theme memakai kanvas abu terang dan surface putih; dark theme memakai kanvas arang, surface gelap, dan aksen mint untuk tindakan utama serta state terpilih.
-- **Komponen UI:** Komponen modular shadcn/ui berbasis Radix UI, ikon Lucide, dan utility `tw-animate-css`.
+- **Shell dan dashboard:** Area aplikasi memakai sidebar navigasi menuju dashboard dan `/jobs/`, header sticky dengan navigasi ponsel, pencarian klien-side atas URL klip terbaru, preferensi bahasa/tema, dan sign out. Dashboard menampilkan composer tunggal dengan mode otomatis/manual tersegmen, daftar job aktif/gagal, dan carousel klip Swiper dengan dialog pemutar. Route `/jobs/` menggunakan `GET /api/jobs` melalui Query untuk menampilkan seluruh pekerjaan dalam baris responsif. Light theme memakai kanvas abu terang dan surface putih; dark theme memakai kanvas arang, surface gelap, dan aksen mint untuk tindakan utama serta state terpilih.
+- **Komponen UI:** Komponen modular shadcn/ui berbasis Radix UI, termasuk dialog player aksesibel, ikon Lucide, dan utility `tw-animate-css`.
 - **Tailwind CSS v4:** Styling modern menggunakan engine Tailwind v4.
 - **Server Produksi:** Dijalankan menggunakan runtime `srvx` (`srvx --prod -s ../client dist/server/server.js`).
 - **Internal Reverse Proxy:** Route `/api/$` mem-proxy semua permintaan HTTP dari klien browser ke endpoint NestJS via `API_INTERNAL_URL` (default `http://localhost:3000`). Pendekatan ini membuat cookie autentikasi tetap *same-origin* tanpa kendala CORS.
@@ -196,6 +196,7 @@ Aplikasi web berada di `apps/web`:
   - `/login`: Masuk dengan email & password, mengarahkan ke dashboard.
   - `/register`: Pendaftaran akun (hanya aktif jika belum ada user atau `ALLOW_REGISTRATION=true`).
   - `/`: Dashboard utama. Memuat kartu pembuatan klip (URL sumber, mode switch, pilihan reframe, toggle captions, jumlah & durasi klip, arahan brief opsional atau rentang timestamp manual), kartu indikator status LLM, serta daftar riwayat job pengguna. Mendukung parameter pencarian `/?from=<jobId>` untuk prefill pembuatan job ulang (*regenerate*).
+  - `/jobs/`: Daftar seluruh job pengguna dari `GET /api/jobs`, status/tahap, progres job aktif, jumlah klip, usia relatif; diakses dari sidebar dan navigasi header mobile.
   - `/jobs/$jobId`: Tampilan detail progres job via SSE, tombol pembatalan, pemutar video klip 9:16 vertikal, tombol salin judul, tombol download klip, tombol buat ulang (*regenerate*), dan tombol dialog konfirmasi hapus klip.
 
 ## Keteramatan Status LLM

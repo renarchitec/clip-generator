@@ -110,7 +110,7 @@ function JobDetail() {
   return (
     <WorkspaceShell user={user}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <Link to="/" className="inline-flex min-h-11 items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
+        <Link to="/jobs" className="inline-flex min-h-11 items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
           <ArrowLeft aria-hidden="true" className="size-4" />{t.back}
         </Link>
         {job.data && <LlmStatus jobStatus={job.data.status} />}

@@ -1,8 +1,10 @@
 import { createFileRoute, Link, redirect, useNavigate, useSearch } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useForm } from "@tanstack/react-form"
-import { ArrowUpRight, Captions, ListChecks, LoaderCircle, Play, Plus, Users, Video, X } from "lucide-react"
+import { ArrowLeft, ArrowRight, ArrowUpRight, Captions, ListChecks, LoaderCircle, Play, Plus, Users, Video, X } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { A11y, Keyboard, Navigation, Pagination } from "swiper/modules"
+import { Swiper, SwiperSlide } from "swiper/react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,6 +20,8 @@ import { useLanguage, useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
 import { clearReviewDraft, loadReviewDraft, saveReviewDraft } from "@/lib/review-draft"
 import { LlmStatus } from "@/components/llm-status"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { relativeAge, sourceLabel } from "@/lib/format"
 
 export const Route = createFileRoute("/")({
   beforeLoad: async () => {
@@ -36,28 +40,6 @@ type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"];
 function formatMomentTime(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
-}
-
-function sourceLabel(url: string) {
-  try {
-    const parsed = new URL(url)
-    const host = parsed.hostname.replace(/^www\./, "")
-    const pathParts = parsed.pathname.split("/").filter(Boolean)
-    if (host === "youtu.be") return pathParts[0] || host
-    if (host === "youtube.com" || host === "m.youtube.com") return parsed.searchParams.get("v") || (pathParts[0] === "shorts" ? pathParts[1] : null) || host
-    return host
-  } catch {
-    return url
-  }
-}
-
-function relativeAge(value: string, locale: string) {
-  const timestamp = Date.parse(value)
-  if (Number.isNaN(timestamp)) return ""
-  const seconds = Math.round((timestamp - Date.now()) / 1000)
-  const units: [Intl.RelativeTimeFormatUnit, number][] = [["year", 31_536_000], ["month", 2_592_000], ["day", 86_400], ["hour", 3_600], ["minute", 60]]
-  const [unit, divisor] = units.find(([, size]) => Math.abs(seconds) >= size) ?? ["minute", 60]
-  return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(Math.round(seconds / divisor), unit)
 }
 
 type ReviewPanelProps = {
@@ -142,6 +124,7 @@ function Dashboard() {
   const [cueRanges, setCueRanges] = useState<{ start: number; end: number }[]>(draft?.cueRanges ?? [])
   const [description, setDescription] = useState(draft?.description ?? "")
   const [error, setError] = useState("")
+  const [playingClip, setPlayingClip] = useState<RecentClip | null>(null)
   const form = useForm({
     defaultValues: { url: draft?.url ?? "", clipCount: draft?.clipCount ?? 3, duration: draft?.duration ?? 45, customMinutes: draft?.maxSourceSec && ![600, 1200, 1800, 3600, 5400].includes(draft.maxSourceSec) ? String(draft.maxSourceSec / 60) : "10", ranges: draft?.ranges ?? [{ start: "", end: "" }] },
     validators: { onSubmit: ({ value }) => {
@@ -315,12 +298,16 @@ function Dashboard() {
       }
       {failedJobs.length > 0 && <div className="mt-3 flex flex-col divide-y divide-border">{failedJobs.map((job) => <Link key={job.id} to="/jobs/$jobId" params={{ jobId: job.id }} className="flex min-h-11 min-w-0 items-center gap-2 py-2 text-xs hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="shrink-0 font-medium text-destructive">{sourceLabel(job.url)} · {t.status.failed}</span><span className="min-w-0 truncate text-muted-foreground">{job.error || t.jobFailedFallback}</span></Link>)}</div>}
     </section>}
-    <section className="mt-8 border-t border-border pt-7"><div className="mb-5 flex items-end justify-between gap-3"><h2 className="font-display text-xl font-medium tracking-[-.025em]">{t.recent}</h2><span className="text-xs text-muted-foreground">{t.latestFirst}</span></div>
-      {clipsQuery.isPending ? <div role="status" aria-label={t.loading} className="grid grid-cols-2 gap-x-5 gap-y-7 sm:grid-cols-3 lg:grid-cols-4">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-64 w-full rounded-md sm:h-72" />)}</div> : clipsQuery.isError ? <Alert variant="destructive"><AlertDescription>{t.apiError} <Button size="sm" variant="ghost" onClick={() => clipsQuery.refetch()}>{t.retry}</Button></AlertDescription></Alert> : clipsQuery.data?.length && filteredClips.length ? <div className="grid grid-cols-2 gap-x-5 gap-y-7 sm:grid-cols-3 lg:grid-cols-4">{filteredClips.map((clip, index) => {
+    <section className="mt-8 border-t border-border pt-7"><div className="mb-5 flex items-end justify-between gap-3"><div><h2 className="font-display text-xl font-medium tracking-[-.025em]">{t.recent}</h2><span className="mt-1 block text-xs text-muted-foreground">{t.latestFirst}</span></div><div className="flex gap-2"><Button type="button" variant="outline" size="icon" className="size-10 recent-clips-prev" aria-label={t.previousClips}><ArrowLeft className="size-4"/></Button><Button type="button" variant="outline" size="icon" className="size-10 recent-clips-next" aria-label={t.nextClips}><ArrowRight className="size-4"/></Button></div></div>
+      {clipsQuery.isPending ? <div role="status" aria-label={t.loading} className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">{[0, 1, 2, 3].map((i) => <div key={i}><Skeleton className="aspect-[9/16] w-full rounded-md"/><Skeleton className="mt-2 h-4 w-4/5"/><Skeleton className="mt-2 h-3 w-2/3"/></div>)}</div> : clipsQuery.isError ? <Alert variant="destructive"><AlertDescription>{t.apiError} <Button size="sm" variant="ghost" onClick={() => clipsQuery.refetch()}>{t.retry}</Button></AlertDescription></Alert> : clipsQuery.data?.length && filteredClips.length ? <><Swiper modules={[Navigation, Pagination, Keyboard, A11y]} navigation={{ prevEl: ".recent-clips-prev", nextEl: ".recent-clips-next" }} pagination={{ el: ".recent-clips-pagination", clickable: true }} keyboard={{ enabled: true }} a11y={{ enabled: true }} spaceBetween={12} slidesPerView={2} breakpoints={{ 520: { slidesPerView: 3, spaceBetween: 14 }, 760: { slidesPerView: 4, spaceBetween: 16 }, 1100: { slidesPerView: 5, spaceBetween: 18 }, 1400: { slidesPerView: 6, spaceBetween: 20 } }} className="recent-clips-swiper !pb-8">{filteredClips.map((clip, index) => {
         const duration = Math.max(0, clip.endSec - clip.startSec)
-        const thumbAspect = clip.job.aspectRatio === "9:16" ? "aspect-[9/16]" : clip.job.aspectRatio === "1:1" ? "aspect-square" : "aspect-video"
-        return <article key={clip.id} className="min-w-0"><Link to="/jobs/$jobId" params={{ jobId: clip.job.id }} aria-label={`${clip.title || `${t.clip} ${index + 1}`}, ${sourceLabel(clip.job.url)}`} className="group block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className={`relative block w-full overflow-hidden rounded-md bg-secondary ${thumbAspect}`}><video src={`/api/clips/${clip.id}/stream`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" className="size-full object-contain transition-opacity group-hover:opacity-80" /><span className="absolute bottom-2 right-2 rounded-sm bg-black/85 px-1.5 py-1 font-mono text-[11px] tabular-nums text-white">{formatMomentTime(duration)}</span><span className="absolute inset-0 grid place-items-center bg-black/0 text-white opacity-0 transition group-hover:bg-black/15 group-hover:opacity-100"><span className="rounded-md bg-black/70 px-3 py-2 text-xs">{t.openClip}</span></span></span><span className="mt-2 block line-clamp-2 min-h-10 text-sm font-medium leading-5">{clip.title || `${t.clip} ${index + 1}`}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{sourceLabel(clip.job.url)}{relativeAge(clip.createdAt, locale) ? ` · ${relativeAge(clip.createdAt, locale)}` : ""}</span></Link></article>
-      })}</div> : clipsQuery.data?.length ? <p className="py-6 text-sm text-muted-foreground">{t.noSearchResults}</p> : <div className="py-8"><p className="text-sm font-medium">{t.empty}</p><p className="mt-1 text-sm text-muted-foreground">{t.startNow}</p></div>}
+        const title = clip.title || `${t.clip} ${index + 1}`
+        const age = relativeAge(clip.createdAt, locale)
+        return <SwiperSlide key={clip.id} className="min-w-0"><article><button type="button" onClick={() => setPlayingClip(clip)} aria-label={`${t.playClip}: ${title}`} className="group block w-full rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="relative block aspect-[9/16] w-full overflow-hidden rounded-md bg-black"><video src={`/api/clips/${clip.id}/stream`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" className="size-full object-contain transition-opacity group-hover:opacity-80"/><span className="absolute bottom-2 right-2 rounded-sm bg-black/85 px-1.5 py-1 font-mono text-[11px] tabular-nums text-white">{formatMomentTime(duration)}</span><span className="absolute inset-0 grid place-items-center bg-black/0 text-white transition group-hover:bg-black/20"><span className="grid size-10 place-items-center rounded-full border border-white/60 bg-black/55"><Play className="ml-0.5 size-4 fill-current"/></span></span></span><span className="mt-2 block h-10 overflow-hidden text-sm font-medium leading-5 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{title}</span><span className="mt-1 block h-4 truncate text-xs text-muted-foreground">{sourceLabel(clip.job.url)}{age ? ` · ${age}` : ""}</span></button></article></SwiperSlide>
+      })}</Swiper><div className="recent-clips-pagination" aria-label={t.recentClipsPages}/></> : clipsQuery.data?.length ? <p className="py-6 text-sm text-muted-foreground">{t.noSearchResults}</p> : <div className="py-8"><p className="text-sm font-medium">{t.empty}</p><p className="mt-1 text-sm text-muted-foreground">{t.startNow}</p></div>}
     </section>
+    <Dialog open={!!playingClip} onOpenChange={(open) => { if (!open) setPlayingClip(null) }}>
+      {playingClip && <DialogContent className="max-w-4xl gap-3 p-4 sm:p-5"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><DialogTitle className="truncate font-display text-base">{playingClip.title || t.clip}</DialogTitle><DialogDescription className="mt-1 truncate">{sourceLabel(playingClip.job.url)}</DialogDescription></div><DialogClose asChild><Button type="button" variant="outline" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}><X className="size-4"/></Button></DialogClose></div><video key={playingClip.id} src={`/api/clips/${playingClip.id}/stream`} controls autoPlay playsInline className="mx-auto max-h-[min(72dvh,760px)] w-full rounded-md bg-black object-contain"/><div className="flex justify-end"><Link to="/jobs/$jobId" params={{ jobId: playingClip.job.id }} className="inline-flex min-h-11 items-center gap-2 px-3 text-sm text-muted-foreground transition-colors hover:text-foreground">{t.openJob}<ArrowUpRight className="size-4"/></Link></div></DialogContent>}
+    </Dialog>
   </WorkspaceShell>
 }

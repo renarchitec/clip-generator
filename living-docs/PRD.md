@@ -1,6 +1,6 @@
 # PRD — Clipper (Generator Klip Vertikal)
 
-**Status:** aktif · **Versi:** 2.0 · **Terakhir diperbarui:** 19 November 2026
+**Status:** aktif · **Versi:** 2.0 · **Terakhir diperbarui:** 22 November 2026
 **Dokumen terkait:** `IMPLEMENTATION_PLAN.md` (arsitektur, skema database, API contract, deployment)
 
 ---
@@ -77,7 +77,7 @@ Kebutuhan utama:
 
 ## 7. Lingkup dan status fitur
 
-Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile) dengan preferensi bahasa (EN/ID) dan tema di header, pencarian klien-side klip terbaru (`⌘K`), dan satu composer: URL sebagai jangkar, satu pilihan mode otomatis/manual, opsi bertanda teks (bukan ikon saja), serta tombol yang menyebut hasilnya ("Buat {n} klip"). Di bawahnya ada bagian **Sedang diproses** (job antre/berjalan dengan tahap, persen, dan bar progres; job gagal ditampilkan ringkas dengan alasannya) dan grid **Klip terbaru** yang mengutamakan video (pill durasi, judul maks 2 baris, sumber + umur relatif). Halaman detail job menampilkan lima tahap berurutan (selesai/berjalan/menunggu), aksi lanjut untuk job gagal/dibatalkan, dan kartu klip dengan rank `#n`, durasi, rentang waktu sumber, unduh, dan hapus. Login/daftar berupa form ringkas tanpa dekorasi. Gaya visual mengacu ke produk clipper gelap: kanvas `#09090B`, surface `#121214`, garis tipis `#27272A`, tombol utama putih, aksen mint `#5CE1C4` hanya untuk state aktif/progres/fokus, radius kontrol 6px, tanpa shadow/gradient; angka dan durasi memakai font mono tabular. Tema terang memakai padanan putih/zinc dengan aksen teal `#087f68`.
+Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile) dengan preferensi bahasa (EN/ID) dan tema di header, pencarian klien-side klip terbaru (`⌘K`), dan satu composer: URL sebagai jangkar, satu pilihan mode otomatis/manual, opsi bertanda teks (bukan ikon saja), serta tombol yang menyebut hasilnya ("Buat {n} klip"). Di bawahnya ada bagian **Sedang diproses** (job antre/berjalan dengan tahap, persen, dan bar progres; job gagal ditampilkan ringkas dengan alasannya) dan carousel **Klip terbaru** dengan dua kartu di ponsel hingga enam di desktop, frame pratinjau 9:16 hitam seragam (rasio sumber lain letterbox), judul dua baris dan metadata tetap sejajar, navigasi/paginasi mint, serta dialog player ber-kontrol dan tautan sekunder ke job. Halaman **Pekerjaan** (`/jobs/`) memuat semua job dalam baris responsif dengan sumber, status/tahap, progres aktif, jumlah klip dan umur relatif; tautan tersedia dari sidebar desktop maupun header ponsel. Halaman detail job menampilkan lima tahap berurutan (selesai/berjalan/menunggu), aksi lanjut untuk job gagal/dibatalkan, dan kartu klip dengan rank `#n`, durasi, rentang waktu sumber, unduh, dan hapus. Login/daftar berupa form ringkas tanpa dekorasi. Gaya visual mengacu ke produk clipper gelap: kanvas `#09090B`, surface `#121214`, garis tipis `#27272A`, tombol utama putih, aksen mint `#5CE1C4` hanya untuk state aktif/progres/fokus, radius kontrol 6px, tanpa shadow/gradient; angka dan durasi memakai font mono tabular. Tema terang memakai padanan putih/zinc dengan aksen teal `#087f68`.
 
 | Prioritas | Fitur | Status |
 | --- | --- | --- |
