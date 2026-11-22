@@ -54,7 +54,9 @@ clipper/
 │  │  └─ models.py            # Definisi dataclass & konversi data job
 │  ├─ tests/                  # Pytest unit & integration tests
 │  ├─ fonts/                  # Anton-Regular.ttf + OFL.txt (font caption hook)
-│  ├─ requirements.txt
+│  ├─ requirements.in        # dependency runtime (sumber)
+│  ├─ requirements.txt       # lock ber-hash, hasil uv pip compile
+│  ├─ requirements-dev.txt   # + pytest, tidak masuk image
 │  └─ Dockerfile              # ffmpeg, fontconfig + Anton, fonts-dejavu-core, mediapipe, opencv
 ├─ pnpm-workspace.yaml
 ├─ turbo.json
@@ -220,6 +222,14 @@ Seluruh aplikasi di-deploy pada VPS tunggal di bawah project Dokploy `clipper`.
 | Redis | Database | Redis Dokploy | Volume internal | Internal | Broker BullMQ (`clip-jobs`, `previews`), cancel keys, LLM heartbeat |
 
 Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarahkan domain publik ke port internal container di server.
+
+### Image Worker (supply chain & runtime)
+
+- **Base image** `python:3.12-slim` dipatok ke digest sha256 di `worker/Dockerfile`. Update: ambil digest baru dari Docker Hub, ganti, rebuild.
+- **Dependency terkunci dengan hash.** Sumber dependency runtime ada di `worker/requirements.in`. `worker/requirements.txt` adalah lock hasil `uv pip compile requirements.in --generate-hashes --python-version 3.12 --python-platform aarch64-manylinux_2_28 -o requirements.txt` (versi pasti + sha256 untuk semua paket, termasuk transitif). Jangan edit `requirements.txt` manual; ubah `requirements.in` lalu regenerate. Dev/test (`pytest`) ada di `worker/requirements-dev.txt` dan tidak masuk image.
+- **Install:** `pip install --require-hashes --only-binary=:all: --no-deps`, jadi file yang isinya beda dari PyPI resmi ditolak dan tidak ada `setup.py` sdist yang dieksekusi saat build.
+- **Index PyPI** default mirror Aliyun (`ARG PIP_INDEX_URL`), karena rute ISP homeserver ke CDN PyPI (Fastly) cuma ~1–2 Mbps. Mirror tidak perlu dipercaya karena hash dicek; ganti dengan build arg `PIP_INDEX_URL=https://pypi.org/simple` bila perlu. URL index tidak masuk ENV image runtime. Cache pip memakai BuildKit cache mount.
+- **Non-root:** container jalan sebagai `clipper` (UID/GID `10001`). Kode di `/app` milik root dan read-only untuk worker. Bind mount host `/srv/storage/clips` wajib dimiliki `10001:10001`; set sekali dengan `docker run --rm -v /srv/storage/clips:/d python:3.12-slim chown -R 10001:10001 /d` (user SSH server bukan root). Container API masih jalan sebagai root, jadi tetap bisa menghapus file klip.
 
 ### Variabel Lingkungan
 
