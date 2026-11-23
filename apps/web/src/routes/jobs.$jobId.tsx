@@ -1,11 +1,10 @@
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Check, CircleAlert, Download, LoaderCircle, RotateCcw, Trash2 } from "lucide-react"
+import { ArrowLeft, Check, CircleAlert, LoaderCircle, RotateCcw, Trash2 } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -15,6 +14,7 @@ import { useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
 import { LlmStatus } from "@/components/llm-status"
 import { JobAssembly } from "@/components/job-assembly"
+import { ClipCard, ClipCardGrid } from "@/components/clip-card"
 
 export const Route = createFileRoute("/jobs/$jobId")({
   beforeLoad: async () => {
@@ -234,47 +234,26 @@ function JobDetail() {
                 <h2 className="font-display text-xl font-medium tracking-[-.03em]">{t.readyClips}</h2>
                 <span className="font-mono text-xs tabular-nums text-muted-foreground">{job.data.clips.filter((clip) => !clip.deletedAt).length}</span>
               </div>
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+              <ClipCardGrid aspectRatio={job.data.aspectRatio}>
                 {job.data.clips.filter((clip) => !clip.deletedAt).map((clip, index) => (
-                  <Card key={clip.id} className="overflow-hidden rounded-lg border-border bg-card">
-                    <div className={`relative bg-black ${job.data.aspectRatio === "9:16" ? "aspect-[9/16] max-h-[680px]" : job.data.aspectRatio === "1:1" ? "aspect-square" : "aspect-video"}`}>
-                      <video controls preload="metadata" className="size-full object-contain" src={`/api/clips/${clip.id}/stream`} aria-label={clip.title || `#${index + 1}`} />
-                      <span className="absolute left-3 top-3 rounded-md bg-background/90 px-2 py-1 text-xs font-medium">#{index + 1}</span>
-                      <span className="absolute right-3 top-3 rounded-md bg-background/90 px-2 py-1 font-mono text-xs tabular-nums">{Math.round(Math.max(0, clip.endSec - clip.startSec))}{t.seconds}</span>
-                    </div>
-                    <CardContent className="space-y-3 p-4">
-                      <div className="min-w-0">
-                        <h3 className="line-clamp-2 min-h-10 text-sm font-medium leading-5">{clip.title || `#${index + 1}`}</h3>
-                        <p className="mt-1 font-mono text-xs tabular-nums text-muted-foreground">[{formatTime(clip.startSec)}–{formatTime(clip.endSec)}]</p>
-                      </div>
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
-                        <div className="flex items-center gap-2">
-                          <Button variant="outline" className="min-h-11" asChild>
-                            <a href={`/api/clips/${clip.id}/download`} download><Download aria-hidden="true" className="mr-2 size-4" />{t.download}</a>
-                          </Button>
-                          {clip.downloadedAt && <span className="text-xs text-muted-foreground">{t.downloaded}</span>}
-                        </div>
-                        <AlertDialog open={deletingClip === clip.id} onOpenChange={(open) => setDeletingClip(open ? clip.id : null)}>
-                          <AlertDialogTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-11 text-muted-foreground hover:text-destructive" aria-label={`${t.deleteClip}: ${clip.title || `#${index + 1}`}`} disabled={deleteClip.isPending}>
-                              <Trash2 aria-hidden="true" className="size-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader><AlertDialogTitle>{t.deleteClipTitle}</AlertDialogTitle><AlertDialogDescription>{t.deleteClipDescription}</AlertDialogDescription></AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
-                              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={deleteClip.isPending} onClick={(event) => { event.preventDefault(); deleteClip.mutate(clip.id) }}>
-                                {deleteClip.isPending && deletingClip === clip.id && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin" />}{t.confirmDelete}
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <ClipCard key={clip.id} clip={{ ...clip, job: { id: job.data.id, url: job.data.url, aspectRatio: job.data.aspectRatio } }} index={index} meta={`${Math.round(Math.max(0, clip.endSec - clip.startSec))}${t.seconds} · ${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} deleteAction={<AlertDialog open={deletingClip === clip.id} onOpenChange={(open) => setDeletingClip(open ? clip.id : null)}>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="ghost" size="icon" className="size-10 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`${t.deleteClip}: ${clip.title || `#${index + 1}`}`} disabled={deleteClip.isPending}>
+                        <Trash2 aria-hidden="true" className="size-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader><AlertDialogTitle>{t.deleteClipTitle}</AlertDialogTitle><AlertDialogDescription>{t.deleteClipDescription}</AlertDialogDescription></AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
+                        <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={deleteClip.isPending} onClick={(event) => { event.preventDefault(); deleteClip.mutate(clip.id) }}>
+                          {deleteClip.isPending && deletingClip === clip.id && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin" />}{t.confirmDelete}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>} />
                 ))}
-              </div>
+              </ClipCardGrid>
             </section>
           )}
         </>

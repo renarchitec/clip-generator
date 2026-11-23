@@ -1,6 +1,7 @@
 import { Check, LoaderCircle } from "lucide-react"
 import type { JobSnapshot } from "@/lib/api"
 import type { useT } from "@/lib/i18n"
+import { ClipCard, ClipCardGrid, clipAspectClass } from "@/components/clip-card"
 
 const stages = ["download", "transcribe", "select", "render", "save"] as const
 type Copy = ReturnType<typeof useT>
@@ -17,7 +18,6 @@ export function JobAssembly({ job, t }: { job: JobSnapshot; t: Copy }) {
   const stageIndex = stages.indexOf(stage as typeof stages[number])
   const progress = Math.max(0, Math.min(100, job.progress ?? 0))
   const count = Math.max(1, Math.min(10, job.clipCount ?? 3))
-  const ratioClass = job.aspectRatio === "9:16" ? "aspect-[9/16]" : job.aspectRatio === "1:1" ? "aspect-square" : "aspect-video"
   const clips = job.clips.filter((clip) => !clip.deletedAt)
 
   return <div className="space-y-5">
@@ -28,17 +28,15 @@ export function JobAssembly({ job, t }: { job: JobSnapshot; t: Copy }) {
       </div>
       <div role="progressbar" aria-label={t.processing} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="mb-4 h-1.5 overflow-hidden rounded-full bg-secondary"><div className="h-full bg-primary transition-[width] duration-500" style={{ width: `${progress}%` }}/></div>
       <ol aria-label={t.processing} className="mb-4 grid grid-cols-5 gap-1">{stages.map((item, index) => <li key={item} className={`min-w-0 border-t-2 pt-2 text-[10px] leading-4 ${index < stageIndex ? "border-primary/60 text-muted-foreground" : index === stageIndex ? "border-primary text-foreground" : "border-border text-muted-foreground/65"}`}><span className="flex items-center gap-1">{index < stageIndex ? <Check className="size-3 shrink-0"/> : index === stageIndex ? <LoaderCircle className="size-3 shrink-0 animate-spin motion-reduce:animate-none"/> : <span className="size-3 shrink-0 rounded-full border border-current"/>}<span className="truncate">{t.stages[item]}</span></span></li>)}</ol>
-      <div className={`job-assembly relative grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6 ${`job-stage-${stage}`}`} style={{ "--job-progress": `${progress}%` } as React.CSSProperties}>
-        {Array.from({ length: count }, (_, index) => <article key={`placeholder-${index}`} aria-label={`${t.clip} ${index + 1} ${t.assemblingClips}`} className={`job-assembly__placeholder ${ratioClass} relative min-w-0 overflow-hidden rounded-lg border border-border bg-card`}>
+      <ClipCardGrid aspectRatio={job.aspectRatio} className={`job-assembly ${`job-stage-${stage}`}`}>
+        {Array.from({ length: count }, (_, index) => <article key={`placeholder-${index}`} aria-label={`${t.clip} ${index + 1} ${t.assemblingClips}`} className={`job-assembly__placeholder ${clipAspectClass(job.aspectRatio)} relative min-w-0 overflow-hidden rounded-lg border border-border bg-card`}>
           <div className="job-assembly__frame absolute inset-0" style={{ "--card-index": index, "--frame-blur": `${stage === "render" ? Math.max(0.5, 7 - progress * 0.045) : stage === "save" ? 1 : 7}px`, "--frame-opacity": stage === "render" ? String(Math.min(0.95, 0.68 + progress * 0.0025)) : stage === "select" ? ".84" : stage === "save" ? ".96" : ".72" } as React.CSSProperties} aria-hidden="true"><div className="job-assembly__art absolute inset-0"/><div className="job-assembly__scan absolute inset-y-0 -left-1/2 w-1/2"/><div className="absolute inset-x-3 bottom-4 space-y-2"><span className="job-assembly__bar block h-1 w-1/3 rounded-full"/><span className="job-assembly__bar block h-1.5 w-4/5 rounded-full"/><span className="job-assembly__bar block h-1.5 w-3/5 rounded-full"/><span className="flex gap-1 pt-1">{Array.from({ length: 9 }, (_, bar) => <i key={bar} className="job-assembly__wave h-3 flex-1 rounded-sm bg-primary/35" style={{ "--bar-index": bar } as React.CSSProperties}/>)}</span></div><span className="job-assembly__timecode absolute left-2 top-2 rounded px-1.5 py-1 font-mono text-[9px] tabular-nums">{timecode(index * 24)} · {String(index + 1).padStart(2, "0")}</span></div>
         </article>)}
-      </div>
+      </ClipCardGrid>
     </div>}
-    {done && clips.length > 0 && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6" aria-label={t.readyClips}>
-      {clips.map((clip, index) => <article key={clip.id} className={`job-assembly__real min-w-0 overflow-hidden rounded-lg border border-border bg-card ${ratioClass}`}>
-        <div className="relative size-full bg-black"><video controls preload="metadata" className="size-full object-contain" src={`/api/clips/${clip.id}/stream`} aria-label={clip.title || `${t.clip} ${index + 1}`}/><span className="absolute left-2 top-2 rounded bg-background/85 px-1.5 py-1 font-mono text-[10px]">{timecode(clip.startSec)}–{timecode(clip.endSec)}</span><a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${clip.title}`} className="absolute right-2 top-2 grid size-10 place-items-center rounded-md bg-black/75 text-white hover:bg-black"><span className="text-sm">↓</span></a><p className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/90 to-transparent px-3 pb-3 pt-7 text-xs font-medium text-white">{clip.title || `${t.clip} ${index + 1}`}</p></div>
-      </article>)}
-    </div>}
+    {done && clips.length > 0 && <ClipCardGrid aspectRatio={job.aspectRatio} aria-label={t.readyClips}>
+      {clips.map((clip, index) => <ClipCard key={clip.id} clip={{ ...clip, job: { id: job.id, url: job.url, aspectRatio: job.aspectRatio } }} index={index} meta={`${timecode(clip.startSec)}–${timecode(clip.endSec)}`}/>) }
+    </ClipCardGrid>}
     {done && clips.length === 0 && <p className="text-sm text-muted-foreground">{t.generatedAppear}</p>}
   </div>
 }
