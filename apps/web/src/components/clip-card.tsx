@@ -7,9 +7,11 @@ import { useT } from "@/lib/i18n"
 
 export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
 
-function timecode(seconds: number) {
-  const total = Math.max(0, Math.floor(seconds))
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
+function shortDuration(seconds: number) {
+  const total = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(total / 60)
+  const rest = total % 60
+  return minutes ? (rest ? `${minutes}m ${rest}s` : `${minutes}m`) : `${rest}s`
 }
 
 export function clipAspectClass(aspectRatio: ClipCardData["job"]["aspectRatio"]) {
@@ -30,20 +32,17 @@ export function ClipCard({ clip, meta, deleteAction, downloaded = false, index, 
   const [playerOpen, setPlayerOpen] = useState(false)
   const title = clip.title || `${t.clip} ${index === undefined ? "" : index + 1}`.trim()
   const duration = Math.max(0, clip.endSec - clip.startSec)
-  return <article className="group flex min-w-0 flex-col self-start overflow-hidden rounded-lg border border-border bg-card shadow-sm transition-shadow hover:shadow-md">
-    <button type="button" onClick={() => setPlayerOpen(true)} aria-label={`${t.playClip}: ${title}`} className={`relative block w-full ${frame === "uniform" ? "aspect-[9/16]" : clipAspectClass(clip.job.aspectRatio)} overflow-hidden bg-black text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring`}>
-      <video src={`/api/clips/${clip.id}/stream`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" className="size-full object-contain transition-transform duration-300 group-hover:scale-[1.02]"/>
-      <span className="absolute left-2 top-2 rounded-sm bg-black/70 px-1.5 py-1 font-mono text-[10px] tabular-nums text-white">{timecode(clip.startSec)}–{timecode(clip.endSec)}</span>
-      <span className="absolute bottom-2 right-2 rounded-sm bg-black/70 px-1.5 py-1 font-mono text-[10px] tabular-nums text-white">{timecode(duration)}</span>
-      <span className="absolute inset-0 grid place-items-center bg-black/0 text-white transition-colors group-hover:bg-black/20"><span className="grid size-10 place-items-center rounded-full border border-white/70 bg-black/65"><Play className="ml-0.5 size-4 fill-current"/></span></span>
+  return <article className={`clip-card group relative isolate min-w-0 overflow-hidden rounded-lg border border-border bg-card ${frame === "uniform" ? "aspect-[9/16]" : clipAspectClass(clip.job.aspectRatio)}`}>
+    <video src={`/api/clips/${clip.id}/stream`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" className="absolute inset-0 size-full bg-black object-contain"/>
+    <button type="button" onClick={() => setPlayerOpen(true)} aria-label={`${t.playClip}: ${title}`} className="absolute inset-0 z-[1] grid size-full place-items-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+      <span className="clip-card-play grid size-11 place-items-center rounded-full border border-accent/60 bg-background/75 text-primary shadow-lg backdrop-blur-sm transition duration-150 group-hover:scale-105 group-hover:ring-4 group-hover:ring-accent/20"><Play className="ml-0.5 size-[18px] fill-current"/></span>
+      <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent px-3 pb-3 pt-16 text-left text-white"><span className="line-clamp-2 block min-h-10 text-xs font-semibold leading-5 sm:text-sm">{title}</span><span className="mt-1 line-clamp-2 block text-[10px] leading-4 text-white/80 sm:text-xs">{meta}</span></span>
     </button>
-    <div className="w-full p-2.5 sm:p-3">
-      <h3 className="line-clamp-2 min-h-9 text-xs font-medium leading-[18px] sm:text-sm">{title}</h3>
-      <p className="mt-1 min-h-4 line-clamp-2 break-words text-[10px] leading-4 text-muted-foreground sm:text-xs">{meta}</p>
-      <div className="mt-2 flex min-h-10 items-center justify-between gap-1 border-t border-border pt-1.5">
-        <div className="flex min-w-0 items-center gap-1.5"><a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-10 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ArrowDownToLine className="size-4"/></a>{(downloaded || clip.downloadedAt) && <span title={t.downloaded} className="inline-flex items-center text-primary"><CircleCheck aria-hidden="true" className="size-3.5"/><span className="sr-only">{t.downloaded}</span></span>}</div>
-        {deleteAction}
-      </div>
+    <span className="absolute left-2 top-2 z-[2] rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span>
+    {(downloaded || clip.downloadedAt) && <span title={t.downloaded} className="absolute right-2 top-2 z-[2] transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0 [@media(hover:none)]:hidden inline-flex size-7 items-center justify-center rounded-full border border-accent/40 bg-background/85 text-primary shadow-sm"><CircleCheck aria-hidden="true" className="size-4"/><span className="sr-only">{t.downloaded}</span></span>}
+    <div className="clip-card-actions absolute right-2 top-2 z-[3] flex -translate-y-1 items-center gap-1 rounded-lg border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100">
+      <a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-10 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-4"/></a>
+      {deleteAction}
     </div>
     <ClipPlayerDialog clip={clip} open={playerOpen} onOpenChange={setPlayerOpen} meta={meta}/>
   </article>

@@ -236,7 +236,7 @@ function JobDetail() {
               </div>
               <ClipCardGrid aspectRatio={job.data.aspectRatio}>
                 {job.data.clips.filter((clip) => !clip.deletedAt).map((clip, index) => (
-                  <ClipCard key={clip.id} clip={{ ...clip, job: { id: job.data.id, url: job.data.url, aspectRatio: job.data.aspectRatio } }} index={index} meta={`${Math.round(Math.max(0, clip.endSec - clip.startSec))}${t.seconds} · ${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} deleteAction={<AlertDialog open={deletingClip === clip.id} onOpenChange={(open) => setDeletingClip(open ? clip.id : null)}>
+                  <ClipCard key={clip.id} clip={{ ...clip, job: { id: job.data.id, url: job.data.url, aspectRatio: job.data.aspectRatio } }} index={index} meta={`${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} deleteAction={<AlertDialog open={deletingClip === clip.id} onOpenChange={(open) => setDeletingClip(open ? clip.id : null)}>
                     <AlertDialogTrigger asChild>
                       <Button variant="ghost" size="icon" className="size-10 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`${t.deleteClip}: ${clip.title || `#${index + 1}`}`} disabled={deleteClip.isPending}>
                         <Trash2 aria-hidden="true" className="size-4" />

@@ -148,6 +148,17 @@
 .recent-clips-pagination .swiper-pagination-bullet { margin: 0 3px; }
 .recent-clips-pagination { --swiper-theme-color: var(--accent); --swiper-pagination-bullet-inactive-color: var(--muted-foreground); --swiper-pagination-bullet-inactive-opacity: .55; display: flex; justify-content: center; gap: 2px; padding-top: 4px; }
 
+.clip-card { transition: border-color 180ms ease, box-shadow 180ms ease; }
+.clip-card:hover, .clip-card:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
+.clip-card-play { transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease; }
+.clip-card-actions { transition: opacity 160ms ease, transform 160ms ease; }
+@media (hover: none) {
+  .clip-card-actions { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .clip-card, .clip-card-play, .clip-card-actions { transition: none !important; }
+}
+
 @layer base {
   button:not(:disabled), [role="button"]:not([aria-disabled="true"]), a[href], label[for], select { cursor: pointer; }
   button:disabled, [aria-disabled="true"] { cursor: not-allowed; }
