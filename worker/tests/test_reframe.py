@@ -264,6 +264,14 @@ def test_facecam_candidate_needs_two_similar_occurrences():
     assert face[0] == pytest.approx(0.1)
     assert face[2] == pytest.approx(0.059)
 
+    # Regresi q1jR850CE_o: karakter game kecil muncul 3x (tile overlap) di SATU
+    # keyframe; facecam lebih besar muncul di 4 keyframe berbeda -> facecam menang.
+    game = [(0.455, 0.707, 0.07, 0.0)] * 3
+    cam = [(0.075, 0.46, 0.08, 0.0)] * 4
+    face = reframe._facecam_candidate(game + cam, [2, 2, 2, 0, 1, 3, 4])
+    assert face is not None
+    assert face[0] == pytest.approx(0.075)
+
     # Kandidat tunggal tanpa pengulangan -> None.
     assert reframe._facecam_candidate([(0.1, 0.46, 0.059, 0.0)]) is None
     assert reframe._facecam_candidate([]) is None
