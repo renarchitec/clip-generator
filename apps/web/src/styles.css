@@ -148,6 +148,16 @@
 .recent-clips-pagination .swiper-pagination-bullet { margin: 0 3px; }
 .recent-clips-pagination { --swiper-theme-color: var(--accent); --swiper-pagination-bullet-inactive-color: var(--muted-foreground); --swiper-pagination-bullet-inactive-opacity: .55; display: flex; justify-content: center; gap: 2px; padding-top: 4px; }
 
+.clip-carousel { --swiper-theme-color: var(--accent); --swiper-pagination-color: var(--accent); --swiper-pagination-bullet-inactive-color: var(--muted-foreground); --swiper-pagination-bullet-inactive-opacity: .45; --swiper-pagination-bullet-size: 7px; --swiper-pagination-bullet-horizontal-gap: 3px; }
+.clip-carousel__swiper .swiper-wrapper { align-items: flex-start; }
+.clip-carousel__pagination.swiper-pagination-bullets { position: static; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; width: auto; transform: none; }
+.clip-carousel__pagination .swiper-pagination-bullet { transition: width 200ms ease, opacity 200ms ease, background-color 200ms ease; }
+.clip-carousel__pagination .swiper-pagination-bullet-active { width: 20px; border-radius: 999px; }
+.clip-carousel__nav:disabled, .clip-carousel__nav.swiper-button-disabled { opacity: .35; box-shadow: none; }
+@media (prefers-reduced-motion: reduce) {
+  .clip-carousel__pagination .swiper-pagination-bullet, .clip-carousel__nav { transition: none !important; }
+}
+
 .clip-card { transition: border-color 180ms ease, box-shadow 180ms ease; }
 .clip-card:hover, .clip-card:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
 .clip-card-play { transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease; }
