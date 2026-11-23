@@ -85,6 +85,10 @@ export interface ClipResult {
   end: number;
   /** path relatif di dalam CLIPS_DIR/<job_id>/ */
   file: string;
+  /** Dihasilkan LLM worker; tidak ada bila LLM tidak tersedia. */
+  caption?: string;
+  /** Dihasilkan LLM worker; tidak ada bila LLM tidak tersedia. */
+  hashtags?: string[];
 }
 
 export interface JobResult {
@@ -128,4 +132,23 @@ export interface PreviewResponse {
   error: string | null;
   candidates: PreviewCandidate[] | null;
   cues: PreviewCue[] | null;
+}
+
+export const SOCIAL_PLATFORMS = ['youtube', 'instagram', 'tiktok'] as const;
+export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
+
+export interface SocialProviderResponse {
+  platform: SocialPlatform;
+  configured: boolean;
+  available: boolean;
+}
+
+export interface SocialAccountResponse {
+  id: string;
+  platform: SocialPlatform;
+  displayName: string;
+  avatarUrl: string | null;
+  connectedAt: string;
+  expiresAt: string | null;
+  needsReconnect: boolean;
 }

@@ -1,6 +1,6 @@
 # PRD — Clipper (Generator Klip Vertikal)
 
-**Status:** aktif · **Versi:** 2.0 · **Terakhir diperbarui:** 22 November 2026
+**Status:** aktif · **Versi:** 2.0 · **Terakhir diperbarui:** 23 November 2026
 **Dokumen terkait:** `IMPLEMENTATION_PLAN.md` (arsitektur, skema database, API contract, deployment)
 
 ---
@@ -96,8 +96,9 @@ Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile
 | **P0** | Pilihan rasio output (`aspectRatio`): 9:16 (default) / 1:1 / 16:9 dengan takarir terskala per format | Selesai |
 | **P0** | Batas pemindaian sumber (`maxSourceSec`, 60–36000 detik, opsional): hanya bagian 0–limit yang dipindai/diunduh | Selesai |
 | **P0** | Pemulihan status job basi (rekonsiliasi DB ↔ state BullMQ tiap 60 detik, onCompleted idempoten) | Selesai |
+| **P1** | Fondasi publikasi sosial: akun YouTube per pengguna via OAuth, token terenkripsi, caption/hashtag AI, dan model publikasi | Fase 1 selesai |
 | **P1** | Retensi otomatis terjadwal via background cron (`downloaded_at` / TTL) | Dalam antrean |
-| **P2** | Auto-posting ke TikTok dan Instagram Graph API | Masa depan |
+| **P2** | Auto-posting ke YouTube, lalu Instagram dan TikTok | Fase 2 / masa depan |
 
 ## 8. Kebutuhan fungsional
 
@@ -154,6 +155,16 @@ Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile
 | FR-4.6 | Penghapusan job via `DELETE /api/jobs/:id` | Mengembalikan HTTP 204, menghapus semua file klip fisik dari disk, membatalkan job yang masih mengantre/berjalan (sinyal Redis + cabut dari BullMQ), dan menghapus baris job beserta klipnya (cascade). 404 bila bukan milik user |
 | FR-4.7 | Pemulihan status job basi: saat init API dan tiap 60 detik, listener membandingkan status DB (`queued`/`running`) dengan state job BullMQ | State BullMQ `completed` → job ditandai `done` tanpa duplikasi clip (idempoten, update bersyarat hanya untuk job queued/running); `failed` → gagal dengan alasan yang sama; job hilang dari Redis dan lebih tua dari 1 jam → gagal dengan pesan `"Job hilang dari antrean (worker/redis restart). Jalankan ulang."`. Job `done`/`failed`/`cancelled` tidak pernah ditimpa |
 
+### FR-5 Publikasi Sosial — Fase 1 (P1)
+
+| ID | Kebutuhan | Kriteria penerimaan |
+| --- | --- | --- |
+| FR-5.1 | Sistem menampilkan provider sosial dan daftar akun terhubung milik pengguna melalui `GET /api/social/providers` dan `GET /api/social/accounts` | YouTube tersedia dan berstatus `configured` hanya bila kredensial Google serta kunci enkripsi terisi; Instagram/TikTok belum tersedia. Respons akun hanya memuat profil, waktu koneksi/kedaluwarsa, dan `needsReconnect`, tanpa token |
+| FR-5.2 | Pengguna menghubungkan akun YouTube melalui OAuth dengan PKCE S256, scope upload/readonly, dan state sekali pakai yang terikat ke pengguna | Connect mengalihkan ke Google atau `social_error=not_configured`; callback yang valid menyimpan channel sebagai akun sosial dengan token terenkripsi lalu mengalihkan ke `connected=youtube`; state salah/kedaluwarsa dan error lain menghasilkan kode error singkat tanpa membocorkan token |
+| FR-5.3 | Pengguna memutuskan akun sosial miliknya melalui `DELETE /api/social/accounts/:id` | Akun valid mengembalikan 204, YouTube direvokasi best-effort, dan data lokal terhapus; akun bukan milik pengguna mengembalikan 404 |
+| FR-5.4 | Worker LLM menghasilkan caption dan hashtag opsional untuk setiap klip; API menormalkan dan menyertakannya pada respons klip | Caption di-trim maksimal 2.200 karakter; hashtag tanpa awalan `#` hanya memuat huruf/angka Unicode/underscore, unik, maksimal 15. Nilai tersimpan pada klip dan muncul di klip terbaru, detail job, dan snapshot SSE; field opsional dapat absen bila LLM tidak tersedia |
+| FR-5.5 | Halaman `/settings` (menu akun → Settings) menampilkan akun terhubung per platform | YouTube/Instagram/TikTok tampil berurutan; platform belum tersedia diberi label Coming soon, YouTube tanpa kredensial server menampilkan tombol Connect nonaktif beserta petunjuk. Akun bisa lebih dari satu per platform, punya tombol Reconnect saat akses kedaluwarsa, dan Disconnect lewat konfirmasi. Hasil OAuth (`connected` / `social_error`) tampil sebagai toast lalu query dibersihkan |
+
 ## 9. Model Data (Ringkas)
 
 Database menggunakan PostgreSQL dengan Prisma ORM.
@@ -161,7 +172,9 @@ Database menggunakan PostgreSQL dengan Prisma ORM.
 - **`users`** — `id` (UUID), `email` (unique), `name`, `passwordHash` (scrypt), `createdAt`.
 - **`sessions`** — `id` (UUID), `userId` (FK ke `users`, cascade delete), `tokenHash` (SHA-256 unique), `expiresAt`, `createdAt`.
 - **`jobs`** — `id` (UUID), `url`, `description` (opsional), `mode` (`auto` / `manual`), `reframe` (string, default `face_tracking`), `captions` (boolean, default `true`), `twoSpeakers` (boolean, default `false`, hanya berlaku untuk 9:16), `facecam` (boolean, default `false`, hanya 9:16 dan bila `twoSpeakers` nonaktif), `aspectRatio` (string, default `9:16`), `clipCount` (int), `targetDurationSec` (int), `maxSourceSec` (int opsional, 60–36000 detik, NULL = durasi penuh; hanya dipakai mode auto), `ranges` (JSON), `status` (`queued`, `running`, `done`, `failed`, `cancelled`), `stage`, `progress`, `message`, `error`, `userId` (FK ke `users`, set null), `createdAt`, `startedAt`, `finishedAt`.
-- **`clips`** — `id` (UUID), `jobId` (FK ke `jobs`, cascade delete), `title`, `startSec` (float), `endSec` (float), `filePath`, `downloadedAt` (timestamp opsional), `deletedAt` (timestamp opsional), `createdAt`.
+- **`clips`** — `id` (UUID), `jobId` (FK ke `jobs`, cascade delete), `title`, `startSec` (float), `endSec` (float), `filePath`, `caption` (opsional), `hashtags` (array), `downloadedAt` (timestamp opsional), `deletedAt` (timestamp opsional), `createdAt`.
+- **`social_accounts`** — akun platform per pengguna dengan identitas eksternal, profil, scope, access/refresh token terenkripsi, dan waktu kedaluwarsa; unik per `(userId, platform, externalId)` dan cascade saat pengguna dihapus.
+- **`publications`** — fondasi status unggah klip ke akun sosial (`queued`, `uploading`, `processing`, `published`, `failed`), caption/privacy, ID/URL eksternal, error, dan jumlah percobaan. Logika publish berada di Fase 2.
 
 Preview momen **tidak** memakai tabel database. Data preview hidup di antrean BullMQ/Redis (`previews`); job preview yang selesai/gagal dibuang otomatis setelah 1 jam.
 
@@ -188,6 +201,11 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | `/api/clips/:id/stream` | GET | Streaming video klip (mendukung HTTP Range header) | Sesi (hanya pemilik) |
 | `/api/clips/:id/download` | GET | Mengunduh file video klip dan mencatat `downloadedAt` | Sesi (hanya pemilik) |
 | `/api/clips/:id` | DELETE | Menghapus file fisik klip dari disk dan menghapus baris DB | Sesi (hanya pemilik) |
+| `/api/social/providers` | GET | Mengambil status konfigurasi/ketersediaan YouTube, Instagram, dan TikTok | Sesi |
+| `/api/social/accounts` | GET | Mengambil akun sosial terhubung milik pengguna tanpa token | Sesi |
+| `/api/social/accounts/:id` | DELETE | Memutuskan akun sosial; YouTube direvokasi best-effort | Sesi (hanya pemilik) |
+| `/api/social/youtube/connect` | GET | Memulai OAuth YouTube dengan state dan PKCE | Sesi |
+| `/api/social/youtube/callback` | GET | Menyelesaikan OAuth, menyimpan channel, lalu redirect ke settings | Sesi |
 | `/api/system/llm-status` | GET | Memeriksa status kesiapan LLM worker dari Redis | Sesi |
 
 ## 11. Kebutuhan Non-Fungsional

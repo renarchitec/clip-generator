@@ -29,6 +29,8 @@ export interface ClipSnapshot {
   title: string;
   startSec: number;
   endSec: number;
+  caption: string | null;
+  hashtags: string[];
   downloadedAt: Date | null;
   deletedAt: Date | null;
 }

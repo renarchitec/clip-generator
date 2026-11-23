@@ -32,13 +32,14 @@ clipper/
 │  │     ├─ jobs/             # CRUD job, cancel, retry, DTO, snapshot, SSE stream
 │  │     ├─ previews/         # pindai subtitle & LLM: POST /api/previews, GET /api/previews/:id
 │  │     ├─ clips/            # stream Range, download, delete clip fisik + DB
+│  │     ├─ social/           # akun sosial, OAuth YouTube, enkripsi token, fondasi publikasi
 │  │     ├─ system/           # status LLM worker dari Redis (GET /api/system/llm-status)
 │  │     ├─ queue/            # BullMQ producer, listener QueueEvents, Redis
 │  │     └─ config/           # validasi env (Zod)
 │  └─ web/                    # TanStack Start + Vite
 │     ├─ Dockerfile
 │     └─ src/
-│        ├─ routes/           # login, register, dashboard (/), job index (/jobs/), job detail (/jobs/$jobId), reverse proxy (/api/$)
+│        ├─ routes/           # login, register, dashboard (/), job index (/jobs/), job detail (/jobs/$jobId), clips (/clips), settings (/settings: akun sosial terhubung), reverse proxy (/api/$)
 │        ├─ components/       # UI components (shadcn/ui), login-form, llm-status, chrome
 │        └─ lib/              # auth helper, i18n (EN/ID), theme (dark/light/system), api client, formatting helpers
 ├─ packages/
@@ -81,6 +82,7 @@ Database dikelola melalui Prisma ORM dengan PostgreSQL. Migrasi dijalankan secar
 8. `20260110000000_add_job_aspect_ratio`: Penambahan kolom string `aspectRatio` pada tabel `jobs` (default `'9:16'`; nilai sah: `9:16` / `1:1` / `16:9`, divalidasi `@IsIn(ASPECT_RATIOS)` di DTO, parse toleran di worker: tidak dikenal/hilang -> `9:16`).
 9. `20260111000000_add_job_max_source_sec`: Penambahan kolom `maxSourceSec` `INTEGER` nullable pada tabel `jobs` (batas pemindaian sumber 60–36000 detik; NULL = durasi penuh; divalidasi `@IsInt @Min(60) @Max(36000)` di DTO, parse toleran di worker: invalid/di luar rentang -> `None`).
 10. `20260120000000_add_job_facecam`: Penambahan kolom boolean `facecam` pada tabel `jobs` (default `false`; API menormalkan ke `false` bila `aspectRatio` bukan `9:16` atau `twoSpeakers` aktif).
+11. `20260122000000_add_social_publishing`: Penambahan `caption` dan `hashtags` pada `clips`, enum `SocialPlatform`/`PublicationStatus`, tabel `social_accounts` untuk token terenkripsi per pengguna, serta tabel `publications` sebagai fondasi status unggah Fase 2.
 
 ## Pipeline Pemrosesan Worker
 
@@ -152,6 +154,27 @@ Event BullMQ bisa hilang saat Redis/worker restart (job selesai di worker, tetap
   - `failed` → jalankan `onFailed` dengan `failedReason`.
   - Job tidak ada di Redis dan `createdAt` lebih tua dari 1 jam → ditandai `failed` dengan pesan `"Job hilang dari antrean (worker/redis restart). Jalankan ulang."`; job yang lebih muda dibiarkan (race dengan `queue.add`).
 - **Idempoten:** `onCompleted` tidak menduplikasi clip (createMany hanya bila job belum punya clip) dan memakai update bersyarat `status in (queued, running)` sehingga job `done`/`failed`/`cancelled` tidak pernah ditimpa; `fail` juga hanya mengubah job yang masih `queued`/`running`. Job `cancelled` tidak pernah disentuh oleh pemulihan maupun event terlambat.
+- **Metadata sosial AI:** `caption` opsional dari hasil LLM worker di-trim dan dibatasi 2.200 karakter (kosong menjadi `null`). Setiap hashtag dibuang awalan `#`-nya, hanya huruf/angka Unicode dan underscore yang dipertahankan, lalu dideduplikasi dan dibatasi 15 item. Nilai yang sudah dinormalisasi disimpan bersama clip dan disertakan pada `GET /api/clips/recent`, detail job, serta snapshot SSE.
+
+## Publikasi Sosial — Fase 1 (YouTube)
+
+Fase 1 menyediakan koneksi akun dan model data publikasi; pengunggahan clip melalui tabel `publications` baru dikerjakan pada Fase 2. YouTube tersedia lebih dulu, sedangkan Instagram dan TikTok ditampilkan sebagai provider yang belum tersedia. Semua rute berada di balik `AuthGuard` global dan akun dibatasi pada pengguna sesi aktif.
+
+| Endpoint | Respons / perilaku |
+| --- | --- |
+| `GET /api/social/providers` | `[{ platform, configured, available }]`. YouTube `available=true`; `configured=true` hanya bila `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, dan `SOCIAL_TOKEN_KEY` terisi. Instagram/TikTok saat ini selalu `available=false, configured=false`. |
+| `GET /api/social/accounts` | `[{ id, platform, displayName, avatarUrl, connectedAt, expiresAt, needsReconnect }]`; `needsReconnect=true` bila refresh token tidak ada dan access token sudah kedaluwarsa. Token terenkripsi tidak pernah dikembalikan. |
+| `DELETE /api/social/accounts/:id` | HTTP 204; 404 bila akun bukan milik pengguna. YouTube direvokasi best-effort ke `https://oauth2.googleapis.com/revoke`, lalu baris lokal dihapus. |
+| `GET /api/social/youtube/connect` | HTTP 302 ke Google OAuth, atau ke `/settings?social_error=not_configured` bila konfigurasi belum lengkap. |
+| `GET /api/social/youtube/callback?code&state` | Menukar code, membaca channel YouTube, meng-upsert akun, lalu HTTP 302 ke `/settings?connected=youtube`. Kegagalan dialihkan ke `/settings?social_error=<short_code>` tanpa token pada URL/log. |
+
+**Alur OAuth YouTube:**
+
+1. API membuat `state` acak dan PKCE verifier/challenge S256. Payload `{userId, platform, codeVerifier}` disimpan pada Redis key `social:oauth:<state>` dengan TTL 600 detik. Koneksi memakai `redisConnection()` yang sama dengan BullMQ.
+2. Redirect Google memakai scope `youtube.upload` dan `youtube.readonly`, `access_type=offline`, `prompt=consent`, serta `include_granted_scopes=true`. `redirect_uri` adalah `${PUBLIC_WEB_URL}/api/social/youtube/callback`; web meneruskan `/api/*` ke API same-origin.
+3. Callback mengonsumsi state secara atomik (`GET` + `DEL`, sekali pakai), memeriksa `userId` dan platform, lalu menukar authorization code di `https://oauth2.googleapis.com/token`. Channel diambil dari `youtube/v3/channels?part=snippet&mine=true`.
+4. Access/refresh token dienkripsi AES-256-GCM dengan format `v1:<iv>:<tag>:<ciphertext>` (komponen base64url) sebelum upsert. Refresh token lama dipertahankan bila Google tidak mengirim yang baru.
+5. `SocialService.getValidAccessToken(accountId)` untuk Fase 2 me-refresh token yang kedaluwarsa dalam 60 detik dan menyimpan token baru. Provider diabstraksikan lewat `SocialProvider` agar Instagram/TikTok dapat ditambahkan tanpa mengubah kontrak akun.
 
 ## Pratinjau Momen (Review Moments)
 
@@ -240,6 +263,10 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 | `CLIPS_DIR` | API, worker | Lokasi mount volume bersama (`/data/clips`) |
 | `PORT` | API, web | Port listener HTTP (default 3000) |
 | `ALLOW_REGISTRATION` | API | Boolean (`true`/`false`), membuka pendaftaran pengguna tambahan |
+| `SOCIAL_TOKEN_KEY` | API | Opsional; kunci AES-256 32 byte dalam base64 atau hex untuk enkripsi token akun sosial |
+| `PUBLIC_WEB_URL` | API | Opsional; origin web untuk callback/redirect OAuth (default `https://clipper.rencraft.site`) |
+| `GOOGLE_CLIENT_ID` | API | Opsional; client ID OAuth Google untuk koneksi YouTube |
+| `GOOGLE_CLIENT_SECRET` | API | Opsional; client secret OAuth Google untuk koneksi YouTube |
 | `API_INTERNAL_URL` | Web | URL upstream API untuk reverse proxy server (mis. `http://clipper-api:3000`) |
 | `LLM_BASE_URL` | Worker | URL endpoint OpenAI-compatible (mis. OpenRouter / OpenCode Go) |
 | `LLM_API_KEY` | Worker | Kunci API untuk otentikasi LLM |
@@ -251,5 +278,5 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 ## Testing
 
 - **Worker (Python):** Unit tests pytest untuk `parse_vtt` / deduplikasi rolling, `write_ass` (ASS karaoke), face tracking & pan clamp (`reframe`), parser JSON jawaban LLM, refinement pass-2 dengan LLM di-mock (`LLM_REFINE` aktif/nonaktif, hasil tidak valid, error), snap deterministik batas momen (`snap.py`), pembatalan job, batas pemindaian sumber `maxSourceSec` (parse toleran, potongan cue 0–limit, unduh section tunggal mode auto + fallback), dan unduhan section manual (`worker/tests/`).
-- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, delete job, retry job (kepemilikan, status gate, salinan konfigurasi, jalur create yang sama), description, reframe, captions, aspect ratio (persistensi, normalisasi `twoSpeakers` ke `false` di luar 9:16, ukuran output worker), manual ranges/preservasi title-reason, batas pemindaian sumber `maxSourceSec`, pemulihan status job basi, preview momen, penghapusan klip, dan kriptografi scrypt (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
+- **API (Node):** Contract spec via `node --experimental-strip-types` untuk validasi DTO cancel, delete job, retry job (kepemilikan, status gate, salinan konfigurasi, jalur create yang sama), description, reframe, captions, aspect ratio (persistensi, normalisasi `twoSpeakers` ke `false` di luar 9:16, ukuran output worker), manual ranges/preservasi title-reason, batas pemindaian sumber `maxSourceSec`, pemulihan status job basi, preview momen, penghapusan klip, kriptografi scrypt, sanitasi caption/hashtag, AES-256-GCM token sosial, serta PKCE/URL OAuth (`apps/api/src/**/*.spec.ts`, dijalankan lewat `pnpm --filter api test`).
 - **Verifikasi pipeline tanpa Redis:** `python -m clipper.selftest --url <url> --mode <auto|manual> [--ranges 12-40,90-130]` menjalankan pipeline penuh secara lokal (tanpa antrean) untuk uji cepat.

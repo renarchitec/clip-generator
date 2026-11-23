@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClipsRouteImport } from './routes/clips'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as JobsIndexRouteImport } from './routes/jobs.index'
 import { Route as JobsJobIdRouteImport } from './routes/jobs.$jobId'
@@ -37,6 +38,11 @@ const RegisterRoute = RegisterRouteImport.update({
   path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
@@ -58,6 +64,7 @@ export interface FileRoutesByFullPath {
   '/clips': typeof ClipsRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRoute
   '/api/$': typeof ApiSplatRoute
   '/jobs/$jobId': typeof JobsJobIdRoute
   '/jobs/': typeof JobsIndexRoute
@@ -67,6 +74,7 @@ export interface FileRoutesByTo {
   '/clips': typeof ClipsRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRoute
   '/api/$': typeof ApiSplatRoute
   '/jobs/$jobId': typeof JobsJobIdRoute
   '/jobs': typeof JobsIndexRoute
@@ -77,6 +85,7 @@ export interface FileRoutesById {
   '/clips': typeof ClipsRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRoute
   '/api/$': typeof ApiSplatRoute
   '/jobs/$jobId': typeof JobsJobIdRoute
   '/jobs/': typeof JobsIndexRoute
@@ -88,6 +97,7 @@ export interface FileRouteTypes {
     | '/clips'
     | '/login'
     | '/register'
+    | '/settings'
     | '/api/$'
     | '/jobs/$jobId'
     | '/jobs/'
@@ -97,6 +107,7 @@ export interface FileRouteTypes {
     | '/clips'
     | '/login'
     | '/register'
+    | '/settings'
     | '/api/$'
     | '/jobs/$jobId'
     | '/jobs'
@@ -106,6 +117,7 @@ export interface FileRouteTypes {
     | '/clips'
     | '/login'
     | '/register'
+    | '/settings'
     | '/api/$'
     | '/jobs/$jobId'
     | '/jobs/'
@@ -116,6 +128,7 @@ export interface RootRouteChildren {
   ClipsRoute: typeof ClipsRoute
   LoginRoute: typeof LoginRoute
   RegisterRoute: typeof RegisterRoute
+  SettingsRoute: typeof SettingsRoute
   ApiSplatRoute: typeof ApiSplatRoute
   JobsJobIdRoute: typeof JobsJobIdRoute
   JobsIndexRoute: typeof JobsIndexRoute
@@ -151,6 +164,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/$': {
       id: '/api/$'
       path: '/api/$'
@@ -180,6 +200,7 @@ const rootRouteChildren: RootRouteChildren = {
   ClipsRoute: ClipsRoute,
   LoginRoute: LoginRoute,
   RegisterRoute: RegisterRoute,
+  SettingsRoute: SettingsRoute,
   ApiSplatRoute: ApiSplatRoute,
   JobsJobIdRoute: JobsJobIdRoute,
   JobsIndexRoute: JobsIndexRoute,

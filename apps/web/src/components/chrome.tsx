@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
-import { Film, Languages, Library, ListVideo, LogOut, Scissors } from "lucide-react"
+import { Film, Languages, Library, ListVideo, LogOut, Scissors, Settings } from "lucide-react"
 import { api, type User } from "@/lib/api"
 import { useLanguage, useT } from "@/lib/i18n"
 import { ThemeSelect } from "@/lib/theme"
@@ -23,13 +23,13 @@ function AccountMenu({ user }: { user: User }) {
   const name = user.name || user.email
   const initials = name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "U"
   const signOut = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); client.clear(); await navigate({ to: "/login" }) }
-  return <DropdownMenu><DropdownMenuTrigger aria-label={`${t.accountMenu}: ${name}`} title={name} className="inline-flex size-10 items-center justify-center rounded-full transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="grid size-8 place-items-center rounded-full border border-accent/30 bg-accent/15 font-display text-xs font-semibold tracking-wide text-accent">{initials}</span><span className="sr-only">{t.accountMenu}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-64"><DropdownMenuLabel className="px-2 py-2"><span className="flex items-center gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-lg border border-accent/30 bg-accent/15 font-display text-sm font-semibold text-accent">{initials}</span><span className="min-w-0"><span className="block truncate text-sm font-medium text-foreground">{user.name || t.account}</span><span className="mt-0.5 block truncate text-xs font-normal text-muted-foreground">{user.email}</span></span></span></DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => void signOut()} className="min-h-10 text-destructive focus:bg-destructive/10 focus:text-destructive"><LogOut className="size-4"/>{t.signOut}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+  return <DropdownMenu><DropdownMenuTrigger aria-label={`${t.accountMenu}: ${name}`} title={name} className="inline-flex size-10 items-center justify-center rounded-full transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="grid size-8 place-items-center rounded-full border border-accent/30 bg-accent/15 font-display text-xs font-semibold tracking-wide text-accent">{initials}</span><span className="sr-only">{t.accountMenu}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-64"><DropdownMenuLabel className="px-2 py-2"><span className="flex items-center gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-lg border border-accent/30 bg-accent/15 font-display text-sm font-semibold text-accent">{initials}</span><span className="min-w-0"><span className="block truncate text-sm font-medium text-foreground">{user.name || t.account}</span><span className="mt-0.5 block truncate text-xs font-normal text-muted-foreground">{user.email}</span></span></span></DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem asChild className="min-h-10"><Link to="/settings"><Settings className="size-4"/>{t.settings}</Link></DropdownMenuItem><DropdownMenuItem onSelect={() => void signOut()} className="min-h-10 text-destructive focus:bg-destructive/10 focus:text-destructive"><LogOut className="size-4"/>{t.signOut}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
 }
 
 export function Topbar({ user }: { user?: User }) {
   const t = useT()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  const pageTitle = pathname === "/jobs/" || pathname === "/jobs" ? t.jobs : pathname.startsWith("/jobs/") ? t.jobDetails : pathname === "/clips" ? t.clips : t.dashboard
+  const pageTitle = pathname === "/jobs/" || pathname === "/jobs" ? t.jobs : pathname.startsWith("/jobs/") ? t.jobDetails : pathname === "/clips" ? t.clips : pathname === "/settings" ? t.settings : t.dashboard
   return <header className="sticky top-0 z-20 border-b border-border bg-background">
     <div className="px-4 sm:px-7">
       <div className="flex min-h-14 items-center justify-between gap-2">

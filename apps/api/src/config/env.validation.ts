@@ -5,6 +5,10 @@ const envSchema = z.object({
   REDIS_URL: z.string().min(1),
   CLIPS_DIR: z.string().min(1),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  SOCIAL_TOKEN_KEY: z.string().optional(),
+  PUBLIC_WEB_URL: z.string().url().default('https://clipper.rencraft.site'),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
   ALLOW_REGISTRATION: z
     .enum(['true', 'false'])
     .optional()

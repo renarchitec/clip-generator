@@ -10,6 +10,7 @@ import { JobStatus, Prisma } from '@prisma/client';
 import { Queue, QueueEvents } from 'bullmq';
 import type { JobData, JobProgress, JobResult } from '@clipper/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { sanitizeClipSocialMetadata } from './clip-social';
 import { JobEventsService } from './job-events.service';
 import { QUEUE_EVENTS, QUEUE_NAME } from './queue.constants';
 
@@ -122,9 +123,15 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
 
     const clips = result.clips.flatMap((clip) => {
       const filePath = clipFilePath(jobId, clip.file);
-      return filePath
-        ? [{ title: clip.title, startSec: clip.start, endSec: clip.end, filePath }]
-        : [];
+      if (!filePath) return [];
+
+      return [{
+        title: clip.title,
+        startSec: clip.start,
+        endSec: clip.end,
+        filePath,
+        ...sanitizeClipSocialMetadata(clip),
+      }];
     });
 
     // Idempoten: recovery bisa memanggil ini ulang setelah event `completed`
@@ -246,6 +253,8 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
             title: true,
             startSec: true,
             endSec: true,
+            caption: true,
+            hashtags: true,
             downloadedAt: true,
             deletedAt: true,
           },

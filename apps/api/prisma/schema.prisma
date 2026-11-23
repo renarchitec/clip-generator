@@ -27,8 +27,9 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
-  sessions Session[]
-  jobs     Job[]
+  sessions       Session[]
+  jobs           Job[]
+  socialAccounts SocialAccount[]
 
   @@map("users")
 }
@@ -86,9 +87,72 @@ model Clip {
   filePath     String
   downloadedAt DateTime?
   deletedAt    DateTime?
+  caption      String?
+  hashtags     String[]   @default([])
   createdAt    DateTime  @default(now())
+
+  publications Publication[]
 
   @@index([jobId])
   @@index([createdAt])
   @@map("clips")
+}
+
+enum SocialPlatform {
+  youtube
+  instagram
+  tiktok
+}
+
+model SocialAccount {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform        SocialPlatform
+  externalId      String
+  displayName     String
+  avatarUrl       String?
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  expiresAt       DateTime?
+  scopes          String[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  publications Publication[]
+
+  @@unique([userId, platform, externalId])
+  @@index([userId])
+  @@map("social_accounts")
+}
+
+enum PublicationStatus {
+  queued
+  uploading
+  processing
+  published
+  failed
+}
+
+model Publication {
+  id              String            @id @default(uuid())
+  clipId          String
+  clip            Clip              @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  socialAccount   SocialAccount     @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  platform        SocialPlatform
+  mode            String            @default("direct")
+  caption         String
+  privacy         String
+  status          PublicationStatus @default(queued)
+  externalId      String?
+  externalUrl     String?
+  error           String?
+  attempts        Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([clipId])
+  @@index([socialAccountId])
+  @@map("publications")
 }

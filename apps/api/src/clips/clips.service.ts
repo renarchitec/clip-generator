@@ -44,6 +44,8 @@ export class ClipsService {
         title: true,
         startSec: true,
         endSec: true,
+        caption: true,
+        hashtags: true,
         createdAt: true,
         job: { select: { id: true, url: true, aspectRatio: true } },
       },

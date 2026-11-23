@@ -928,6 +928,25 @@ async def run_job(
             sections=media.sections or None,
         )
         await _check_cancel(should_cancel)
+        await _emit(on_progress, "save", 0, "membuat caption sosial")
+        try:
+            social_captions = await asyncio.to_thread(
+                llm.generate_captions,
+                moments,
+                cues,
+                job.description,
+            )
+            for clip, social_caption in zip(clips, social_captions):
+                if social_caption is not None:
+                    clip.caption = social_caption.caption
+                    clip.hashtags = list(social_caption.hashtags)
+        except Exception as exc:
+            # Caption bersifat opsional; jangan pernah menggagalkan klip yang sudah dirender.
+            log.warning(
+                "job %s: caption sosial dilewati karena error tak terduga (%s)",
+                job.job_id,
+                exc.__class__.__name__,
+            )
         result = JobResult(clips=clips)
         await save(result, clips_dir, job.job_id, on_progress)
         log.info("job %s selesai, %s clip", job.job_id, len(clips))

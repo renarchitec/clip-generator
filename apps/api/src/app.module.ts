@@ -7,6 +7,7 @@ import { validateEnv } from './config/env.validation';
 import { JobsModule } from './jobs/jobs.module';
 import { PreviewsModule } from './previews/previews.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SocialModule } from './social/social.module';
 import { SystemModule } from './system/system.module';
 
 @Module({
@@ -18,6 +19,7 @@ import { SystemModule } from './system/system.module';
     JobsModule,
     PreviewsModule,
     ClipsModule,
+    SocialModule,
     SystemModule,
   ],
 })

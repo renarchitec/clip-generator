@@ -9,6 +9,10 @@ export class AppConfig {
   readonly clipsDir: string;
   readonly port: number;
   readonly allowRegistration: boolean;
+  readonly socialTokenKey: string | undefined;
+  readonly publicWebUrl: string;
+  readonly googleClientId: string | undefined;
+  readonly googleClientSecret: string | undefined;
 
   constructor(config: ConfigService) {
     this.databaseUrl = config.getOrThrow<string>('DATABASE_URL');
@@ -16,5 +20,11 @@ export class AppConfig {
     this.clipsDir = config.getOrThrow<string>('CLIPS_DIR');
     this.port = Number(config.get('PORT') ?? 3000);
     this.allowRegistration = config.get<boolean>('ALLOW_REGISTRATION') ?? false;
+    this.socialTokenKey = config.get<string>('SOCIAL_TOKEN_KEY') || undefined;
+    this.publicWebUrl =
+      config.get<string>('PUBLIC_WEB_URL') ?? 'https://clipper.rencraft.site';
+    this.googleClientId = config.get<string>('GOOGLE_CLIENT_ID') || undefined;
+    this.googleClientSecret =
+      config.get<string>('GOOGLE_CLIENT_SECRET') || undefined;
   }
 }

@@ -281,14 +281,21 @@ class ClipResult:
     start: float
     end: float
     file: str
+    caption: Optional[str] = None
+    hashtags: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "title": self.title,
             "start": round(self.start, 2),
             "end": round(self.end, 2),
             "file": self.file,
         }
+        if self.caption:
+            payload["caption"] = self.caption
+        if self.hashtags:
+            payload["hashtags"] = list(self.hashtags)
+        return payload
 
 
 @dataclass

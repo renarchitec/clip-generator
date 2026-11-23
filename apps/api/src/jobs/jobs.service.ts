@@ -301,6 +301,8 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
       title: clip.title,
       startSec: clip.startSec,
       endSec: clip.endSec,
+      caption: clip.caption,
+      hashtags: clip.hashtags,
       downloadedAt: clip.downloadedAt,
       deletedAt: clip.deletedAt,
     })),
