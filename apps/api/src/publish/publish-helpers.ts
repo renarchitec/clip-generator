@@ -1,0 +1,297 @@
+/**
+ * Helper murni untuk publikasi YouTube. Tanpa import Nest/Prisma agar bisa
+ * dites langsung dengan `node --experimental-strip-types`.
+ */
+
+/** Ukuran chunk unggah: 8 MiB (kelipatan 256 KiB sesuai syarat resumable upload). */
+export const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
+export const UPLOAD_CHUNK_QUANTUM = 256 * 1024;
+/** Percobaan ulang maksimum per chunk saat 5xx / galat jaringan. */
+export const MAX_CHUNK_RETRIES = 5;
+/** Interval cek status pemrosesan YouTube. */
+export const PROCESSING_CHECK_DELAY_MS = 15_000;
+/** ~20 menit pada interval 15 detik. */
+export const MAX_PROCESSING_CHECKS = 80;
+/** Publikasi `uploading` tanpa job aktif yang lebih tua dari ini dianggap terputus. */
+export const STALE_UPLOAD_MS = 3_600_000;
+
+export const TITLE_MAX = 100;
+export const CAPTION_MAX = 5000;
+export const TARGETS_MAX = 5;
+export const PRIVACIES = ['public', 'unlisted', 'private'] as const;
+export const ACTIVE_PUBLICATION_STATUSES = [
+  'queued',
+  'uploading',
+  'processing',
+] as const;
+
+export interface ByteChunk {
+  start: number;
+  /** inklusif */
+  end: number;
+}
+
+/** Rentang chunk berikutnya mulai `offset`; null bila sudah selesai. */
+export function nextChunk(
+  offset: number,
+  size: number,
+  chunkSize = UPLOAD_CHUNK_SIZE,
+): ByteChunk | null {
+  if (!Number.isFinite(offset) || offset < 0 || offset >= size) return null;
+  return { start: offset, end: Math.min(offset + chunkSize, size) - 1 };
+}
+
+/** Header Content-Range untuk PUT chunk. */
+export function contentRange(chunk: ByteChunk, size: number): string {
+  return `bytes ${chunk.start}-${chunk.end}/${size}`;
+}
+
+/** Header Content-Range untuk menanyakan status sesi unggah. */
+export function statusQueryRange(size: number): string {
+  return `bytes */${size}`;
+}
+
+/**
+ * Header `Range` pada respons 308 (mis. `bytes=0-524287`) → offset byte
+ * berikutnya. Tanpa header = belum ada byte yang diterima (0). Format tak
+ * dikenal → null.
+ */
+export function parseResumeOffset(range: string | null | undefined): number | null {
+  if (range === null || range === undefined || range.trim() === '') return 0;
+  const match = /^bytes=0-(\d+)$/i.exec(range.trim());
+  if (!match) return null;
+  return Number(match[1]) + 1;
+}
+
+/** Backoff eksponensial dengan batas 30 detik (attempt mulai 1). */
+export function retryDelayMs(attempt: number): number {
+  return Math.min(1000 * 2 ** Math.max(0, attempt - 1), 30_000);
+}
+
+export function uploadPercent(sent: number, size: number): number {
+  if (size <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.floor((sent / size) * 100)));
+}
+
+export function shortsUrl(videoId: string): string {
+  return `https://youtube.com/shorts/${videoId}`;
+}
+
+/** Judul aman untuk YouTube: buang '<' '>' dan karakter kontrol, rapikan spasi, maks 100. */
+export function sanitizeTitle(title: string): string {
+  return Array.from(
+    title
+      .replace(/[<>]/g, '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  )
+    .slice(0, TITLE_MAX)
+    .join('')
+    .trim();
+}
+
+/** Deskripsi aman: buang '<' '>' (ditolak YouTube) dan karakter kontrol selain newline. */
+export function sanitizeCaption(caption: string): string {
+  return Array.from(
+    caption
+      .replace(/[<>]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ')
+      .trim(),
+  )
+    .slice(0, CAPTION_MAX)
+    .join('');
+}
+
+export interface PublishTargetInput {
+  accountId?: unknown;
+  title?: unknown;
+  caption?: unknown;
+  privacy?: unknown;
+  madeForKids?: unknown;
+}
+
+/**
+ * Validasi body publish di luar class-validator (dipakai service sebagai
+ * pertahanan kedua). Mengembalikan pesan galat atau null bila valid.
+ */
+export function validatePublishTargets(targets: unknown): string | null {
+  if (!Array.isArray(targets) || targets.length < 1) {
+    return 'targets wajib berisi minimal 1 akun.';
+  }
+  if (targets.length > TARGETS_MAX) {
+    return `targets maksimal ${TARGETS_MAX} akun.`;
+  }
+  const seen = new Set<string>();
+  for (const raw of targets as PublishTargetInput[]) {
+    if (!raw || typeof raw !== 'object') return 'target tidak valid.';
+    if (typeof raw.accountId !== 'string' || !raw.accountId) {
+      return 'accountId wajib diisi.';
+    }
+    if (seen.has(raw.accountId)) return 'accountId tidak boleh duplikat.';
+    seen.add(raw.accountId);
+    if (typeof raw.title !== 'string') return 'title wajib diisi.';
+    if (/[<>]/.test(raw.title)) return "title tidak boleh memuat '<' atau '>'.";
+    const title = raw.title.trim();
+    if (title.length < 1) return 'title wajib diisi.';
+    if (Array.from(title).length > TITLE_MAX) {
+      return `title maksimal ${TITLE_MAX} karakter.`;
+    }
+    if (typeof raw.caption !== 'string') return 'caption wajib berupa teks.';
+    if (Array.from(raw.caption).length > CAPTION_MAX) {
+      return `caption maksimal ${CAPTION_MAX} karakter.`;
+    }
+    if (!PRIVACIES.includes(raw.privacy as (typeof PRIVACIES)[number])) {
+      return 'privacy harus public, unlisted, atau private.';
+    }
+    if (raw.madeForKids !== undefined && typeof raw.madeForKids !== 'boolean') {
+      return 'madeForKids harus boolean.';
+    }
+  }
+  return null;
+}
+
+/** Galat unggah yang pesannya aman ditampilkan ke pengguna. */
+export class PublishError extends Error {
+  /** true bila boleh dicoba ulang otomatis (5xx / jaringan). */
+  readonly transient: boolean;
+
+  constructor(message: string, transient = false) {
+    super(message);
+    this.name = 'PublishError';
+    this.transient = transient;
+  }
+}
+
+export const RECONNECT_MESSAGE = 'Reconnect your account';
+
+/** Ambil `reason` pertama dari body galat Google API. */
+export function googleErrorReason(body: unknown): string | null {
+  const error = asRecord(asRecord(body)?.error);
+  const errors = error?.errors;
+  if (Array.isArray(errors)) {
+    const reason = asRecord(errors[0])?.reason;
+    if (typeof reason === 'string' && reason) return reason;
+  }
+  const status = error?.status;
+  return typeof status === 'string' && status ? status : null;
+}
+
+/** Petakan respons galat Google ke pesan singkat yang manusiawi. */
+export function mapGoogleError(status: number, body: unknown): string {
+  const reason = googleErrorReason(body);
+  switch (reason) {
+    case 'quotaExceeded':
+    case 'dailyLimitExceeded':
+    case 'RESOURCE_EXHAUSTED':
+      return 'YouTube daily upload quota exceeded, try again tomorrow';
+    case 'uploadLimitExceeded':
+      return 'Channel upload limit reached, try again later';
+    case 'rateLimitExceeded':
+    case 'userRateLimitExceeded':
+      return 'Too many requests to YouTube, try again later';
+    case 'youtubeSignupRequired':
+      return 'Create a YouTube channel for this account first';
+    case 'authError':
+    case 'invalidCredentials':
+    case 'UNAUTHENTICATED':
+      return RECONNECT_MESSAGE;
+    case 'insufficientPermissions':
+    case 'ACCESS_TOKEN_SCOPE_INSUFFICIENT':
+      return `Missing YouTube upload permission. ${RECONNECT_MESSAGE}`;
+    case 'forbidden':
+    case 'PERMISSION_DENIED':
+      return 'YouTube refused the upload for this account';
+    case 'invalidTitle':
+      return 'Title rejected by YouTube';
+    case 'invalidDescription':
+      return 'Description rejected by YouTube';
+    case 'invalidCategoryId':
+      return 'Category rejected by YouTube';
+    default:
+      break;
+  }
+  if (status === 401) return RECONNECT_MESSAGE;
+  if (status === 403) return 'YouTube refused the upload for this account';
+  if (status === 404) return 'Upload session expired, retry the upload';
+  if (status === 429) return 'Too many requests to YouTube, try again later';
+  if (status >= 500) return 'YouTube is temporarily unavailable, retry later';
+  return `YouTube upload failed (HTTP ${status})`;
+}
+
+export type VideoStatusOutcome =
+  | { state: 'published' }
+  | { state: 'failed'; reason: string }
+  | { state: 'pending' };
+
+/**
+ * Tafsirkan item `videos.list?part=status,processingDetails`.
+ * Bila processingDetails tak tersedia, uploadStatus uploaded/processed = published.
+ */
+export function interpretVideoStatus(item: unknown): VideoStatusOutcome {
+  const video = asRecord(item);
+  if (!video) return { state: 'failed', reason: 'Video not found on YouTube' };
+  const status = asRecord(video.status);
+  const uploadStatus = typeof status?.uploadStatus === 'string' ? status.uploadStatus : null;
+  const details = asRecord(video.processingDetails);
+  const processingStatus =
+    typeof details?.processingStatus === 'string' ? details.processingStatus : null;
+
+  if (uploadStatus === 'failed') {
+    return {
+      state: 'failed',
+      reason: `YouTube processing failed${suffix(status?.failureReason)}`,
+    };
+  }
+  if (uploadStatus === 'rejected') {
+    return {
+      state: 'failed',
+      reason: `Rejected by YouTube${suffix(status?.rejectionReason)}`,
+    };
+  }
+  if (uploadStatus === 'deleted') {
+    return { state: 'failed', reason: 'Video was deleted on YouTube' };
+  }
+  if (processingStatus === 'failed' || processingStatus === 'terminated') {
+    return {
+      state: 'failed',
+      reason: `YouTube processing failed${suffix(details?.processingFailureReason)}`,
+    };
+  }
+  if (uploadStatus === 'processed' || processingStatus === 'succeeded') {
+    return { state: 'published' };
+  }
+  if (uploadStatus === 'uploaded') {
+    return processingStatus === 'processing' ? { state: 'pending' } : { state: 'published' };
+  }
+  return { state: 'pending' };
+}
+
+/** Pilih publikasi terbaru per akun (input harus urut terbaru dulu). */
+export function latestPerAccount<
+  T extends { socialAccountId: string; platform: string; status: string; externalUrl: string | null },
+>(publications: T[]): { platform: T['platform']; status: T['status']; externalUrl: string | null }[] {
+  const seen = new Set<string>();
+  const result: { platform: T['platform']; status: T['status']; externalUrl: string | null }[] = [];
+  for (const publication of publications) {
+    if (seen.has(publication.socialAccountId)) continue;
+    seen.add(publication.socialAccountId);
+    result.push({
+      platform: publication.platform,
+      status: publication.status,
+      externalUrl: publication.externalUrl,
+    });
+  }
+  return result;
+}
+
+function suffix(value: unknown): string {
+  return typeof value === 'string' && value ? `: ${value}` : '';
+}
+
+function asRecord(value: unknown): Record<string, any> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, any>)
+    : null;
+}

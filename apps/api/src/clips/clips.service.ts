@@ -6,7 +6,9 @@ import type { Response } from 'express';
 import { JobStatus, type Clip } from '@prisma/client';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { latestPerAccount } from '../publish/publish-helpers';
 import { resolveClipPath } from './clip-path';
+import { CLIP_PUBLICATION_SELECT } from './clip-publications';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.mp4': 'video/mp4',
@@ -35,7 +37,7 @@ export class ClipsService {
    */
   async recent(userId: string, limit = 8) {
     const take = Math.min(Math.max(Math.trunc(limit) || 8, 1), 24);
-    return this.prisma.clip.findMany({
+    const clips = await this.prisma.clip.findMany({
       where: { deletedAt: null, job: { userId, status: JobStatus.done } },
       orderBy: { createdAt: 'desc' },
       take,
@@ -48,8 +50,13 @@ export class ClipsService {
         hashtags: true,
         createdAt: true,
         job: { select: { id: true, url: true, aspectRatio: true } },
+        publications: CLIP_PUBLICATION_SELECT,
       },
     });
+    return clips.map(({ publications, ...clip }) => ({
+      ...clip,
+      publications: latestPerAccount(publications),
+    }));
   }
 
   async stream(

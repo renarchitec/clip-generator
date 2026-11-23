@@ -152,3 +152,74 @@ export interface SocialAccountResponse {
   expiresAt: string | null;
   needsReconnect: boolean;
 }
+
+/** Antrean publikasi klip ke platform sosial (diproses oleh API, bukan worker Python). */
+export const PUBLISH_QUEUE_NAME = 'publish';
+
+export const PUBLICATION_STATUSES = [
+  'queued',
+  'uploading',
+  'processing',
+  'published',
+  'failed',
+] as const;
+export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
+
+export const PUBLICATION_PRIVACIES = ['public', 'unlisted', 'private'] as const;
+export type PublicationPrivacy = (typeof PUBLICATION_PRIVACIES)[number];
+
+/** Batas metadata unggahan YouTube. */
+export const PUBLISH_TITLE_MAX = 100;
+export const PUBLISH_CAPTION_MAX = 5000;
+export const PUBLISH_TARGETS_MAX = 5;
+
+export interface PublishTarget {
+  accountId: string;
+  /** 1..100 karakter, tanpa '<' atau '>' */
+  title: string;
+  /** 0..5000 karakter; dipakai sebagai deskripsi video */
+  caption: string;
+  privacy: PublicationPrivacy;
+  madeForKids?: boolean;
+}
+
+/** Body POST /api/clips/:id/publish (1..5 target). */
+export interface PublishRequest {
+  targets: PublishTarget[];
+}
+
+export interface PublicationResponse {
+  id: string;
+  clipId: string;
+  platform: SocialPlatform;
+  accountId: string;
+  accountName: string;
+  title: string;
+  caption: string;
+  privacy: PublicationPrivacy;
+  status: PublicationStatus;
+  /** 0-100, persentase unggah */
+  progress: number;
+  externalId: string | null;
+  externalUrl: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt: string | null;
+}
+
+/** Ringkasan publikasi untuk badge kartu klip (terbaru per akun). */
+export interface ClipPublicationSummary {
+  platform: SocialPlatform;
+  status: PublicationStatus;
+  externalUrl: string | null;
+}
+
+/** Payload job BullMQ antrean `publish`. */
+export interface PublishJobData {
+  publicationId: string;
+  /** 'upload' = unggah file; 'check' = cek status pemrosesan YouTube. */
+  kind: 'upload' | 'check';
+  /** jumlah pengecekan status yang sudah dilakukan (kind=check) */
+  checks?: number;
+}

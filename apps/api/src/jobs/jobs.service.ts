@@ -16,6 +16,8 @@ import type {
 } from '@clipper/shared';
 import { DEFAULT_ASPECT, DEFAULT_REFRAME } from '@clipper/shared';
 import { resolveClipPath } from '../clips/clip-path';
+import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
+import { latestPerAccount } from '../publish/publish-helpers';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
@@ -124,11 +126,16 @@ export class JobsService {
   async findOne(id: string, userId: string) {
     const job = await this.prisma.job.findUnique({
       where: { id, userId },
-      include: { clips: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        clips: {
+          orderBy: { createdAt: 'asc' },
+          include: { publications: CLIP_PUBLICATION_SELECT },
+        },
+      },
     });
 
     if (!job) throw new NotFoundException(`Job ${id} tidak ditemukan.`);
-    return job;
+    return withPublicationSummaries(job);
   }
 
   async cancel(id: string, userId: string) {
@@ -170,13 +177,19 @@ export class JobsService {
         message: 'Dibatalkan oleh pengguna.',
         finishedAt: new Date(),
       },
-      include: { clips: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        clips: {
+          orderBy: { createdAt: 'asc' },
+          include: { publications: CLIP_PUBLICATION_SELECT },
+        },
+      },
     });
 
-    this.jobEvents.publish(toSnapshot(updated));
+    const result = withPublicationSummaries(updated);
+    this.jobEvents.publish(toSnapshot(result));
     this.jobEvents.close(id);
 
-    return updated;
+    return result;
   }
 
   /**
@@ -276,7 +289,24 @@ export class JobsService {
 
 type JobWithClips = Prisma.JobGetPayload<{ include: { clips: true } }>;
 
-function toSnapshot(job: JobWithClips): JobSnapshot {
+type JobWithClipPublications = Prisma.JobGetPayload<{
+  include: { clips: { include: { publications: typeof CLIP_PUBLICATION_SELECT } } };
+}>;
+
+/** Ganti daftar publikasi mentah per klip dengan ringkasan terbaru per akun. */
+function withPublicationSummaries(job: JobWithClipPublications) {
+  return {
+    ...job,
+    clips: job.clips.map(({ publications, ...clip }) => ({
+      ...clip,
+      publications: latestPerAccount(publications),
+    })),
+  };
+}
+
+type JobWithClipSummaries = ReturnType<typeof withPublicationSummaries>;
+
+function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
   return {
     id: job.id,
     url: job.url,
@@ -305,6 +335,7 @@ function toSnapshot(job: JobWithClips): JobSnapshot {
       hashtags: clip.hashtags,
       downloadedAt: clip.downloadedAt,
       deletedAt: clip.deletedAt,
+      publications: 'publications' in clip ? clip.publications : [],
     })),
   };
 }

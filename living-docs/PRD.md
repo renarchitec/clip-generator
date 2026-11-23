@@ -98,7 +98,8 @@ Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile
 | **P0** | Pemulihan status job basi (rekonsiliasi DB ↔ state BullMQ tiap 60 detik, onCompleted idempoten) | Selesai |
 | **P1** | Fondasi publikasi sosial: akun YouTube per pengguna via OAuth, token terenkripsi, caption/hashtag AI, dan model publikasi | Fase 1 selesai |
 | **P1** | Retensi otomatis terjadwal via background cron (`downloaded_at` / TTL) | Dalam antrean |
-| **P2** | Auto-posting ke YouTube, lalu Instagram dan TikTok | Fase 2 / masa depan |
+| **P1** | Publish klip ke YouTube (resumable upload, status & progres, retry, badge kartu) | Fase 2 API selesai |
+| **P2** | Auto-posting ke Instagram dan TikTok | Masa depan |
 
 ## 8. Kebutuhan fungsional
 
@@ -165,6 +166,16 @@ Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile
 | FR-5.4 | Worker LLM menghasilkan caption dan hashtag opsional untuk setiap klip; API menormalkan dan menyertakannya pada respons klip | Caption di-trim maksimal 2.200 karakter; hashtag tanpa awalan `#` hanya memuat huruf/angka Unicode/underscore, unik, maksimal 15. Nilai tersimpan pada klip dan muncul di klip terbaru, detail job, dan snapshot SSE; field opsional dapat absen bila LLM tidak tersedia |
 | FR-5.5 | Halaman `/settings` (menu akun → Settings) menampilkan akun terhubung per platform | YouTube/Instagram/TikTok tampil berurutan; platform belum tersedia diberi label Coming soon, YouTube tanpa kredensial server menampilkan tombol Connect nonaktif beserta petunjuk. Akun bisa lebih dari satu per platform, punya tombol Reconnect saat akses kedaluwarsa, dan Disconnect lewat konfirmasi. Hasil OAuth (`connected` / `social_error`) tampil sebagai toast lalu query dibersihkan |
 
+### FR-5 Publikasi Sosial — Fase 2: Publish ke YouTube (P1)
+
+| ID | Kebutuhan | Kriteria penerimaan |
+| --- | --- | --- |
+| FR-5.6 | Pengguna mempublikasikan klip selesai ke 1..5 akun YouTube terhubung melalui `POST /api/clips/:id/publish` | Setiap target memuat judul 1..100 karakter tanpa `<`/`>`, caption 0..5000, privasi `public`/`unlisted`/`private`, dan `madeForKids` opsional. Sistem membuat satu publikasi `queued` per target dan mengembalikan 201. Clip/akun bukan milik pengguna → 404; akun non-YouTube → 400 `platform_unavailable`; clip belum siap → 400; publikasi aktif ganda untuk clip+akun → 409 |
+| FR-5.7 | Sistem mengunggah klip lewat resumable upload YouTube dan melaporkan status | Status berjalan `queued → uploading → processing → published` dengan progres unggah 0..100; unggahan di-stream per chunk 8 MiB dan dilanjutkan otomatis saat galat sementara; URL hasil berbentuk `https://youtube.com/shorts/<id>`; status pemrosesan dicek tiap 15 detik hingga ±20 menit |
+| FR-5.8 | Kegagalan publikasi ditampilkan dengan alasan singkat dan dapat diulang | Galat Google (kuota, batas unggah, channel belum dibuat, akses ditolak, otorisasi kedaluwarsa → "Reconnect your account") disimpan sebagai pesan singkat tanpa token; `POST /api/publications/:id/retry` hanya menerima publikasi `failed` dan memasukkannya kembali ke antrean |
+| FR-5.9 | Pengguna melihat riwayat dan badge publikasi klip | `GET /api/clips/:id/publications` mengembalikan riwayat terbaru dulu; klip terbaru, detail job, dan SSE menyertakan `publications: { platform, status, externalUrl }[]` (terbaru per akun) |
+| FR-5.10 | Publikasi yang terputus dipulihkan saat API dinyalakan ulang | Publikasi `queued` tanpa job antrean dimasukkan ulang; `uploading` lebih tua dari 1 jam ditandai `failed` (interrupted); `processing` dicek ulang |
+
 ## 9. Model Data (Ringkas)
 
 Database menggunakan PostgreSQL dengan Prisma ORM.
@@ -174,7 +185,7 @@ Database menggunakan PostgreSQL dengan Prisma ORM.
 - **`jobs`** — `id` (UUID), `url`, `description` (opsional), `mode` (`auto` / `manual`), `reframe` (string, default `face_tracking`), `captions` (boolean, default `true`), `twoSpeakers` (boolean, default `false`, hanya berlaku untuk 9:16), `facecam` (boolean, default `false`, hanya 9:16 dan bila `twoSpeakers` nonaktif), `aspectRatio` (string, default `9:16`), `clipCount` (int), `targetDurationSec` (int), `maxSourceSec` (int opsional, 60–36000 detik, NULL = durasi penuh; hanya dipakai mode auto), `ranges` (JSON), `status` (`queued`, `running`, `done`, `failed`, `cancelled`), `stage`, `progress`, `message`, `error`, `userId` (FK ke `users`, set null), `createdAt`, `startedAt`, `finishedAt`.
 - **`clips`** — `id` (UUID), `jobId` (FK ke `jobs`, cascade delete), `title`, `startSec` (float), `endSec` (float), `filePath`, `caption` (opsional), `hashtags` (array), `downloadedAt` (timestamp opsional), `deletedAt` (timestamp opsional), `createdAt`.
 - **`social_accounts`** — akun platform per pengguna dengan identitas eksternal, profil, scope, access/refresh token terenkripsi, dan waktu kedaluwarsa; unik per `(userId, platform, externalId)` dan cascade saat pengguna dihapus.
-- **`publications`** — fondasi status unggah klip ke akun sosial (`queued`, `uploading`, `processing`, `published`, `failed`), caption/privacy, ID/URL eksternal, error, dan jumlah percobaan. Logika publish berada di Fase 2.
+- **`publications`** — status unggah klip ke akun sosial (`queued`, `uploading`, `processing`, `published`, `failed`), `title`, caption/privacy, `madeForKids`, `progress` (persen unggah), ID/URL eksternal, error, jumlah percobaan, dan `publishedAt`. Diproses antrean BullMQ `publish` di API.
 
 Preview momen **tidak** memakai tabel database. Data preview hidup di antrean BullMQ/Redis (`previews`); job preview yang selesai/gagal dibuang otomatis setelah 1 jam.
 
@@ -206,6 +217,9 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | `/api/social/accounts/:id` | DELETE | Memutuskan akun sosial; YouTube direvokasi best-effort | Sesi (hanya pemilik) |
 | `/api/social/youtube/connect` | GET | Memulai OAuth YouTube dengan state dan PKCE | Sesi |
 | `/api/social/youtube/callback` | GET | Menyelesaikan OAuth, menyimpan channel, lalu redirect ke settings | Sesi |
+| `/api/clips/:id/publish` | POST | Mempublikasikan klip ke 1..5 akun YouTube; membuat publikasi `queued` dan mengembalikan `PublicationResponse[]` (201) | Sesi (hanya pemilik) |
+| `/api/clips/:id/publications` | GET | Riwayat publikasi klip, terbaru dulu | Sesi (hanya pemilik) |
+| `/api/publications/:id/retry` | POST | Mengulang publikasi `failed` | Sesi (hanya pemilik) |
 | `/api/system/llm-status` | GET | Memeriksa status kesiapan LLM worker dari Redis | Sesi |
 
 ## 11. Kebutuhan Non-Fungsional

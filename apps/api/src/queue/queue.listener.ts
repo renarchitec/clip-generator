@@ -9,7 +9,9 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
 import { Queue, QueueEvents } from 'bullmq';
 import type { JobData, JobProgress, JobResult } from '@clipper/shared';
+import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { PrismaService } from '../prisma/prisma.service';
+import { latestPerAccount } from '../publish/publish-helpers';
 import { sanitizeClipSocialMetadata } from './clip-social';
 import { JobEventsService } from './job-events.service';
 import { QUEUE_EVENTS, QUEUE_NAME } from './queue.constants';
@@ -257,6 +259,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
             hashtags: true,
             downloadedAt: true,
             deletedAt: true,
+            publications: CLIP_PUBLICATION_SELECT,
           },
         },
       },
@@ -280,7 +283,10 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       progress: job.progress,
       message: job.message,
       error: job.error,
-      clips: job.clips,
+      clips: job.clips.map(({ publications, ...clip }) => ({
+        ...clip,
+        publications: latestPerAccount(publications),
+      })),
     });
   }
 }

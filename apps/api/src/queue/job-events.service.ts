@@ -33,6 +33,8 @@ export interface ClipSnapshot {
   hashtags: string[];
   downloadedAt: Date | null;
   deletedAt: Date | null;
+  /** Ringkasan publikasi terbaru per akun untuk badge kartu. */
+  publications?: { platform: string; status: string; externalUrl: string | null }[];
 }
 
 /**

@@ -33,6 +33,7 @@ clipper/
 │  │     ├─ previews/         # pindai subtitle & LLM: POST /api/previews, GET /api/previews/:id
 │  │     ├─ clips/            # stream Range, download, delete clip fisik + DB
 │  │     ├─ social/           # akun sosial, OAuth YouTube, enkripsi token, fondasi publikasi
+│  │     ├─ publish/          # publikasi klip ke YouTube: endpoint, antrean `publish`, resumable upload
 │  │     ├─ system/           # status LLM worker dari Redis (GET /api/system/llm-status)
 │  │     ├─ queue/            # BullMQ producer, listener QueueEvents, Redis
 │  │     └─ config/           # validasi env (Zod)
@@ -83,6 +84,7 @@ Database dikelola melalui Prisma ORM dengan PostgreSQL. Migrasi dijalankan secar
 9. `20260111000000_add_job_max_source_sec`: Penambahan kolom `maxSourceSec` `INTEGER` nullable pada tabel `jobs` (batas pemindaian sumber 60–36000 detik; NULL = durasi penuh; divalidasi `@IsInt @Min(60) @Max(36000)` di DTO, parse toleran di worker: invalid/di luar rentang -> `None`).
 10. `20260120000000_add_job_facecam`: Penambahan kolom boolean `facecam` pada tabel `jobs` (default `false`; API menormalkan ke `false` bila `aspectRatio` bukan `9:16` atau `twoSpeakers` aktif).
 11. `20260122000000_add_social_publishing`: Penambahan `caption` dan `hashtags` pada `clips`, enum `SocialPlatform`/`PublicationStatus`, tabel `social_accounts` untuk token terenkripsi per pengguna, serta tabel `publications` sebagai fondasi status unggah Fase 2.
+12. `20260123000000_publication_youtube_fields`: Penambahan `title` (default `''`), `madeForKids` (default `false`), `progress` (persen unggah, default 0), dan `publishedAt` pada `publications`, serta indeks `status` untuk pemulihan saat boot.
 
 ## Pipeline Pemrosesan Worker
 
@@ -158,7 +160,7 @@ Event BullMQ bisa hilang saat Redis/worker restart (job selesai di worker, tetap
 
 ## Publikasi Sosial — Fase 1 (YouTube)
 
-Fase 1 menyediakan koneksi akun dan model data publikasi; pengunggahan clip melalui tabel `publications` baru dikerjakan pada Fase 2. YouTube tersedia lebih dulu, sedangkan Instagram dan TikTok ditampilkan sebagai provider yang belum tersedia. Semua rute berada di balik `AuthGuard` global dan akun dibatasi pada pengguna sesi aktif.
+Fase 1 menyediakan koneksi akun dan model data publikasi; pengunggahan clip melalui tabel `publications` berada di Fase 2 (bagian berikut). YouTube tersedia lebih dulu, sedangkan Instagram dan TikTok ditampilkan sebagai provider yang belum tersedia. Semua rute berada di balik `AuthGuard` global dan akun dibatasi pada pengguna sesi aktif.
 
 | Endpoint | Respons / perilaku |
 | --- | --- |
@@ -175,6 +177,27 @@ Fase 1 menyediakan koneksi akun dan model data publikasi; pengunggahan clip mela
 3. Callback mengonsumsi state secara atomik (`GET` + `DEL`, sekali pakai), memeriksa `userId` dan platform, lalu menukar authorization code di `https://oauth2.googleapis.com/token`. Channel diambil dari `youtube/v3/channels?part=snippet&mine=true`.
 4. Access/refresh token dienkripsi AES-256-GCM dengan format `v1:<iv>:<tag>:<ciphertext>` (komponen base64url) sebelum upsert. Refresh token lama dipertahankan bila Google tidak mengirim yang baru.
 5. `SocialService.getValidAccessToken(accountId)` untuk Fase 2 me-refresh token yang kedaluwarsa dalam 60 detik dan menyimpan token baru. Provider diabstraksikan lewat `SocialProvider` agar Instagram/TikTok dapat ditambahkan tanpa mengubah kontrak akun.
+
+## Publikasi Sosial — Fase 2 (Publish ke YouTube)
+
+Fase 2 mengunggah klip ke akun YouTube terhubung. Pemrosesan berlangsung di API (bukan worker Python) lewat antrean BullMQ `publish` (`PUBLISH_QUEUE_NAME` di `queue.constants.ts` dan `packages/shared`). Semua rute berada di balik `AuthGuard` global; clip dan akun yang bukan milik pengguna menghasilkan 404.
+
+| Endpoint | Respons / perilaku |
+| --- | --- |
+| `POST /api/clips/:id/publish` | Body `{ targets: [{ accountId, title (1..100, tanpa '<'/'>'), caption (0..5000), privacy: public\|unlisted\|private, madeForKids? }] }`, 1..5 target, accountId unik. Clip harus milik pengguna, belum dihapus, dan job-nya `done` (400 `clip_not_ready`). Akun non-YouTube → 400 `platform_unavailable`. Publikasi aktif (`queued`/`uploading`/`processing`) untuk clip+akun yang sama → 409 `publication_in_progress`. Membuat satu `Publication` per target (status `queued`), memasukkan job `upload` per publikasi, lalu mengembalikan HTTP 201 `PublicationResponse[]`. |
+| `GET /api/clips/:id/publications` | `PublicationResponse[]` milik clip, terbaru dulu. |
+| `POST /api/publications/:id/retry` | Hanya publikasi `failed` (400 selain itu, 409 bila ada publikasi aktif lain untuk clip+akun). Status direset ke `queued` (progres, error, ID/URL eksternal dikosongkan), job dimasukkan ulang, lalu mengembalikan `PublicationResponse`. |
+
+`PublicationResponse = { id, clipId, platform, accountId, accountName, title, caption, privacy, status, progress, externalId, externalUrl, error, createdAt, updatedAt, publishedAt }` (tipe di `packages/shared`). `GET /api/clips/recent`, `GET /api/jobs/:id`, dan snapshot SSE menyertakan ringkasan ringan `publications: { platform, status, externalUrl }[]` per clip (terbaru per akun) untuk badge kartu.
+
+**Alur `PublishProcessor` (`@Processor('publish')`, concurrency 2):**
+
+1. Job `upload` mengklaim publikasi `queued` (atau `uploading` yang stalled) menjadi `uploading`, `attempts++`, lalu memuat clip, memeriksa file di `CLIPS_DIR` lewat `resolveClipPath`, dan mengambil token via `SocialService.getValidAccessToken` (gagal refresh → `failed` dengan pesan "Reconnect your account").
+2. Sesi resumable dibuat dengan `POST https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status` berisi `snippet {title, description: caption, categoryId: '22'}` dan `status {privacyStatus, selfDeclaredMadeForKids}` serta header `X-Upload-Content-Type: video/mp4` dan `X-Upload-Content-Length`.
+3. File di-`PUT` per chunk 8 MiB (kelipatan 256 KiB) dengan `Content-Range`, di-stream dari disk (`createReadStream` start/end) tanpa buffer penuh. Respons 308 dilanjutkan dari header `Range`; 5xx/galat jaringan memakai backoff eksponensial (maks 5 kali per chunk) lalu menanyakan status sesi dengan `Content-Range: bytes */<size>`. Progres ditulis ke DB per chunk bila persen berubah.
+4. Setelah unggah selesai, status menjadi `processing` dengan `externalId` = id video dan `externalUrl` = `https://youtube.com/shorts/<id>`. Job `check` tertunda 15 detik memanggil `videos.list?part=status,processingDetails`; `processed`/`succeeded` (atau `uploaded` tanpa processingDetails) → `published` + `publishedAt`; `failed`/`rejected`/`deleted` → `failed` dengan alasannya; masih diproses → job `check` berikutnya (maks 80 kali ≈ 20 menit, setelah itu dianggap `published` karena video sudah ada).
+5. Galat Google dipetakan ke pesan singkat (`quotaExceeded`, `uploadLimitExceeded`, `youtubeSignupRequired`, 401 → "Reconnect your account", `forbidden`, dll.). Token tidak pernah dicatat atau disimpan pada `error`. Job BullMQ selalu selesai normal; pengulangan dilakukan lewat endpoint retry.
+6. Saat API boot, publikasi aktif tanpa job BullMQ dipulihkan: `queued` dimasukkan ulang, `uploading` yang lebih tua dari 1 jam ditandai `failed` ("Upload interrupted"), dan `processing` dijadwalkan cek status ulang.
 
 ## Pratinjau Momen (Review Moments)
 

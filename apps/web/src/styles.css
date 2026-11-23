@@ -180,3 +180,7 @@
   html { @apply font-sans; font-feature-settings: "ss01" on, "cv11" on; }
   ::selection { background: color-mix(in oklab, var(--primary) 25%, transparent); }
 }
+
+@keyframes publish-slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+.publish-indeterminate > span { animation: publish-slide 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .publish-indeterminate > span { animation: none; width: 100%; opacity: .35; } }

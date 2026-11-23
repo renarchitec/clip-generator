@@ -20,3 +20,9 @@ export const PREVIEW_QUEUE_NAME = 'previews';
 export function cancelKey(jobId: string): string {
   return `cancel:${jobId}`;
 }
+
+/**
+ * Antrean publikasi ke platform sosial; diproses oleh API (PublishProcessor).
+ * Harus sama dengan PUBLISH_QUEUE_NAME di packages/shared/src/index.ts.
+ */
+export const PUBLISH_QUEUE_NAME = 'publish';
