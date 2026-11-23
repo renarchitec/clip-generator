@@ -63,7 +63,6 @@ function JobDetail() {
     },
     onError: () => toast.error(t.retryFailed),
   })
-  const [deletingClip, setDeletingClip] = useState<string | null>(null)
   const [deleteJobOpen, setDeleteJobOpen] = useState(false)
   const deleteJob = useMutation({
     mutationFn: () => api<void>(`/jobs/${jobId}`, { method: "DELETE" }),
@@ -75,17 +74,6 @@ function JobDetail() {
     },
     onError: () => toast.error(t.jobDeleteFailed),
     onSettled: () => setDeleteJobOpen(false),
-  })
-  const deleteClip = useMutation({
-    mutationFn: (clipId: string) => api(`/clips/${clipId}`, { method: "DELETE" }),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey })
-      void client.invalidateQueries({ queryKey: ["jobs"] })
-      void client.invalidateQueries({ queryKey: ["clips", "recent"] })
-      toast.success(t.clipDeleted)
-    },
-    onError: () => toast.error(t.clipDeleteFailed),
-    onSettled: () => setDeletingClip(null),
   })
   const terminal = !!job.data && ["done", "failed", "cancelled"].includes(job.data.status)
 
@@ -236,22 +224,7 @@ function JobDetail() {
               </div>
               <ClipCardGrid aspectRatio={job.data.aspectRatio}>
                 {job.data.clips.filter((clip) => !clip.deletedAt).map((clip, index) => (
-                  <ClipCard key={clip.id} clip={{ ...clip, job: { id: job.data.id, url: job.data.url, aspectRatio: job.data.aspectRatio } }} index={index} meta={`${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} deleteAction={<AlertDialog open={deletingClip === clip.id} onOpenChange={(open) => setDeletingClip(open ? clip.id : null)}>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="icon" className="size-10 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`${t.deleteClip}: ${clip.title || `#${index + 1}`}`} disabled={deleteClip.isPending}>
-                        <Trash2 aria-hidden="true" className="size-4" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader><AlertDialogTitle>{t.deleteClipTitle}</AlertDialogTitle><AlertDialogDescription>{t.deleteClipDescription}</AlertDialogDescription></AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
-                        <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={deleteClip.isPending} onClick={(event) => { event.preventDefault(); deleteClip.mutate(clip.id) }}>
-                          {deleteClip.isPending && deletingClip === clip.id && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin" />}{t.confirmDelete}
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>} />
+                  <ClipCard key={clip.id} clip={{ ...clip, job: { id: job.data.id, url: job.data.url, aspectRatio: job.data.aspectRatio } }} index={index} meta={`${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} />
                 ))}
               </ClipCardGrid>
             </section>

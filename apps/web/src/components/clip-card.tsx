@@ -1,6 +1,10 @@
-import { ArrowDownToLine, CircleCheck, Play, X } from "lucide-react"
+import { ArrowDownToLine, CircleCheck, LoaderCircle, Play, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 import { useState } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { toast } from "sonner"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { useT } from "@/lib/i18n"
@@ -27,9 +31,22 @@ export function ClipCardGrid({ aspectRatio, children, className = "", ...props }
   return <div {...props} className={`grid items-start ${columns} gap-x-3 gap-y-5 sm:gap-4 ${className}`}>{children}</div>
 }
 
-export function ClipCard({ clip, meta, deleteAction, downloaded = false, index, frame }: { clip: ClipCardData; meta: string; deleteAction?: React.ReactNode; downloaded?: boolean; index?: number; /** Force one media frame (e.g. mixed-ratio library) */ frame?: "uniform" }) {
+export function ClipCard({ clip, meta, downloaded = false, index, frame }: { clip: ClipCardData; meta: string; downloaded?: boolean; index?: number; /** Force one media frame (e.g. mixed-ratio library) */ frame?: "uniform" }) {
   const t = useT()
   const [playerOpen, setPlayerOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const client = useQueryClient()
+  const remove = useMutation({
+    mutationFn: () => api(`/clips/${clip.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      setConfirmOpen(false)
+      setPlayerOpen(false)
+      void client.invalidateQueries({ queryKey: ["jobs"] })
+      void client.invalidateQueries({ queryKey: ["clips", "recent"] })
+      toast.success(t.clipDeleted)
+    },
+    onError: () => toast.error(t.clipDeleteFailed),
+  })
   const title = clip.title || `${t.clip} ${index === undefined ? "" : index + 1}`.trim()
   const duration = Math.max(0, clip.endSec - clip.startSec)
   return <article className={`clip-card group relative isolate min-w-0 overflow-hidden rounded-lg border border-border bg-card ${frame === "uniform" ? "aspect-[9/16]" : clipAspectClass(clip.job.aspectRatio)}`}>
@@ -40,19 +57,28 @@ export function ClipCard({ clip, meta, deleteAction, downloaded = false, index, 
     </button>
     <span className="absolute left-2 top-2 z-[2] rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span>
     {(downloaded || clip.downloadedAt) && <span title={t.downloaded} className="absolute right-2 top-2 z-[2] transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0 [@media(hover:none)]:hidden inline-flex size-7 items-center justify-center rounded-full border border-accent/40 bg-background/85 text-primary shadow-sm"><CircleCheck aria-hidden="true" className="size-4"/><span className="sr-only">{t.downloaded}</span></span>}
-    <div className="clip-card-actions absolute right-2 top-2 z-[3] flex -translate-y-1 items-center gap-1 rounded-lg border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100">
-      <a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-10 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-4"/></a>
-      {deleteAction}
+    <div className="clip-card-actions absolute right-2 top-2 z-[3] flex -translate-y-1 items-center gap-1 rounded-md border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100">
+      <a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-3.5"/></a>
+      <button type="button" onClick={() => setConfirmOpen(true)} disabled={remove.isPending} aria-label={`${t.deleteClip}: ${title}`} title={t.deleteClip} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-destructive/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive disabled:opacity-50"><Trash2 className="size-3.5"/></button>
     </div>
-    <ClipPlayerDialog clip={clip} open={playerOpen} onOpenChange={setPlayerOpen} meta={meta}/>
+    <ClipPlayerDialog clip={clip} open={playerOpen} onOpenChange={setPlayerOpen} meta={meta} onDelete={() => setConfirmOpen(true)}/>
+    <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!remove.isPending) setConfirmOpen(open) }}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>{t.deleteClipTitle}</AlertDialogTitle><AlertDialogDescription>{t.deleteClipDescription}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={remove.isPending}>{t.cancel}</AlertDialogCancel>
+          <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={remove.isPending} onClick={(event) => { event.preventDefault(); remove.mutate() }}>{remove.isPending && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin"/>}{t.confirmDelete}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </article>
 }
 
-export function ClipPlayerDialog({ clip, onOpenChange, open, meta }: { clip: ClipCardData | null; open: boolean; onOpenChange: (open: boolean) => void; meta?: string }) {
+export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete }: { clip: ClipCardData | null; open: boolean; onOpenChange: (open: boolean) => void; meta?: string; onDelete?: () => void }) {
   const t = useT()
   if (!clip) return null
   const title = clip.title || t.clip
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-w-4xl gap-3 p-4 sm:p-5"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><DialogTitle className="truncate font-display text-base">{title}</DialogTitle><DialogDescription className="mt-1 truncate">{meta || clip.job.url}</DialogDescription></div><DialogClose asChild><Button type="button" variant="outline" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}><X className="size-4"/></Button></DialogClose></div><video key={clip.id} src={`/api/clips/${clip.id}/stream`} controls autoPlay playsInline className="mx-auto max-h-[min(72dvh,760px)] w-full rounded-md bg-black object-contain"/><div className="flex justify-end"><Link to="/jobs/$jobId" params={{ jobId: clip.job.id }} className="inline-flex min-h-11 items-center gap-2 px-3 text-sm text-muted-foreground transition-colors hover:text-foreground">{t.openJob}</Link></div></DialogContent>
+    <DialogContent className="max-w-4xl gap-3 p-4 sm:p-5"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><DialogTitle className="truncate font-display text-base">{title}</DialogTitle><DialogDescription className="mt-1 truncate">{meta || clip.job.url}</DialogDescription></div><DialogClose asChild><Button type="button" variant="outline" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}><X className="size-4"/></Button></DialogClose></div><video key={clip.id} src={`/api/clips/${clip.id}/stream`} controls autoPlay playsInline className="mx-auto max-h-[min(72dvh,760px)] w-full rounded-md bg-black object-contain"/><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-1"><a href={`/api/clips/${clip.id}/download`} download className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"><ArrowDownToLine className="size-4"/>{t.download}</a>{onDelete && <button type="button" onClick={onDelete} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"><Trash2 className="size-4"/>{t.deleteClip}</button>}</div><Link to="/jobs/$jobId" params={{ jobId: clip.job.id }} className="inline-flex min-h-11 items-center gap-2 px-3 text-sm text-muted-foreground transition-colors hover:text-foreground">{t.openJob}</Link></div></DialogContent>
   </Dialog>
 }
