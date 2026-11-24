@@ -30,13 +30,18 @@ import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
 import { CreateJobDto } from './dto/create-job.dto';
 import { assertAllowedUrl, normalizeDescription } from './validation';
 import { WatermarksService } from '../watermarks/watermarks.service';
+import { OutrosService } from '../outros/outros.service';
+import type { OutroJobPayload, StoredOutro } from '../outros/outro-helpers';
 import type {
   StoredWatermark,
   WatermarkJobPayload,
 } from '../watermarks/watermark-helpers';
 
 /** JobData shared belum memuat watermark; payload worker memakai filePath + posisi. */
-type JobDataWithWatermark = JobData & { watermark: WatermarkJobPayload | null };
+type JobDataWithWatermark = JobData & {
+  watermark: WatermarkJobPayload | null;
+  outro: OutroJobPayload | null;
+};
 
 @Injectable()
 export class JobsService {
@@ -45,6 +50,7 @@ export class JobsService {
     private readonly jobEvents: JobEventsService,
     private readonly config: AppConfig,
     private readonly watermarks: WatermarksService,
+    private readonly outros: OutrosService,
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
   ) {}
 
@@ -67,6 +73,8 @@ export class JobsService {
     // Cek kepemilikan + ambil snapshot path; null bila tidak memakai watermark.
     const storedWatermark = await this.watermarks.resolveSettings(dto.watermark, userId);
 
+    const storedOutro = await this.outros.resolveSettings(dto.outro, userId);
+
     const job = await this.prisma.job.create({
       data: {
         url,
@@ -85,6 +93,9 @@ export class JobsService {
         watermark: storedWatermark
           ? (storedWatermark as unknown as Prisma.InputJsonValue)
           : Prisma.DbNull,
+        outro: storedOutro
+          ? (storedOutro as unknown as Prisma.InputJsonValue)
+          : Prisma.DbNull,
         userId,
       },
     });
@@ -96,6 +107,13 @@ export class JobsService {
           y: storedWatermark.y,
           scale: storedWatermark.scale,
           opacity: storedWatermark.opacity,
+        }
+      : null;
+
+    const outro: OutroJobPayload | null = storedOutro
+      ? {
+          filePath: storedOutro.filePath,
+          durationSec: storedOutro.durationSec,
         }
       : null;
 
@@ -117,6 +135,7 @@ export class JobsService {
       },
       ranges,
       watermark,
+      outro,
     };
 
     try {
@@ -258,6 +277,7 @@ export class JobsService {
     // maxSourceSec hanya relevan untuk mode auto; null = durasi penuh.
     dto.maxSourceSec = old.mode === 'auto' ? old.maxSourceSec : null;
     dto.watermark = (old.watermark as StoredWatermark | null) ?? null;
+    dto.outro = (old.outro as StoredOutro | null) ?? null;
 
     return this.create(dto, userId);
   }
@@ -358,6 +378,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     maxSourceSec: job.maxSourceSec ?? null,
     ranges: job.ranges ?? null,
     watermark: (job.watermark as StoredWatermark | null) ?? null,
+    outro: (job.outro as StoredOutro | null) ?? null,
     status: job.status,
     stage: job.stage,
     progress: job.progress,

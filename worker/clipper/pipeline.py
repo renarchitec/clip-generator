@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import glob
 import inspect
+import json
 import logging
 import os
 import shutil
@@ -25,6 +26,7 @@ from .models import (
     JobParams,
     JobResult,
     ManualRange,
+    Outro,
     Watermark,
     job_data_from_dict,
     to_max_source_sec,
@@ -724,6 +726,30 @@ def _with_watermark(
     )
 
 
+def _resolve_media_path(clips_root: str, file_path: str, label: str) -> Optional[str]:
+    """Path absolut `file_path` (relatif clips_root); None bila tidak aman/tidak ada.
+
+    Tidak pernah melempar: aset bermasalah = render tanpa aset itu.
+    """
+    try:
+        rel = file_path.replace("\\", "/")
+        if os.path.isabs(rel) or rel.startswith("/") or ".." in rel.split("/"):
+            log.warning("%s ditolak (path tidak aman): %r", label, file_path)
+            return None
+        root = os.path.realpath(clips_root)
+        path = os.path.realpath(os.path.join(root, rel))
+        if os.path.commonpath([root, path]) != root or path == root:
+            log.warning("%s ditolak (di luar folder clips): %r", label, file_path)
+            return None
+        if not os.path.isfile(path) or not os.access(path, os.R_OK):
+            log.warning("file %s tidak ditemukan/terbaca: %s", label, file_path)
+            return None
+        return path
+    except Exception as exc:  # noqa: BLE001 - jangan pernah gagalkan job
+        log.warning("%s dilewati karena error: %s", label, exc)
+        return None
+
+
 def resolve_watermark_path(clips_root: str, wm: Optional[Watermark]) -> Optional[str]:
     """Path absolut file watermark di bawah clips_root; None bila tidak aman/tidak ada.
 
@@ -731,23 +757,159 @@ def resolve_watermark_path(clips_root: str, wm: Optional[Watermark]) -> Optional
     """
     if wm is None:
         return None
-    try:
-        rel = wm.file_path.replace("\\", "/")
-        if os.path.isabs(rel) or rel.startswith("/") or ".." in rel.split("/"):
-            log.warning("watermark ditolak (path tidak aman): %r", wm.file_path)
-            return None
-        root = os.path.realpath(clips_root)
-        path = os.path.realpath(os.path.join(root, rel))
-        if os.path.commonpath([root, path]) != root or path == root:
-            log.warning("watermark ditolak (di luar folder clips): %r", wm.file_path)
-            return None
-        if not os.path.isfile(path) or not os.access(path, os.R_OK):
-            log.warning("file watermark tidak ditemukan/terbaca: %s", wm.file_path)
-            return None
-        return path
-    except Exception as exc:  # noqa: BLE001 - jangan pernah gagalkan job
-        log.warning("watermark dilewati karena error: %s", exc)
+    return _resolve_media_path(clips_root, wm.file_path, "watermark")
+
+
+def resolve_outro_path(clips_root: str, outro: Optional[Outro]) -> Optional[str]:
+    """Path absolut file outro di bawah clips_root; None bila tidak aman/tidak ada."""
+    if outro is None:
         return None
+    return _resolve_media_path(clips_root, outro.file_path, "outro")
+
+
+# ---------------------------------------------------------------- outro
+
+OUTRO_AUDIO_RATE = 44100
+OUTRO_TIMEOUT_SEC = 900.0
+
+
+def _parse_rate(value: Any) -> Optional[float]:
+    try:
+        text = str(value)
+        if "/" in text:
+            num, den = text.split("/", 1)
+            rate = float(num) / float(den)
+        else:
+            rate = float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return rate if 1.0 <= rate <= 240.0 else None
+
+
+def _probe_media(path: str) -> Dict[str, Any]:
+    """Info video/audio dari ffprobe; RuntimeError bila tanpa stream video."""
+    out = _run(
+        ["ffprobe", "-v", "error", "-show_entries",
+         "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,duration:format=duration",
+         "-of", "json", path]
+    )
+    data = json.loads(out or "{}")
+    streams = data.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if not video:
+        raise RuntimeError("tanpa stream video")
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+
+    def number(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed == parsed and parsed > 0 else None
+
+    duration = number(video.get("duration")) or number((data.get("format") or {}).get("duration"))
+    if not duration:
+        raise RuntimeError("durasi tidak terbaca")
+    width, height = int(video.get("width") or 0), int(video.get("height") or 0)
+    if width < 1 or height < 1:
+        raise RuntimeError("dimensi tidak terbaca")
+    fps = _parse_rate(video.get("avg_frame_rate")) or _parse_rate(video.get("r_frame_rate")) or 30.0
+    return {
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "duration": duration,
+        "has_audio": has_audio,
+    }
+
+
+def _outro_command(
+    clip_path: str, outro_path: str, out_path: str, clip: Dict[str, Any], outro: Dict[str, Any]
+) -> List[str]:
+    """Re-encode concat clip + outro. Outro dipas ke WxH klip (latar buram dari
+    outro sendiri), fps/SAR/audio disamakan; audio hilang -> anullsrc."""
+    width, height, fps = clip["width"], clip["height"], clip["fps"]
+    clip_dur, outro_dur = clip["duration"], outro["duration"]
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", clip_path, "-i", outro_path]
+    next_input = 2
+    labels: Dict[str, str] = {}
+    for key, has_audio, dur in (("clip", clip["has_audio"], clip_dur), ("outro", outro["has_audio"], outro_dur)):
+        if not has_audio:
+            cmd += ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", f"anullsrc=r={OUTRO_AUDIO_RATE}:cl=stereo"]
+            labels[key] = f"{next_input}:a"
+            next_input += 1
+        else:
+            labels[key] = "0:a:0" if key == "clip" else "1:a:0"
+
+    def audio(src: str, dst: str, dur: float) -> str:
+        # apad+atrim: panjang audio = panjang video segmen supaya concat tidak drift.
+        return (
+            f"[{src}]aresample={OUTRO_AUDIO_RATE},"
+            f"aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"apad=whole_dur={dur:.3f},atrim=end={dur:.3f},asetpts=PTS-STARTPTS[{dst}]"
+        )
+
+    graph = [
+        f"[0:v]scale={width}:{height},setsar=1,fps={fps:.3f},format=yuv420p,setpts=PTS-STARTPTS[cv]",
+        (
+            f"[1:v]split=2[ofg][obg];"
+            f"[obg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},boxblur=luma_radius=min(h\\,w)/10:luma_power=2[oblur];"
+            f"[ofg]scale={width}:{height}:force_original_aspect_ratio=decrease[osharp];"
+            f"[oblur][osharp]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,"
+            f"setsar=1,fps={fps:.3f},format=yuv420p,setpts=PTS-STARTPTS[ov]"
+        ),
+        audio(labels["clip"], "ca", clip_dur),
+        audio(labels["outro"], "oa", outro_dur),
+        "[cv][ca][ov][oa]concat=n=2:v=1:a=1[v][a]",
+    ]
+    return cmd + [
+        "-filter_complex", ";".join(graph),
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", "-sn",
+        "-f", "mp4", out_path,
+    ]
+
+
+def append_outro(clip_path: str, outro_path: str, timeout: Optional[float] = OUTRO_TIMEOUT_SEC) -> bool:
+    """Tempel outro di akhir `clip_path` (ditulis ke temp lalu os.replace atomik).
+
+    Mengembalikan True bila berhasil. Gagal apa pun -> log warning, klip asli
+    tidak diubah, False. Tidak pernah melempar.
+    """
+    tmp_path = clip_path + ".outro.tmp"
+    try:
+        clip = _probe_media(clip_path)
+        outro = _probe_media(outro_path)
+        _run(_outro_command(clip_path, outro_path, tmp_path, clip, outro), timeout=timeout)
+        if not os.path.isfile(tmp_path) or os.path.getsize(tmp_path) <= 0:
+            raise RuntimeError("hasil outro kosong")
+        os.replace(tmp_path, clip_path)
+        return True
+    except Exception as exc:  # noqa: BLE001 - outro tidak boleh menggagalkan job
+        log.warning("outro dilewati, klip tetap tanpa outro: %s", exc)
+        return False
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _apply_outro_for_job(job: JobData, outdir: str, filename: str) -> None:
+    """Tempel outro job (bila ada) ke klip final; satu helper untuk semua jalur render."""
+    if not job.outro:
+        return
+    try:
+        # outdir = <clips_dir>/<job_id>; outro relatif terhadap clips_dir.
+        outro_path = resolve_outro_path(os.path.dirname(os.path.abspath(outdir)), job.outro)
+        if outro_path:
+            append_outro(os.path.join(outdir, filename), outro_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("outro dilewati karena error: %s", exc)
 
 
 def parse_frame_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1034,6 +1196,8 @@ def _render_clip_sync(
         job.aspect_ratio,
         **extra,
     )
+    # Outro ditempel pada file final (setelah watermark/takarir); start/end klip tak berubah.
+    _apply_outro_for_job(job, outdir, filename)
     return ClipResult(
         title=moment.title,
         start=round(moment.start, 2),

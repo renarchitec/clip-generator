@@ -12,6 +12,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { PublishModule } from './publish/publish.module';
 import { SocialModule } from './social/social.module';
 import { SystemModule } from './system/system.module';
+import { OutrosModule } from './outros/outros.module';
 import { WatermarksModule } from './watermarks/watermarks.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { WatermarksModule } from './watermarks/watermarks.module';
     AuthModule,
     JobsModule,
     WatermarksModule,
+    OutrosModule,
     PreviewsModule,
     FramesModule,
     ClipsModule,

@@ -19,6 +19,8 @@ import { LlmStatus } from "@/components/llm-status"
 import { JobAssembly } from "@/components/job-assembly"
 import { ClipCard, ClipCardGrid } from "@/components/clip-card"
 import { useWatermarkLibrary } from "@/components/watermark-manager"
+import { useOutroLibrary } from "@/components/outro-manager"
+import { formatOutroDuration } from "@/lib/outro"
 
 export const Route = createFileRoute("/jobs/$jobId")({
   beforeLoad: async ({ location }) => {
@@ -63,6 +65,7 @@ function JobDetail() {
   const navigate = useNavigate()
   const queryKey = useMemo(() => ["jobs", jobId], [jobId])
   const watermarks = useWatermarkLibrary()
+  const outros = useOutroLibrary()
   const job = useQuery({
     queryKey,
     queryFn: () => api<JobSnapshot>(`/jobs/${jobId}`),
@@ -257,6 +260,14 @@ function JobDetail() {
                        <p>{t.watermarkSize}: {Math.round(snapshot.watermark.scale * 100)}% · {t.watermarkOpacity}: {Math.round(snapshot.watermark.opacity * 100)}%</p>
                        {snapshot.watermark.filePath && <p className="mt-0.5 truncate text-muted-foreground" title={snapshot.watermark.filePath}>{snapshot.watermark.filePath}</p>}
                      </div>
+                   </div>
+                 </Field>}
+
+                 {snapshot.outro && <Field>
+                   <FieldTitle>{t.outro}</FieldTitle>
+                   <div className="mt-2 flex min-h-11 items-center gap-3 rounded-md border border-border bg-muted/40 px-3 text-sm text-foreground">
+                     <span className="min-w-0 flex-1 truncate">{outros.data?.find((item) => item.id === snapshot.outro?.outroId)?.name ?? t.outro}</span>
+                     <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">+{formatOutroDuration(snapshot.outro.durationSec)}</span>
                    </div>
                  </Field>}
 

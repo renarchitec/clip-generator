@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { StoredWatermark } from '../watermarks/watermark-helpers';
+import type { StoredOutro } from '../outros/outro-helpers';
 import { Observable, Subject } from 'rxjs';
 
 export interface JobSnapshot {
@@ -21,6 +22,8 @@ export interface JobSnapshot {
   ranges?: unknown;
   /** Snapshot watermark job: { watermarkId, filePath, x, y, scale, opacity } | null */
   watermark?: StoredWatermark | null;
+  /** Snapshot outro job: { outroId, filePath, durationSec } | null */
+  outro?: StoredOutro | null;
   status: string;
   stage: string | null;
   progress: number;

@@ -28,11 +28,14 @@ model User {
   createdAt        DateTime @default(now())
   /// Pengaturan watermark default: { watermarkId, x, y, scale, opacity } | null
   watermarkDefault Json?
+  /// Outro default: { outroId } | null
+  outroDefault     Json?
 
   sessions       Session[]
   jobs           Job[]
   socialAccounts SocialAccount[]
   watermarks     Watermark[]
+  outros         Outro[]
 
   @@map("users")
 }
@@ -66,6 +69,8 @@ model Job {
   ranges            Json?
   /// Snapshot watermark: { watermarkId, filePath, x, y, scale, opacity } | null
   watermark         Json?
+  /// Snapshot outro: { outroId, filePath, durationSec } | null
+  outro             Json?
   status            JobStatus @default(queued)
   stage             String?
   progress          Int       @default(0)
@@ -97,6 +102,24 @@ model Watermark {
 
   @@index([userId])
   @@map("watermarks")
+}
+
+model Outro {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  /// relatif terhadap CLIPS_DIR, mis. outros/<userId>/<id>.mp4
+  filePath    String
+  mimeType    String
+  durationSec Float
+  width       Int
+  height      Int
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@map("outros")
 }
 
 model Clip {

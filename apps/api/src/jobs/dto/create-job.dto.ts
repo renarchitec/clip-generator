@@ -123,6 +123,38 @@ export class CreateJobDto {
   @IsOptional()
   @IsWatermarkSettings()
   watermark?: WatermarkSettingsDto | null;
+
+  /** Outro dari pustaka pengguna; null = tanpa outro. Divalidasi lewat zod di service. */
+  @IsOptional()
+  @IsOutroSettings()
+  outro?: OutroSettingsDto | null;
+}
+
+/** Objek outro; prop didefinisikan agar tidak dihapus ValidationPipe(whitelist). */
+export class OutroSettingsDto {
+  outroId?: string;
+}
+
+/** Izinkan null atau { outroId: string }. */
+export function IsOutroSettings(validationOptions?: ValidationOptions) {
+  return function (object: object, propertyName: string): void {
+    registerDecorator({
+      name: 'isOutroSettings',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown, _args: ValidationArguments) {
+          if (value === null) return true;
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+          return typeof (value as Record<string, unknown>).outroId === 'string';
+        },
+        defaultMessage() {
+          return 'outro harus null atau { outroId }.';
+        },
+      },
+    });
+  };
 }
 
 /** Objek pengaturan watermark; prop didefinisikan agar tidak dihapus ValidationPipe(whitelist). */

@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { WorkspaceShell } from "@/components/chrome"
 import { SocialAccounts, type SocialPlatform } from "@/components/social-accounts"
 import { WatermarkManager } from "@/components/watermark-manager"
+import { OutroManager } from "@/components/outro-manager"
 import type { User } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { useT } from "@/lib/i18n"
@@ -61,6 +62,15 @@ function SettingsPage() {
           </div>
           <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
             <WatermarkManager selectedId={null} onSelect={() => {}} />
+          </div>
+        </section>
+        <section aria-labelledby="outro-library-heading">
+          <div className="mb-4">
+            <h3 id="outro-library-heading" className="font-display text-lg font-medium tracking-[-.02em]">{t.outroLibrary}</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{t.outroLibraryIntro}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+            <OutroManager />
           </div>
         </section>
       </div>

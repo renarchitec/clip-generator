@@ -176,6 +176,33 @@ class Watermark:
         )
 
 
+OUTRO_MAX_PATH_CHARS = 512
+
+
+@dataclass
+class Outro:
+    """Video outro yang ditempel di AKHIR setiap klip hasil render."""
+
+    file_path: str  # relatif terhadap CLIPS_DIR, mis. outros/<user>/<id>.mp4
+    duration_sec: Optional[float] = None  # hanya informasi; durasi asli diprobe worker
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"filePath": self.file_path, "durationSec": self.duration_sec}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["Outro"]:
+        """Parse toleran; bukan object / filePath kosong -> None."""
+        if not isinstance(data, MappingABC):
+            return None
+        file_path = _to_text(
+            _first(data, "filePath", "file_path", "path"), OUTRO_MAX_PATH_CHARS
+        )
+        if not file_path:
+            return None
+        duration = _finite_float(_first(data, "durationSec", "duration_sec"), -1.0)
+        return cls(file_path=file_path, duration_sec=duration if duration > 0 else None)
+
+
 @dataclass
 class ManualRange:
     """detik"""
@@ -249,10 +276,13 @@ class JobData:
     ranges: List[ManualRange] = field(default_factory=list)
     # Watermark gambar opsional; None = tanpa watermark.
     watermark: Optional[Watermark] = None
+    # Outro video opsional; None = tanpa outro.
+    outro: Optional[Outro] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "watermark": self.watermark.to_dict() if self.watermark else None,
+            "outro": self.outro.to_dict() if self.outro else None,
             "jobId": self.job_id,
             "url": self.url,
             "mode": self.mode,
@@ -338,6 +368,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,
         watermark=Watermark.from_dict(_first(data, "watermark")),
+        outro=Outro.from_dict(_first(data, "outro")),
     )
 
 
