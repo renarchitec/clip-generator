@@ -70,6 +70,8 @@ export function buildTiktokAuthorizationUrl(input: {
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('redirect_uri', input.redirectUri);
   url.searchParams.set('state', input.state);
+  // Selalu tampilkan layar izin supaya akun TikTok kedua bisa disambungkan.
+  url.searchParams.set('disable_auto_auth', '1');
   return url.toString();
 }
 
