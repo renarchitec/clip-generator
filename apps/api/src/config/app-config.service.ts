@@ -13,6 +13,8 @@ export class AppConfig {
   readonly publicWebUrl: string;
   readonly googleClientId: string | undefined;
   readonly googleClientSecret: string | undefined;
+  readonly tiktokClientKey: string | undefined;
+  readonly tiktokClientSecret: string | undefined;
 
   constructor(config: ConfigService) {
     this.databaseUrl = config.getOrThrow<string>('DATABASE_URL');
@@ -26,5 +28,8 @@ export class AppConfig {
     this.googleClientId = config.get<string>('GOOGLE_CLIENT_ID') || undefined;
     this.googleClientSecret =
       config.get<string>('GOOGLE_CLIENT_SECRET') || undefined;
+    this.tiktokClientKey = config.get<string>('TIKTOK_CLIENT_KEY') || undefined;
+    this.tiktokClientSecret =
+      config.get<string>('TIKTOK_CLIENT_SECRET') || undefined;
   }
 }

@@ -12,8 +12,8 @@ import {
 } from '@prisma/client';
 import { Queue } from 'bullmq';
 import type {
-  PublicationPrivacy,
   PublicationResponse,
+  PublishMode,
   PublishJobData,
 } from '@clipper/shared';
 import { PrismaService } from '../prisma/prisma.service';
@@ -22,12 +22,15 @@ import type { PublishClipDto } from './dto/publish-clip.dto';
 import {
   ACTIVE_PUBLICATION_STATUSES,
   sanitizeCaption,
+  sanitizeTiktokCaption,
   sanitizeTitle,
+  tiktokMode,
   validatePublishTargets,
+  validatePublishTargetsShape,
 } from './publish-helpers';
 
 /** Platform yang sudah bisa dipublikasikan. */
-const PUBLISHABLE_PLATFORMS = new Set<string>(['youtube']);
+const PUBLISHABLE_PLATFORMS = new Set<string>(['youtube', 'tiktok']);
 
 export const PUBLICATION_INCLUDE = {
   socialAccount: { select: { displayName: true } },
@@ -57,8 +60,9 @@ export class PublishService {
     dto: PublishClipDto,
     userId: string,
   ): Promise<PublicationResponse[]> {
-    const invalid = validatePublishTargets(dto.targets);
-    if (invalid) throw new BadRequestException(invalid);
+    // Validasi yang bergantung pada platform dilakukan setelah akun dimuat.
+    const shapeInvalid = validatePublishTargetsShape(dto.targets);
+    if (shapeInvalid) throw new BadRequestException(shapeInvalid);
 
     const clip = await this.prisma.clip.findFirst({
       where: { id: clipId, job: { userId } },
@@ -77,6 +81,12 @@ export class PublishService {
       select: { id: true, platform: true },
     });
     const byId = new Map(accounts.map((account) => [account.id, account]));
+    const invalid = validatePublishTargets(
+      dto.targets,
+      (accountId) => byId.get(accountId)?.platform,
+    );
+    if (invalid) throw new BadRequestException(invalid);
+
     for (const target of dto.targets) {
       const account = byId.get(target.accountId);
       if (!account) {
@@ -109,9 +119,32 @@ export class PublishService {
               clipId,
               socialAccountId: account.id,
               platform: account.platform,
-              title: sanitizeTitle(target.title),
-              caption: sanitizeCaption(target.caption ?? ''),
-              privacy: target.privacy,
+              title:
+                account.platform === 'tiktok'
+                  ? sanitizeTitle(target.title ?? '')
+                  : sanitizeTitle(target.title!),
+              caption:
+                account.platform === 'tiktok'
+                  ? sanitizeTiktokCaption(target.caption ?? '')
+                  : sanitizeCaption(target.caption ?? ''),
+              privacy:
+                account.platform === 'tiktok'
+                  ? tiktokMode(target) === 'inbox'
+                    ? 'inbox'
+                    : target.tiktok!.privacyLevel
+                  : target.privacy!,
+              mode: account.platform === 'tiktok' ? tiktokMode(target) : 'direct',
+              options:
+                account.platform === 'tiktok' && tiktokMode(target) === 'direct'
+                  ? {
+                      privacyLevel: target.tiktok!.privacyLevel,
+                      disableComment: target.tiktok!.disableComment ?? false,
+                      disableDuet: target.tiktok!.disableDuet ?? false,
+                      disableStitch: target.tiktok!.disableStitch ?? false,
+                      brandContent: target.tiktok!.brandContent ?? false,
+                      brandOrganic: target.tiktok!.brandOrganic ?? false,
+                    }
+                  : undefined,
               madeForKids: target.madeForKids ?? false,
               status: PublicationStatus.queued,
             },
@@ -259,7 +292,8 @@ export function toPublicationResponse(
     accountName: row.socialAccount.displayName,
     title: row.title,
     caption: row.caption,
-    privacy: row.privacy as PublicationPrivacy,
+    privacy: row.privacy,
+    mode: row.mode as PublishMode,
     status: row.status,
     progress: row.progress,
     externalId: row.externalId,

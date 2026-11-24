@@ -7,6 +7,12 @@ export const YOUTUBE_SCOPES = [
   'https://www.googleapis.com/auth/youtube.readonly',
 ] as const;
 
+export const TIKTOK_SCOPES = [
+  'user.info.basic',
+  'video.upload',
+  'video.publish',
+] as const;
+
 export interface OAuthStatePayload {
   userId: string;
   platform: SocialPlatform;
@@ -41,8 +47,30 @@ export function createPkceChallenge(codeVerifier: string): string {
   return createHash('sha256').update(codeVerifier, 'ascii').digest('base64url');
 }
 
+export function socialCallbackUrl(
+  publicWebUrl: string,
+  platform: SocialPlatform,
+): string {
+  return `${publicWebUrl.replace(/\/+$/, '')}/api/social/${platform}/callback`;
+}
+
 export function youtubeCallbackUrl(publicWebUrl: string): string {
-  return `${publicWebUrl.replace(/\/+$/, '')}/api/social/youtube/callback`;
+  return socialCallbackUrl(publicWebUrl, 'youtube');
+}
+
+/** TikTok web: tanpa PKCE; scope dipisah koma. */
+export function buildTiktokAuthorizationUrl(input: {
+  clientKey: string;
+  redirectUri: string;
+  state: string;
+}): string {
+  const url = new URL('https://www.tiktok.com/v2/auth/authorize/');
+  url.searchParams.set('client_key', input.clientKey);
+  url.searchParams.set('scope', TIKTOK_SCOPES.join(','));
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('redirect_uri', input.redirectUri);
+  url.searchParams.set('state', input.state);
+  return url.toString();
 }
 
 export function buildYoutubeAuthorizationUrl(input: {

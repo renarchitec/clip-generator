@@ -8,6 +8,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import type { SocialPlatform } from '@clipper/shared';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AppConfig } from '../config/app-config.service';
 import { buildSettingsRedirect } from './oauth';
@@ -40,33 +41,80 @@ export class SocialController {
     await this.social.removeAccount(id, user.id);
   }
 
+  @Get('accounts/:id/tiktok/creator-info')
+  tiktokCreatorInfo(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.social.tiktokCreatorInfo(id, user.id);
+  }
+
   @Get('youtube/connect')
-  async youtubeConnect(
+  youtubeConnect(
     @Res() res: Response,
     @CurrentUser() user: { id: string },
   ): Promise<void> {
-    try {
-      const url = await this.social.youtubeConnectUrl(user.id);
-      res.redirect(302, url);
-    } catch (error) {
-      this.redirectError(res, error, 'oauth_start');
-    }
+    return this.connect(res, user.id, 'youtube');
   }
 
   @Get('youtube/callback')
-  async youtubeCallback(
+  youtubeCallback(
     @Res() res: Response,
     @CurrentUser() user: { id: string },
     @Query('code') code?: string,
     @Query('state') state?: string,
   ): Promise<void> {
+    return this.callback(res, user.id, 'youtube', code, state);
+  }
+
+  @Get('tiktok/connect')
+  tiktokConnect(
+    @Res() res: Response,
+    @CurrentUser() user: { id: string },
+  ): Promise<void> {
+    return this.connect(res, user.id, 'tiktok');
+  }
+
+  @Get('tiktok/callback')
+  tiktokCallback(
+    @Res() res: Response,
+    @CurrentUser() user: { id: string },
+    @Query('code') code?: string,
+    @Query('state') state?: string,
+    @Query('error') providerError?: string,
+  ): Promise<void> {
+    // TikTok mengirim ?error=access_denied bila pengguna menolak.
+    if (providerError) {
+      this.redirectError(res, new SocialProviderError('access_denied'), 'oauth_failed');
+      return Promise.resolve();
+    }
+    return this.callback(res, user.id, 'tiktok', code, state);
+  }
+
+  private async connect(
+    res: Response,
+    userId: string,
+    platform: SocialPlatform,
+  ): Promise<void> {
     try {
-      await this.social.completeYoutubeCallback(user.id, code, state);
+      res.redirect(302, await this.social.connectUrl(userId, platform));
+    } catch (error) {
+      this.redirectError(res, error, 'oauth_start');
+    }
+  }
+
+  private async callback(
+    res: Response,
+    userId: string,
+    platform: SocialPlatform,
+    code: string | undefined,
+    state: string | undefined,
+  ): Promise<void> {
+    try {
+      await this.social.completeCallback(userId, platform, code, state);
       res.redirect(
         302,
-        buildSettingsRedirect(this.config.publicWebUrl, {
-          connected: 'youtube',
-        }),
+        buildSettingsRedirect(this.config.publicWebUrl, { connected: platform }),
       );
     } catch (error) {
       this.redirectError(res, error, 'oauth_failed');

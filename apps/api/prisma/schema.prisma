@@ -147,6 +147,7 @@ model Publication {
   title           String            @default("")
   caption         String
   privacy         String
+  options         Json?
   madeForKids     Boolean           @default(false)
   status          PublicationStatus @default(queued)
   progress        Int               @default(0)

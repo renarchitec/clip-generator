@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { useT } from "@/lib/i18n"
 import { isActivePublication, PublishDialog, type ClipPublication } from "@/components/publish-dialog"
-import { YouTubeMark } from "@/components/social-accounts"
+import { TikTokMark, YouTubeMark } from "@/components/social-accounts"
 
 export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
 
@@ -97,8 +97,9 @@ function PublishBadge({ publications }: { publications?: ClipPublication[] }) {
   const busy = publications.some((item) => isActivePublication(item.status))
   const published = publications.some((item) => item.status === "published")
   if (!busy && !published) return null
-  const label = busy ? t.publishingBadge : t.publishedBadge
+  const tiktokOnly = publications.every((item) => item.platform === "tiktok")
+  const label = tiktokOnly ? (busy ? t.publishingTo : t.publishedOn).replace("{platform}", "TikTok") : busy ? t.publishingBadge : t.publishedBadge
   return <span title={label} className="inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 pl-1 pr-1.5 text-white shadow-sm backdrop-blur-sm sm:bottom-20">
-    <YouTubeMark className="size-3.5"/>{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
+    {tiktokOnly ? <TikTokMark className="size-3.5"/> : <YouTubeMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
   </span>
 }

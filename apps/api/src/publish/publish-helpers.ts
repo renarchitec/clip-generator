@@ -19,6 +19,10 @@ export const TITLE_MAX = 100;
 export const CAPTION_MAX = 5000;
 export const TARGETS_MAX = 5;
 export const PRIVACIES = ['public', 'unlisted', 'private'] as const;
+/** Batas caption TikTok dalam UTF-16 code unit (String.length). */
+export const TIKTOK_CAPTION_MAX = 2200;
+export const PUBLISH_MODES = ['direct', 'inbox'] as const;
+export const TIKTOK_PRIVACY_LEVEL_MAX = 64;
 export const ACTIVE_PUBLICATION_STATUSES = [
   'queued',
   'uploading',
@@ -104,19 +108,90 @@ export function sanitizeCaption(caption: string): string {
     .join('');
 }
 
+/**
+ * Deskripsi TikTok aman: buang karakter kontrol selain newline dan batasi ke
+ * 2200 UTF-16 code unit tanpa memotong surrogate pair. '<' '>' dibiarkan.
+ */
+export function sanitizeTiktokCaption(caption: string): string {
+  const cleaned = caption
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ')
+    .trim();
+  let out = '';
+  for (const char of cleaned) {
+    if (out.length + char.length > TIKTOK_CAPTION_MAX) break;
+    out += char;
+  }
+  return out.trim();
+}
+
 export interface PublishTargetInput {
   accountId?: unknown;
   title?: unknown;
   caption?: unknown;
   privacy?: unknown;
   madeForKids?: unknown;
+  mode?: unknown;
+  tiktok?: unknown;
 }
 
-/**
- * Validasi body publish di luar class-validator (dipakai service sebagai
- * pertahanan kedua). Mengembalikan pesan galat atau null bila valid.
- */
-export function validatePublishTargets(targets: unknown): string | null {
+/** Mode efektif target TikTok (default 'direct'). */
+export function tiktokMode(raw: { mode?: unknown }): 'direct' | 'inbox' {
+  return raw.mode === 'inbox' ? 'inbox' : 'direct';
+}
+
+/** Validasi target TikTok; null bila valid. Opsi TikTok diabaikan pada mode inbox. */
+export function validateTiktokTarget(raw: PublishTargetInput): string | null {
+  if (raw.title !== undefined && typeof raw.title !== 'string') {
+    return 'title harus berupa teks.';
+  }
+  if (
+    typeof raw.title === 'string' &&
+    Array.from(raw.title).length > TIKTOK_CAPTION_MAX
+  ) {
+    return `title maksimal ${TIKTOK_CAPTION_MAX} karakter.`;
+  }
+  if (typeof raw.caption !== 'string') return 'caption wajib berupa teks.';
+  if (raw.caption.length > TIKTOK_CAPTION_MAX) {
+    return `caption TikTok maksimal ${TIKTOK_CAPTION_MAX} karakter.`;
+  }
+  if (
+    raw.mode !== undefined &&
+    !PUBLISH_MODES.includes(raw.mode as (typeof PUBLISH_MODES)[number])
+  ) {
+    return 'mode harus direct atau inbox.';
+  }
+  if (tiktokMode(raw) === 'inbox') return null;
+
+  const options = asRecord(raw.tiktok);
+  if (!options) return 'tiktok wajib diisi untuk mode direct.';
+  const level = options.privacyLevel;
+  if (
+    typeof level !== 'string' ||
+    !/^[A-Z_]{1,64}$/.test(level) ||
+    level.length > TIKTOK_PRIVACY_LEVEL_MAX
+  ) {
+    return 'tiktok.privacyLevel wajib diisi.';
+  }
+  for (const key of [
+    'disableComment',
+    'disableDuet',
+    'disableStitch',
+    'brandContent',
+    'brandOrganic',
+  ]) {
+    if (options[key] !== undefined && typeof options[key] !== 'boolean') {
+      return `tiktok.${key} harus boolean.`;
+    }
+  }
+  if (options.brandContent === true && level === 'SELF_ONLY') {
+    return 'Konten bermerek (brandContent) tidak boleh berprivasi SELF_ONLY.';
+  }
+  return null;
+}
+
+/** Validasi struktural sebelum platform akun diketahui (dipakai publish service). */
+export function validatePublishTargetsShape(targets: unknown): string | null {
   if (!Array.isArray(targets) || targets.length < 1) {
     return 'targets wajib berisi minimal 1 akun.';
   }
@@ -131,6 +206,38 @@ export function validatePublishTargets(targets: unknown): string | null {
     }
     if (seen.has(raw.accountId)) return 'accountId tidak boleh duplikat.';
     seen.add(raw.accountId);
+  }
+  return null;
+}
+
+/**
+ * Validasi body publish di luar class-validator (dipakai service sebagai
+ * pertahanan kedua). Mengembalikan pesan galat atau null bila valid.
+ */
+export function validatePublishTargets(
+  targets: unknown,
+  /** Platform akun per accountId; default 'youtube' bila tidak diketahui. */
+  platformOf?: (accountId: string) => string | undefined,
+): string | null {
+  if (!Array.isArray(targets) || targets.length < 1) {
+    return 'targets wajib berisi minimal 1 akun.';
+  }
+  if (targets.length > TARGETS_MAX) {
+    return `targets maksimal ${TARGETS_MAX} akun.`;
+  }
+  const seen = new Set<string>();
+  for (const raw of targets as PublishTargetInput[]) {
+    if (!raw || typeof raw !== 'object') return 'target tidak valid.';
+    if (typeof raw.accountId !== 'string' || !raw.accountId) {
+      return 'accountId wajib diisi.';
+    }
+    if (seen.has(raw.accountId)) return 'accountId tidak boleh duplikat.';
+    seen.add(raw.accountId);
+    if (platformOf?.(raw.accountId) === 'tiktok') {
+      const invalid = validateTiktokTarget(raw);
+      if (invalid) return invalid;
+      continue;
+    }
     if (typeof raw.title !== 'string') return 'title wajib diisi.';
     if (/[<>]/.test(raw.title)) return "title tidak boleh memuat '<' atau '>'.";
     const title = raw.title.trim();

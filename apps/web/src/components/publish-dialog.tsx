@@ -1,7 +1,7 @@
-import { useForm } from "@tanstack/react-form"
+import { useForm, useStore } from "@tanstack/react-form"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Check, CircleAlert, ExternalLink, LoaderCircle, RotateCcw, Sparkles, TriangleAlert, X } from "lucide-react"
+import { Check, CircleAlert, ExternalLink, LoaderCircle, RotateCcw, Send, Sparkles, TriangleAlert, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -13,282 +13,128 @@ import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { YouTubeMark, type SocialAccount, type SocialPlatform } from "@/components/social-accounts"
-import { api, CAPTION_LANGUAGES, isCaptionLanguage, type CaptionLanguage } from "@/lib/api"
+import { YouTubeMark, TikTokMark, type SocialAccount, type SocialPlatform } from "@/components/social-accounts"
+import { api, CAPTION_LANGUAGES, isCaptionLanguage, type CaptionLanguage, type TikTokCreatorInfo } from "@/lib/api"
 import { relativeAge } from "@/lib/format"
 import { useLanguage, useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 export type Privacy = "public" | "unlisted" | "private"
 export type PublicationStatus = "queued" | "uploading" | "processing" | "published" | "failed"
-export type ClipPublication = { platform: SocialPlatform; status: PublicationStatus; externalUrl: string | null }
-export type PublicationResponse = { id: string; clipId: string; platform: SocialPlatform; accountId: string; accountName: string; title: string; caption: string; privacy: Privacy; status: PublicationStatus; progress: number; externalId: string | null; externalUrl: string | null; error: string | null; createdAt: string; updatedAt: string; publishedAt: string | null }
-export type PublishableClip = { id: string; title: string; caption?: string | null; hashtags?: string[] }
-
+export type ClipPublication = { platform: SocialPlatform; status: PublicationStatus; externalUrl: string | null; mode?: "direct" | "inbox" }
+export type PublicationResponse = { id: string; clipId: string; platform: SocialPlatform; accountId: string; accountName: string; title: string; caption: string; privacy: string; mode: "direct" | "inbox"; status: PublicationStatus; progress: number; externalId: string | null; externalUrl: string | null; error: string | null; createdAt: string; updatedAt: string; publishedAt: string | null }
+export type PublishableClip = { id: string; title: string; caption?: string | null; hashtags?: string[]; startSec?: number; endSec?: number }
 const TITLE_MAX = 100
 const CAPTION_MAX = 5000
+const TIKTOK_CAPTION_MAX = 2200
 const PRIVACY: Privacy[] = ["public", "unlisted", "private"]
 const ACTIVE: PublicationStatus[] = ["queued", "uploading", "processing"]
+const TIKTOK_PRIVACY = ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"]
 export const isActivePublication = (status: PublicationStatus) => ACTIVE.includes(status)
 export const publicationsKey = (clipId: string) => ["clips", clipId, "publications"] as const
 
 type Values = { accountIds: string[]; title: string; caption: string; privacy: Privacy; madeForKids: boolean }
-
 type CaptionResponse = { caption: string; hashtags: string[] }
-
 function formatCaption(caption: string | null | undefined, hashtags: string[] | undefined) {
   const tags = (hashtags ?? []).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean).map((tag) => `#${tag}`).join(" ")
   return [caption?.trim(), tags].filter(Boolean).join("\n\n")
 }
-
-function defaultCaption(clip: PublishableClip) {
-  return formatCaption(clip.caption, clip.hashtags)
-}
-
+function defaultCaption(clip: PublishableClip) { return formatCaption(clip.caption, clip.hashtags) }
 function Counter({ value, max, id }: { value: number; max: number; id: string }) {
   const locale = useLanguage().language === "id" ? "id-ID" : "en-US"
   const over = value > max
   return <span id={id} aria-live={over ? "polite" : "off"} className={cn("ml-auto font-mono text-[11px] tabular-nums text-muted-foreground", over && "font-semibold text-destructive", !over && value > max * 0.9 && "text-amber-700 dark:text-amber-400")}>{value.toLocaleString(locale)}/{max.toLocaleString(locale)}</span>
 }
-
 export function PublishDialog({ clip, open, onOpenChange }: { clip: PublishableClip; open: boolean; onOpenChange: (open: boolean) => void }) {
   const t = useT()
-  return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-w-xl gap-0 p-0 sm:p-0" onInteractOutside={(event) => { if ((event.target as Element | null)?.closest?.("[data-sonner-toaster]")) event.preventDefault() }}>
-      <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
-        <div className="min-w-0"><DialogTitle className="font-display text-lg font-medium tracking-[-.02em]">{t.publishClip}</DialogTitle><DialogDescription className="mt-1 truncate">{clip.title || t.clip}</DialogDescription></div>
-        <DialogClose asChild><Button type="button" variant="ghost" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}><X className="size-4"/></Button></DialogClose>
-      </div>
-      {open && <PublishBody key={clip.id} clip={clip} onClose={() => onOpenChange(false)}/>}
-    </DialogContent>
-  </Dialog>
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-xl gap-0 p-0 sm:p-0" onInteractOutside={(event) => { if ((event.target as Element | null)?.closest?.("[data-sonner-toaster]")) event.preventDefault() }}>
+    <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6"><div className="min-w-0"><DialogTitle className="font-display text-lg font-medium tracking-[-.02em]">{t.publishClip}</DialogTitle><DialogDescription className="mt-1 truncate">{clip.title || t.clip}</DialogDescription></div><DialogClose asChild><Button type="button" variant="ghost" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}><X className="size-4"/></Button></DialogClose></div>
+    {open && <PublishBody key={clip.id} clip={clip} onClose={() => onOpenChange(false)}/>}
+  </DialogContent></Dialog>
 }
-
 function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => void }) {
-  const t = useT()
-  const client = useQueryClient()
+  const t = useT(), client = useQueryClient()
   const [view, setView] = useState<"form" | "progress">("form")
   const [submittedIds, setSubmittedIds] = useState<string[]>([])
-  const accounts = useQuery({ queryKey: ["social", "accounts"], queryFn: () => api<SocialAccount[]>("/social/accounts") })
-  const publications = useQuery({
-    queryKey: publicationsKey(clip.id),
-    queryFn: () => api<PublicationResponse[]>(`/clips/${clip.id}/publications`),
-    refetchInterval: (query) => query.state.data?.some((item) => isActivePublication(item.status)) ? 3000 : false,
-  })
-  const anyActive = !!publications.data?.some((item) => isActivePublication(item.status))
-  const wasActive = useRef(false)
-  useEffect(() => {
-    if (wasActive.current && !anyActive) {
-      void client.invalidateQueries({ queryKey: ["clips", "recent"] })
-      void client.invalidateQueries({ queryKey: ["jobs"] })
-    }
-    wasActive.current = anyActive
-  }, [anyActive, client])
-
-  const youtube = (accounts.data ?? []).filter((account) => account.platform === "youtube")
-  const usable = youtube.filter((account) => !account.needsReconnect)
+  const [mode, setMode] = useState<"direct" | "inbox">("direct")
+  const [privacyLevel, setPrivacyLevel] = useState("")
+  const [allowComment, setAllowComment] = useState(false), [allowDuet, setAllowDuet] = useState(false), [allowStitch, setAllowStitch] = useState(false)
+  const [disclose, setDisclose] = useState(false), [brandOrganic, setBrandOrganic] = useState(false), [brandContent, setBrandContent] = useState(false)
   const [submitError, setSubmitError] = useState("")
-
+  const accounts = useQuery({ queryKey: ["social", "accounts"], queryFn: () => api<SocialAccount[]>("/social/accounts") })
+  const publications = useQuery({ queryKey: publicationsKey(clip.id), queryFn: () => api<PublicationResponse[]>(`/clips/${clip.id}/publications`), refetchInterval: (query) => query.state.data?.some((item) => isActivePublication(item.status)) ? 3000 : false })
+  const wasActive = useRef(false), anyActive = !!publications.data?.some((item) => isActivePublication(item.status))
+  useEffect(() => { if (wasActive.current && !anyActive) { void client.invalidateQueries({ queryKey: ["clips", "recent"] }); void client.invalidateQueries({ queryKey: ["jobs"] }) } wasActive.current = anyActive }, [anyActive, client])
+  const available = (accounts.data ?? []).filter((account) => account.platform !== "instagram")
+  const usable = available.filter((account) => !account.needsReconnect)
+  const form = useForm({ defaultValues: { accountIds: [], title: (clip.title ?? "").slice(0, TITLE_MAX), caption: defaultCaption(clip), privacy: "public", madeForKids: false } as Values, onSubmit: ({ value }) => { setSubmitError(""); publish.mutate(value) } })
+  const selectedIds = useStore(form.store, (state) => state.values.accountIds)
+  const selected = available.filter((item) => selectedIds.includes(item.id))
+  const selectedTikTok = selected.filter((item) => item.platform === "tiktok")
+  const selectedYouTube = selected.filter((item) => item.platform === "youtube")
+  const tiktokAccount = selectedTikTok[0]
+  const creatorQuery = useQuery({ queryKey: ["social", "accounts", tiktokAccount?.id, "tiktok", "creator-info"], queryFn: () => api<TikTokCreatorInfo>(`/social/accounts/${tiktokAccount!.id}/tiktok/creator-info`), enabled: !!tiktokAccount && mode === "direct", staleTime: 0, refetchOnMount: "always" })
+  const caption = useStore(form.store, (state) => state.values.caption)
+  const captionTooLongTikTok = !!selectedTikTok.length && caption.length > TIKTOK_CAPTION_MAX
+  const brandedCantPrivate = brandContent && privacyLevel === "SELF_ONLY"
+  const duration = clip.startSec !== undefined && clip.endSec !== undefined ? Math.max(0, clip.endSec - clip.startSec) : null
+  const durationTooLong = !!duration && !!creatorQuery.data && duration > creatorQuery.data.maxVideoPostDurationSec
+  const disclosureInvalid = disclose && !brandOrganic && !brandContent
   const publish = useMutation({
-    mutationFn: (value: Values) => api<PublicationResponse[]>(`/clips/${clip.id}/publish`, { method: "POST", body: JSON.stringify({ targets: value.accountIds.map((accountId) => ({ accountId, title: value.title.trim(), caption: value.caption.trim(), privacy: value.privacy, madeForKids: value.madeForKids })) }) }),
-    onSuccess: (created) => {
-      setSubmitError("")
-      setSubmittedIds(created.map((item) => item.id))
-      client.setQueryData<PublicationResponse[]>(publicationsKey(clip.id), (previous = []) => [...created, ...previous.filter((item) => !created.some((next) => next.id === item.id))])
-      void client.invalidateQueries({ queryKey: publicationsKey(clip.id) })
-      void client.invalidateQueries({ queryKey: ["clips", "recent"] })
-      void client.invalidateQueries({ queryKey: ["jobs"] })
-      setView("progress")
-      toast.success(t.publishStarted)
-    },
-    onError: (error) => {
-      const status = (error as Error & { status?: number }).status
-      setSubmitError(status === 409 ? t.publishConflict : status === 400 ? t.publishInvalid : t.publishFailedGeneric)
-    },
-  })
-
-  const form = useForm({
-    defaultValues: { accountIds: [], title: (clip.title ?? "").slice(0, TITLE_MAX), caption: defaultCaption(clip), privacy: "public", madeForKids: false } as Values,
-    onSubmit: ({ value }) => { setSubmitError(""); publish.mutate(value) },
+    mutationFn: (value: Values) => api<PublicationResponse[]>(`/clips/${clip.id}/publish`, { method: "POST", body: JSON.stringify({ targets: value.accountIds.map((accountId) => { const account = available.find((item) => item.id === accountId)!; return account.platform === "youtube" ? { accountId, title: value.title.trim(), caption: value.caption.trim(), privacy: value.privacy, madeForKids: value.madeForKids } : mode === "inbox" ? { accountId, mode: "inbox", title: "", caption: value.caption.trim() } : { accountId, mode: "direct", title: "", caption: value.caption.trim(), tiktok: { privacyLevel, disableComment: !allowComment, disableDuet: !allowDuet, disableStitch: !allowStitch, brandContent, brandOrganic } } }) }) }),
+    onSuccess: (created) => { setSubmitError(""); setSubmittedIds(created.map((item) => item.id)); client.setQueryData<PublicationResponse[]>(publicationsKey(clip.id), (previous = []) => [...created, ...previous.filter((item) => !created.some((next) => next.id === item.id))]); void client.invalidateQueries({ queryKey: publicationsKey(clip.id) }); void client.invalidateQueries({ queryKey: ["clips", "recent"] }); void client.invalidateQueries({ queryKey: ["jobs"] }); setView("progress"); toast.success(t.publishStarted) },
+    onError: (error) => { const status = (error as Error & { status?: number }).status; setSubmitError(status === 409 ? t.publishConflict : status === 400 ? t.publishInvalid : t.publishFailedGeneric) },
   })
   const [captionLanguage, setCaptionLanguage] = useState<CaptionLanguage>("auto")
-  const regenerate = useMutation({
-    mutationFn: (language: CaptionLanguage) => api<CaptionResponse>(`/clips/${clip.id}/caption`, { method: "POST", body: JSON.stringify({ language }) }),
-    onSuccess: (result) => {
-      const previous = form.getFieldValue("caption")
-      const next = formatCaption(result.caption, result.hashtags)
-      form.setFieldValue("caption", next)
-      void client.invalidateQueries({ queryKey: ["clips"] })
-      void client.invalidateQueries({ queryKey: ["jobs"] })
-      if (previous === next) return
-      toast.success(t.captionRegenerated, { action: { label: t.captionUndo, onClick: () => form.setFieldValue("caption", previous) } })
-    },
-    onError: (error) => toast.error((error as Error & { status?: number }).status === 503 ? t.captionUnavailable : t.captionFailed),
-  })
+  const regenerate = useMutation({ mutationFn: (language: CaptionLanguage) => api<CaptionResponse>(`/clips/${clip.id}/caption`, { method: "POST", body: JSON.stringify({ language }) }), onSuccess: (result) => { const previous = form.getFieldValue("caption"), next = formatCaption(result.caption, result.hashtags); form.setFieldValue("caption", next); void client.invalidateQueries({ queryKey: ["clips"] }); void client.invalidateQueries({ queryKey: ["jobs"] }); if (previous !== next) toast.success(t.captionRegenerated, { action: { label: t.captionUndo, onClick: () => form.setFieldValue("caption", previous) } }) }, onError: (error) => toast.error((error as Error & { status?: number }).status === 503 ? t.captionUnavailable : t.captionFailed) })
   const prefilled = useRef(false)
-  useEffect(() => {
-    if (prefilled.current || !usable.length) return
-    prefilled.current = true
-    form.setFieldValue("accountIds", [usable[0].id])
-  }, [usable, form])
-
+  useEffect(() => { if (prefilled.current || !usable.length) return; prefilled.current = true; form.setFieldValue("accountIds", [usable[0].id]) }, [usable, form])
+  useEffect(() => { setPrivacyLevel(""); setAllowComment(false); setAllowDuet(false); setAllowStitch(false); setBrandOrganic(false); setBrandContent(false); setDisclose(false) }, [tiktokAccount?.id])
   if (accounts.isPending) return <div role="status" aria-label={t.loading} className="space-y-4 px-5 py-5 sm:px-6"><Skeleton className="h-14 w-full rounded-lg"/><Skeleton className="h-9 w-full"/><Skeleton className="h-28 w-full"/></div>
   if (accounts.isError) return <div className="px-5 py-5 sm:px-6"><Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{t.socialLoadError}</span><Button variant="outline" onClick={() => void accounts.refetch()}>{t.retry}</Button></AlertDescription></Alert></div>
-
-  const history = (publications.data ?? []).filter((item) => !submittedIds.includes(item.id))
-  const current = (publications.data ?? []).filter((item) => submittedIds.includes(item.id))
-
-  if (!youtube.length) return <div className="px-5 py-8 text-center sm:px-6">
-    <span className="mx-auto grid size-12 place-items-center rounded-xl border border-border bg-background"><YouTubeMark className="size-6"/></span>
-    <p className="mt-4 font-medium">{t.publishNoAccounts}</p>
-    <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{t.publishNoAccountsBody}</p>
-    <Button asChild className="mt-5 h-10 px-4"><Link to="/settings" onClick={onClose}>{t.publishGoToSettings}</Link></Button>
-    {history.length > 0 && <div className="mt-8 text-left"><PublicationList title={t.publishHistory} items={history} clipId={clip.id}/></div>}
-  </div>
-
-  if (view === "progress") return <div className="space-y-6 px-5 py-5 sm:px-6">
-    <PublicationList title={t.publishProgress} items={current} clipId={clip.id} live/>
-    {publications.isError && <p className="text-sm text-destructive">{t.publishLoadError}</p>}
-    {history.length > 0 && <PublicationList title={t.publishHistory} items={history} clipId={clip.id}/>}
-    <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
-      <Button type="button" variant="outline" className="h-10 px-4" onClick={() => { setView("form"); setSubmittedIds([]) }}>{t.publishAnother}</Button>
-      <Button type="button" className="h-10 px-4" onClick={onClose}>{t.publishDone}</Button>
-    </div>
-  </div>
-
-  return <form noValidate onSubmit={(event) => { event.preventDefault(); void form.handleSubmit() }}>
-    <div className="space-y-6 px-5 py-5 sm:px-6">
-      <FieldGroup className="gap-5">
-        <form.Field name="accountIds" validators={{ onSubmit: ({ value }) => value.length ? undefined : t.publishChooseAccount }}>
-          {(field) => <fieldset className="space-y-2">
-            <legend className="mb-2 text-sm font-medium">{t.publishTo}</legend>
-            <div className="grid gap-2">
-              {youtube.map((account) => {
-                const checked = field.state.value.includes(account.id)
-                const disabled = account.needsReconnect
-                return <button key={account.id} type="button" role="checkbox" aria-checked={checked} disabled={disabled} onClick={() => field.handleChange(checked ? field.state.value.filter((id) => id !== account.id) : [...field.state.value, account.id])} className={cn("flex min-h-14 w-full items-center gap-3 rounded-lg border border-border bg-background px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-background", checked && "border-primary/40 bg-primary/[.04]")}>
-                  <AccountAvatar account={account}/>
-                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{account.displayName}</span><span className={cn("block text-xs text-muted-foreground", disabled && "text-amber-700 dark:text-amber-400")}>{disabled ? t.publishNeedsReconnect : t.socialPlatforms.youtube}</span></span>
-                  <span aria-hidden="true" className={cn("grid size-5 shrink-0 place-items-center rounded-[5px] border border-input transition-colors", checked && "border-primary bg-primary text-primary-foreground")}>{checked && <Check className="size-3.5" strokeWidth={3}/>}</span>
-                </button>
-              })}
-            </div>
-            {field.state.meta.errors.length > 0 && <p className="text-sm text-destructive">{field.state.meta.errors[0]}</p>}
-          </fieldset>}
-        </form.Field>
-
-        <form.Field name="title" validators={{ onChange: ({ value }) => !value.trim() ? t.publishTitleRequired : value.length > TITLE_MAX ? t.publishTitleTooLong : undefined }}>
-          {(field) => { const invalid = field.state.meta.isTouched && !field.state.meta.isValid; return <Field data-invalid={invalid}>
-            <div className="flex items-center gap-2"><FieldLabel htmlFor="publish-title">{t.publishTitleLabel}</FieldLabel><Counter id="publish-title-count" value={field.state.value.length} max={TITLE_MAX}/></div>
-            <Input id="publish-title" name="title" className="h-10" value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} onBlur={field.handleBlur} aria-invalid={invalid} aria-required="true" aria-describedby="publish-title-count"/>
-            {invalid && <FieldDescription className="text-destructive">{field.state.meta.errors[0]}</FieldDescription>}
-          </Field> }}
-        </form.Field>
-
-        <form.Field name="caption" validators={{ onChange: ({ value }) => value.length > CAPTION_MAX ? t.publishCaptionTooLong : undefined }}>
-          {(field) => { const invalid = field.state.meta.isTouched && !field.state.meta.isValid; return <Field data-invalid={invalid}>
-            <div className="flex items-center gap-2"><FieldLabel htmlFor="publish-caption">{t.publishCaptionLabel}</FieldLabel><Counter id="publish-caption-count" value={field.state.value.length} max={CAPTION_MAX}/></div>
-            <textarea id="publish-caption" name="caption" rows={5} value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} onBlur={field.handleBlur} aria-invalid={invalid} aria-busy={regenerate.isPending} aria-describedby="publish-caption-count" readOnly={regenerate.isPending} className="field-sizing-content read-only:opacity-60 max-h-64 min-h-28 w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-base leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30"/>
-            {invalid && <FieldDescription className="text-destructive">{field.state.meta.errors[0]}</FieldDescription>}
-            <div role="group" aria-label={t.regenerateCaption} className="flex flex-wrap items-center justify-end gap-2">
-              <span className="mr-auto text-xs text-muted-foreground">{t.regenerateCaption}</span>
-              <Select value={captionLanguage} disabled={regenerate.isPending} onValueChange={(value) => { if (isCaptionLanguage(value)) setCaptionLanguage(value) }}>
-                <SelectTrigger className="h-8 w-auto min-w-28 text-xs" aria-label={t.captionLanguage}><SelectValue/></SelectTrigger>
-                <SelectContent position="popper" align="end">{CAPTION_LANGUAGES.map((option) => <SelectItem key={option} value={option}>{t.captionLanguageShort[option]}</SelectItem>)}</SelectContent>
-              </Select>
-              <Button type="button" variant="outline" size="sm" className="h-8 min-w-28 px-3 text-xs" aria-busy={regenerate.isPending} disabled={regenerate.isPending || publish.isPending} onClick={() => regenerate.mutate(captionLanguage)}>
-                {regenerate.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none"/> : <Sparkles aria-hidden="true" className="size-3.5"/>}
-                <span aria-live="polite">{regenerate.isPending ? t.captionWriting : t.regenerateCaptionAction}</span>
-              </Button>
-            </div>
-          </Field> }}
-        </form.Field>
-
-        <div className="grid gap-5 sm:grid-cols-2 sm:gap-4">
-          <form.Field name="privacy">
-            {(field) => <Field>
-              <FieldLabel htmlFor="publish-privacy">{t.publishPrivacy}</FieldLabel>
-              <Select value={field.state.value} onValueChange={(value) => field.handleChange(value as Privacy)}>
-                <SelectTrigger id="publish-privacy" className="h-10 w-full" aria-describedby="publish-privacy-hint"><SelectValue/></SelectTrigger>
-                <SelectContent position="popper">{PRIVACY.map((option) => <SelectItem key={option} value={option}>{t.privacyOptions[option]}</SelectItem>)}</SelectContent>
-              </Select>
-              <FieldDescription id="publish-privacy-hint" className="text-xs">{t.privacyHints[field.state.value]}</FieldDescription>
-            </Field>}
-          </form.Field>
-          <form.Field name="madeForKids">
-            {(field) => <Field>
-              <div className="flex min-h-5 items-center justify-between gap-3"><FieldLabel htmlFor="publish-kids">{t.publishMadeForKids}</FieldLabel><Switch id="publish-kids" checked={field.state.value} onCheckedChange={(checked) => field.handleChange(checked)} aria-describedby="publish-kids-hint"/></div>
-              <FieldDescription id="publish-kids-hint" className="text-xs">{t.publishMadeForKidsHint}</FieldDescription>
-            </Field>}
-          </form.Field>
-        </div>
-      </FieldGroup>
-
-      <p className="flex items-start gap-2 rounded-lg bg-muted/60 px-3 py-2.5 text-xs leading-5 text-muted-foreground"><YouTubeMark className="mt-0.5 size-4 shrink-0"/>{t.publishShortsNote}</p>
-
-      {submitError && <Alert variant="destructive"><CircleAlert/><AlertDescription>{submitError}</AlertDescription></Alert>}
-
-      {history.length > 0 && <PublicationList title={t.publishHistory} items={history} clipId={clip.id}/>}
-    </div>
-    <div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-card px-5 py-3 sm:px-6">
-      <Button type="button" variant="ghost" className="h-10 px-4" onClick={onClose}>{t.cancelAction}</Button>
-      <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting, state.values.accountIds.length] as const}>
-        {([canSubmit, isSubmitting, count]) => <Button type="submit" className="h-10 min-w-32 px-4" disabled={publish.isPending || isSubmitting || !canSubmit || !count}>{publish.isPending ? <><LoaderCircle aria-hidden="true" className="size-4 animate-spin"/>{t.publishSubmitting}</> : <>{t.publishSubmit}{count > 1 && <span className="tabular-nums opacity-70">· {count}</span>}</>}</Button>}
-      </form.Subscribe>
-    </div>
-  </form>
+  const history = (publications.data ?? []).filter((item) => !submittedIds.includes(item.id)), current = (publications.data ?? []).filter((item) => submittedIds.includes(item.id))
+  if (!available.length) return <div className="px-5 py-8 text-center sm:px-6"><span className="mx-auto grid size-12 place-items-center rounded-xl border border-border bg-background"><Send aria-hidden="true" className="size-5 text-muted-foreground"/></span><p className="mt-4 font-medium">{t.publishNoAccounts}</p><p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{t.publishNoAccountsBody}</p><Button asChild className="mt-5 h-10 px-4"><Link to="/settings" onClick={onClose}>{t.publishGoToSettings}</Link></Button>{history.length > 0 && <div className="mt-8 text-left"><PublicationList title={t.publishHistory} items={history} clipId={clip.id}/></div>}</div>
+  if (view === "progress") return <div className="space-y-6 px-5 py-5 sm:px-6"><PublicationList title={t.publishProgress} items={current} clipId={clip.id} live/>{publications.isError && <p className="text-sm text-destructive">{t.publishLoadError}</p>}{history.length > 0 && <PublicationList title={t.publishHistory} items={history} clipId={clip.id}/>}<div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4"><Button type="button" variant="outline" className="h-10 px-4" onClick={() => { setView("form"); setSubmittedIds([]) }}>{t.publishAnother}</Button><Button type="button" className="h-10 px-4" onClick={onClose}>{t.publishDone}</Button></div></div>
+  const submitBlocked = !selectedIds.length || (selectedTikTok.length > 0 && (captionTooLongTikTok || (mode === "direct" && (!privacyLevel || brandedCantPrivate || disclosureInvalid || creatorQuery.isPending || creatorQuery.isError || !creatorQuery.data?.privacyLevelOptions.includes(privacyLevel) || durationTooLong))))
+  return <form noValidate onSubmit={(event) => { event.preventDefault(); void form.handleSubmit() }}><div className="space-y-6 px-5 py-5 sm:px-6"><FieldGroup className="gap-5">
+    <form.Field name="accountIds" validators={{ onSubmit: ({ value }) => value.length ? undefined : t.publishChooseAccount }}>{(field) => <fieldset className="space-y-2"><legend className="mb-2 text-sm font-medium">{t.publishTo}</legend><div className="grid gap-2">{available.map((account) => { const checked = field.state.value.includes(account.id), disabled = account.needsReconnect; return <button key={account.id} type="button" role="checkbox" aria-checked={checked} disabled={disabled} onClick={() => field.handleChange(checked ? field.state.value.filter((id) => id !== account.id) : [...(account.platform === "tiktok" ? field.state.value.filter((id) => available.find((item) => item.id === id)?.platform !== "tiktok") : field.state.value), account.id])} className={cn("flex min-h-14 w-full items-center gap-3 rounded-lg border border-border bg-background px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-background", checked && "border-primary/40 bg-primary/[.04]")}><AccountAvatar account={account}/><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{account.displayName}</span><span className={cn("block text-xs text-muted-foreground", disabled && "text-amber-700 dark:text-amber-400")}>{disabled ? t.publishNeedsReconnect : t.socialPlatforms[account.platform]}</span></span><span aria-hidden="true" className={cn("grid size-5 shrink-0 place-items-center rounded-[5px] border border-input transition-colors", checked && "border-primary bg-primary text-primary-foreground")}>{checked && <Check className="size-3.5" strokeWidth={3}/>}</span></button> })}</div>{field.state.meta.errors.length > 0 && <p className="text-sm text-destructive">{field.state.meta.errors[0]}</p>}</fieldset>}</form.Field>
+    {selectedTikTok.length > 0 && <section className="space-y-4 rounded-xl border border-border bg-muted/20 p-3 sm:p-4"><h3 className="text-sm font-semibold">TikTok</h3><Field><FieldLabel>{t.tiktokModeLabel}</FieldLabel><div className="grid gap-2 sm:grid-cols-2">{(["direct", "inbox"] as const).map((option) => <button key={option} type="button" aria-pressed={mode === option} onClick={() => setMode(option)} className={cn("rounded-lg border p-3 text-left transition-colors", mode === option ? "border-primary/50 bg-primary/[.05]" : "border-border bg-background hover:bg-muted/50")}><span className="block text-sm font-medium">{option === "direct" ? t.tiktokModeDirect : t.tiktokModeInbox}</span><span className="mt-1 block text-xs leading-5 text-muted-foreground">{option === "direct" ? t.tiktokModeDirectHint : t.tiktokModeInboxHint}</span></button>)}</div></Field>
+      {mode === "inbox" ? <div className="space-y-3 rounded-lg bg-background p-3"><p className="text-sm leading-5 text-muted-foreground">{t.tiktokInboxNote}</p><Button type="button" variant="outline" className="h-9" onClick={() => { void navigator.clipboard.writeText(form.getFieldValue("caption")).then(() => toast.success(t.tiktokCaptionCopied)).catch(() => toast.error(t.tiktokCopyFailed)) }}>{t.tiktokCopyCaption}</Button></div> : <>
+        <p className="rounded-lg bg-amber-500/10 px-3 py-2.5 text-xs leading-5 text-amber-900 dark:text-amber-200">{t.tiktokUnauditedNote}</p>
+        {creatorQuery.isPending ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin"/>{t.tiktokCreatorLoading}</p> : creatorQuery.isError ? <Alert variant="destructive"><AlertDescription className="flex items-center justify-between gap-2"><span>{t.tiktokCreatorError}</span><Button type="button" variant="outline" onClick={() => void creatorQuery.refetch()}>{t.retry}</Button></AlertDescription></Alert> : creatorQuery.data && <>
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-background p-3">{creatorQuery.data.avatarUrl ? <img src={creatorQuery.data.avatarUrl} alt="" className="size-10 rounded-full object-cover"/> : <AccountAvatar account={tiktokAccount!}/>}<div><p className="text-sm font-medium">{creatorQuery.data.nickname}</p><p className="text-xs text-muted-foreground">@{creatorQuery.data.username}</p></div></div>
+          <Field><FieldLabel htmlFor="tiktok-privacy">{t.tiktokPrivacyLabel}</FieldLabel><Select value={privacyLevel} onValueChange={setPrivacyLevel}><SelectTrigger id="tiktok-privacy" className="h-10 w-full"><SelectValue placeholder={t.tiktokPrivacyPlaceholder}/></SelectTrigger><SelectContent position="popper">{creatorQuery.data.privacyLevelOptions.filter((option) => TIKTOK_PRIVACY.includes(option)).map((option) => <SelectItem key={option} value={option} disabled={brandContent && option === "SELF_ONLY"}>{t.tiktokPrivacy[option as keyof typeof t.tiktokPrivacy]}{brandContent && option === "SELF_ONLY" ? ` — ${t.tiktokBrandedNotPrivate}` : ""}</SelectItem>)}</SelectContent></Select>{brandContent && privacyLevel === "SELF_ONLY" && <FieldDescription className="text-destructive">{t.tiktokBrandedNotPrivate}</FieldDescription>}</Field>
+          <fieldset className="space-y-2"><legend className="mb-2 text-sm font-medium">{t.tiktokInteractions}</legend>{([ ["comment", allowComment, setAllowComment, creatorQuery.data.commentDisabled, t.tiktokAllowComments], ["duet", allowDuet, setAllowDuet, creatorQuery.data.duetDisabled, t.tiktokAllowDuet], ["stitch", allowStitch, setAllowStitch, creatorQuery.data.stitchDisabled, t.tiktokAllowStitch] ] as const).map(([key, enabled, setter, disabled, label]) => <div key={key} className="flex items-center justify-between gap-3"><label htmlFor={`tiktok-${key}`} className={cn("text-sm", disabled && "text-muted-foreground")}>{label}{disabled && <span className="ml-2 text-xs">{t.tiktokInteractionOff}</span>}</label><Switch id={`tiktok-${key}`} checked={enabled} disabled={disabled} onCheckedChange={setter}/></div>)}</fieldset>
+          <div className="space-y-3 rounded-lg border border-border bg-background p-3"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-medium">{t.tiktokDisclose}</p><p className="text-xs text-muted-foreground">{t.tiktokDiscloseHint}</p></div><Switch checked={disclose} onCheckedChange={(checked) => { setDisclose(checked); if (!checked) { setBrandOrganic(false); setBrandContent(false) } }}/></div>{disclose && <div className="space-y-3 border-t border-border pt-3"><label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={brandOrganic} onChange={(event) => setBrandOrganic(event.target.checked)} className="mt-1 accent-primary"/><span>{t.tiktokYourBrand}<span className="block text-xs text-muted-foreground">{t.tiktokYourBrandHint}</span></span></label><label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={brandContent} onChange={(event) => setBrandContent(event.target.checked)} className="mt-1 accent-primary"/><span>{t.tiktokBranded}<span className="block text-xs text-muted-foreground">{t.tiktokBrandedHint}</span></span></label>{disclosureInvalid && <p className="text-xs text-destructive">{t.tiktokDiscloseRequired}</p>}</div>}</div>
+          <p className="text-xs leading-5 text-muted-foreground">{t.tiktokDeclarePrefix} <a className="underline underline-offset-2" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t.tiktokMusicUsage}</a>{brandContent && <> {t.tiktokAnd} <a className="underline underline-offset-2" href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noreferrer">{t.tiktokBrandedPolicy}</a></>}.</p>
+          <p className="text-xs leading-5 text-muted-foreground">{t.tiktokProcessingNote}</p>{durationTooLong && creatorQuery.data && <p role="alert" className="text-sm text-destructive">{t.tiktokTooLong.replace("{duration}", formatDuration(duration!)).replace("{max}", formatDuration(creatorQuery.data.maxVideoPostDurationSec))}</p>}
+        </>}
+      </>}
+    </section>}
+    <form.Field name="title" validators={{ onChange: ({ value }) => !value.trim() ? t.publishTitleRequired : value.length > TITLE_MAX ? t.publishTitleTooLong : undefined }}>{(field) => selectedYouTube.length > 0 ? <Field data-invalid={field.state.meta.isTouched && !field.state.meta.isValid}><div className="flex items-center gap-2"><FieldLabel htmlFor="publish-title">{t.publishTitleLabel}</FieldLabel><Counter id="publish-title-count" value={field.state.value.length} max={TITLE_MAX}/></div><Input id="publish-title" name="title" className="h-10" value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} onBlur={field.handleBlur} aria-invalid={field.state.meta.isTouched && !field.state.meta.isValid} aria-required="true" aria-describedby="publish-title-count"/>{field.state.meta.isTouched && !field.state.meta.isValid && <FieldDescription className="text-destructive">{field.state.meta.errors[0]}</FieldDescription>}</Field> : null}</form.Field>
+    <form.Field name="caption" validators={{ onChange: ({ value }) => value.length > CAPTION_MAX ? t.publishCaptionTooLong : undefined }}>{(field) => { const invalid = field.state.meta.isTouched && !field.state.meta.isValid; return <Field data-invalid={invalid}><div className="flex items-center gap-2"><FieldLabel htmlFor="publish-caption">{selectedTikTok.length && selectedYouTube.length ? t.publishCaptionLabelBoth : selectedTikTok.length ? t.publishCaptionLabelTikTok : t.publishCaptionLabel}</FieldLabel><Counter id="publish-caption-count" value={field.state.value.length} max={selectedTikTok.length ? TIKTOK_CAPTION_MAX : CAPTION_MAX}/></div><textarea id="publish-caption" name="caption" rows={5} value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} onBlur={field.handleBlur} aria-invalid={invalid || captionTooLongTikTok} aria-busy={regenerate.isPending} aria-describedby="publish-caption-count" readOnly={regenerate.isPending} className="field-sizing-content read-only:opacity-60 max-h-64 min-h-28 w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-base leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30"/>{invalid && <FieldDescription className="text-destructive">{field.state.meta.errors[0]}</FieldDescription>}{captionTooLongTikTok && <FieldDescription className="text-destructive">{t.publishCaptionTikTokLimit}</FieldDescription>}<div role="group" aria-label={t.regenerateCaption} className="flex flex-wrap items-center justify-end gap-2"><span className="mr-auto text-xs text-muted-foreground">{t.regenerateCaption}</span><Select value={captionLanguage} disabled={regenerate.isPending} onValueChange={(value) => { if (isCaptionLanguage(value)) setCaptionLanguage(value) }}><SelectTrigger className="h-8 w-auto min-w-28 text-xs" aria-label={t.captionLanguage}><SelectValue/></SelectTrigger><SelectContent position="popper" align="end">{CAPTION_LANGUAGES.map((option) => <SelectItem key={option} value={option}>{t.captionLanguageShort[option]}</SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" size="sm" className="h-8 min-w-28 px-3 text-xs" aria-busy={regenerate.isPending} disabled={regenerate.isPending || publish.isPending} onClick={() => regenerate.mutate(captionLanguage)}>{regenerate.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none"/> : <Sparkles aria-hidden="true" className="size-3.5"/>}<span aria-live="polite">{regenerate.isPending ? t.captionWriting : t.regenerateCaptionAction}</span></Button></div></Field> }}</form.Field>
+    {selectedYouTube.length > 0 && <div className="grid gap-5 sm:grid-cols-2 sm:gap-4"><form.Field name="privacy">{(field) => <Field><FieldLabel htmlFor="publish-privacy">{t.publishPrivacy}</FieldLabel><Select value={field.state.value} onValueChange={(value) => field.handleChange(value as Privacy)}><SelectTrigger id="publish-privacy" className="h-10 w-full" aria-describedby="publish-privacy-hint"><SelectValue/></SelectTrigger><SelectContent position="popper">{PRIVACY.map((option) => <SelectItem key={option} value={option}>{t.privacyOptions[option]}</SelectItem>)}</SelectContent></Select><FieldDescription id="publish-privacy-hint" className="text-xs">{t.privacyHints[field.state.value]}</FieldDescription></Field>}</form.Field><form.Field name="madeForKids">{(field) => <Field><div className="flex min-h-5 items-center justify-between gap-3"><FieldLabel htmlFor="publish-kids">{t.publishMadeForKids}</FieldLabel><Switch id="publish-kids" checked={field.state.value} onCheckedChange={(checked) => field.handleChange(checked)} aria-describedby="publish-kids-hint"/></div><FieldDescription id="publish-kids-hint" className="text-xs">{t.publishMadeForKidsHint}</FieldDescription></Field>}</form.Field></div>}
+    {selectedYouTube.length > 0 && <p className="flex items-start gap-2 rounded-lg bg-muted/60 px-3 py-2.5 text-xs leading-5 text-muted-foreground"><YouTubeMark className="mt-0.5 size-4 shrink-0"/>{t.publishShortsNote}</p>}
+    {submitError && <Alert variant="destructive"><CircleAlert/><AlertDescription>{submitError}</AlertDescription></Alert>}{history.length > 0 && <PublicationList title={t.publishHistory} items={history} clipId={clip.id}/>}
+  </FieldGroup></div><div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-card px-5 py-3 sm:px-6"><Button type="button" variant="ghost" className="h-10 px-4" onClick={onClose}>{t.cancelAction}</Button><form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting, state.values.accountIds.length] as const}>{([canSubmit, isSubmitting, count]) => <Button type="submit" className="h-10 min-w-32 px-4" disabled={publish.isPending || isSubmitting || !canSubmit || submitBlocked}>{publish.isPending ? <><LoaderCircle aria-hidden="true" className="size-4 animate-spin"/>{t.publishSubmitting}</> : <>{selectedTikTok.length && !selectedYouTube.length && mode === "inbox" ? t.publishSubmitInbox : t.publishSubmit}{count > 1 && <span className="tabular-nums opacity-70">· {count}</span>}</>}</Button>}</form.Subscribe></div></form>
 }
-
+function formatDuration(seconds: number) { const mins = Math.floor(seconds / 60), secs = Math.floor(seconds % 60); return mins ? `${mins}m ${secs}s` : `${secs}s` }
 function AccountAvatar({ account }: { account: SocialAccount }) {
-  const [failed, setFailed] = useState(false)
-  return <span className="relative shrink-0">
-    {account.avatarUrl && !failed
-      ? <img src={account.avatarUrl} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="size-9 rounded-full bg-muted object-cover"/>
-      : <span aria-hidden="true" className="grid size-9 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">{account.displayName.trim()[0]?.toUpperCase() ?? "?"}</span>}
-    <span className="absolute -bottom-0.5 -right-1 grid size-4 place-items-center rounded-full bg-card"><YouTubeMark className="size-3.5"/></span>
-  </span>
+  const [failed, setFailed] = useState(false), Mark = account.platform === "tiktok" ? TikTokMark : YouTubeMark
+  return <span className="relative shrink-0">{account.avatarUrl && !failed ? <img src={account.avatarUrl} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="size-9 rounded-full bg-muted object-cover"/> : <span aria-hidden="true" className="grid size-9 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">{account.displayName.trim()[0]?.toUpperCase() ?? "?"}</span>}<span className="absolute -bottom-0.5 -right-1 grid size-4 place-items-center rounded-full bg-card"><Mark className="size-3.5"/></span></span>
 }
-
 function PublicationList({ title, items, clipId, live = false }: { title: string; items: PublicationResponse[]; clipId: string; live?: boolean }) {
   const t = useT()
-  return <section aria-label={title}>
-    <h3 className="mb-2 text-xs font-medium uppercase tracking-[.08em] text-muted-foreground">{title}</h3>
-    {items.length ? <ul aria-live={live ? "polite" : undefined} className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-background">{items.map((item) => <PublicationRow key={item.id} item={item} clipId={clipId}/>)}</ul>
-      : live ? <div className="space-y-2 rounded-lg border border-border p-3"><Skeleton className="h-4 w-1/2"/><Skeleton className="h-1 w-full"/></div>
-      : <p className="text-sm text-muted-foreground">{t.publishHistoryEmpty}</p>}
-  </section>
+  return <section aria-label={title}><h3 className="mb-2 text-xs font-medium uppercase tracking-[.08em] text-muted-foreground">{title}</h3>{items.length ? <ul aria-live={live ? "polite" : undefined} className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-background">{items.map((item) => <PublicationRow key={item.id} item={item} clipId={clipId}/>)}</ul> : live ? <div className="space-y-2 rounded-lg border border-border p-3"><Skeleton className="h-4 w-1/2"/><Skeleton className="h-1 w-full"/></div> : <p className="text-sm text-muted-foreground">{t.publishHistoryEmpty}</p>}</section>
 }
-
 function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: string }) {
-  const t = useT()
-  const locale = useLanguage().language === "id" ? "id-ID" : "en-US"
-  const client = useQueryClient()
-  const retry = useMutation({
-    mutationFn: () => api<PublicationResponse>(`/publications/${item.id}/retry`, { method: "POST" }),
-    onSuccess: (next) => {
-      if (next?.id) client.setQueryData<PublicationResponse[]>(publicationsKey(clipId), (previous = []) => previous.map((row) => row.id === next.id ? next : row))
-      void client.invalidateQueries({ queryKey: publicationsKey(clipId) })
-    },
-    onError: () => toast.error(t.retryUploadFailed),
-  })
-  const progress = Math.max(0, Math.min(100, Math.round(item.progress)))
-  const when = item.publishedAt ?? item.updatedAt ?? item.createdAt
-  return <li className="px-3 py-3">
-    <div className="flex items-center gap-3">
-      <StatusIcon status={item.status}/>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{item.accountName}</p>
-        <p className="truncate text-xs text-muted-foreground"><span className={cn(item.status === "failed" && "text-destructive", item.status === "published" && "text-foreground")}>{t.publishStatus[item.status]}{item.status === "uploading" && <span className="tabular-nums"> · {progress}%</span>}</span> · {t.privacyOptions[item.privacy] ?? item.privacy} · {relativeAge(when, locale)}</p>
-      </div>
-      {item.status === "published" && item.externalUrl && <a href={item.externalUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted">{t.openOnYouTube}<ExternalLink aria-hidden="true" className="size-3.5"/></a>}
-      {item.status === "failed" && <Button type="button" variant="outline" className="h-9 shrink-0 px-3" disabled={retry.isPending} onClick={() => retry.mutate()}>{retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin"/> : <RotateCcw aria-hidden="true" className="size-3.5"/>}{t.retryUpload}</Button>}
-    </div>
-    {item.status === "uploading" && <Progress value={progress} aria-label={`${t.publishStatus.uploading} ${progress}%`} className="mt-2.5 h-1.5"/>}
-    {(item.status === "queued" || item.status === "processing") && <div aria-hidden="true" className="publish-indeterminate mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full w-1/3 rounded-full bg-primary/60"/></div>}
-    {item.status === "failed" && item.error && <p className="mt-2 rounded-md bg-destructive/5 px-2.5 py-2 text-xs leading-5 text-destructive">{item.error}</p>}
-  </li>
+  const t = useT(), locale = useLanguage().language === "id" ? "id-ID" : "en-US", client = useQueryClient()
+  const retry = useMutation({ mutationFn: () => api<PublicationResponse>(`/publications/${item.id}/retry`, { method: "POST" }), onSuccess: (next) => { if (next?.id) client.setQueryData<PublicationResponse[]>(publicationsKey(clipId), (previous = []) => previous.map((row) => row.id === next.id ? next : row)); void client.invalidateQueries({ queryKey: publicationsKey(clipId) }) }, onError: () => toast.error(t.retryUploadFailed) })
+  const progress = Math.max(0, Math.min(100, Math.round(item.progress))), when = item.publishedAt ?? item.updatedAt ?? item.createdAt
+  const statusText = item.platform === "tiktok" && item.mode === "inbox" && item.status === "published" ? t.publishSentToInbox : item.status === "processing" && item.platform === "tiktok" ? t.publishProcessingTikTok : t.publishStatus[item.status]
+  const privacyLabel = item.platform === "tiktok" ? (t.tiktokPrivacy[item.privacy as keyof typeof t.tiktokPrivacy] ?? item.privacy) : (t.privacyOptions[item.privacy as keyof typeof t.privacyOptions] ?? item.privacy)
+  return <li className="px-3 py-3"><div className="flex items-center gap-3"><StatusIcon status={item.status}/><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.accountName}</p><p className="truncate text-xs text-muted-foreground"><span className={cn(item.status === "failed" && "text-destructive", item.status === "published" && "text-foreground")}>{statusText}{item.status === "uploading" && <span className="tabular-nums"> · {progress}%</span>}</span> · {privacyLabel} · {relativeAge(when, locale)}</p></div>{item.status === "published" && item.externalUrl && <a href={item.externalUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted">{item.platform === "tiktok" ? t.openOnTikTok : t.openOnYouTube}<ExternalLink aria-hidden="true" className="size-3.5"/></a>}{item.status === "failed" && <Button type="button" variant="outline" className="h-9 shrink-0 px-3" disabled={retry.isPending} onClick={() => retry.mutate()}>{retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin"/> : <RotateCcw aria-hidden="true" className="size-3.5"/>}{t.retryUpload}</Button>}</div>{item.status === "uploading" && <Progress value={progress} aria-label={`${t.publishStatus.uploading} ${progress}%`} className="mt-2.5 h-1.5"/>}{(item.status === "queued" || item.status === "processing") && <div aria-hidden="true" className="publish-indeterminate mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full w-1/3 rounded-full bg-primary/60"/></div>}{item.status === "failed" && item.error && <p className="mt-2 rounded-md bg-destructive/5 px-2.5 py-2 text-xs leading-5 text-destructive">{item.error}</p>}</li>
 }
-
 function StatusIcon({ status }: { status: PublicationStatus }) {
   if (status === "published") return <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent/15 text-accent"><Check aria-hidden="true" className="size-4" strokeWidth={2.5}/></span>
   if (status === "failed") return <span className="grid size-8 shrink-0 place-items-center rounded-full bg-destructive/10 text-destructive"><TriangleAlert aria-hidden="true" className="size-4"/></span>

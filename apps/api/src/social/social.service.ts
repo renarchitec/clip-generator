@@ -1,25 +1,37 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type {
   SocialAccountResponse,
   SocialPlatform,
   SocialProviderResponse,
+  TiktokCreatorInfoResponse,
 } from '@clipper/shared';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OAuthStateStore } from './oauth-state.store';
 import {
+  buildTiktokAuthorizationUrl,
   buildYoutubeAuthorizationUrl,
   createOAuthState,
   createPkceChallenge,
+  socialCallbackUrl,
+  TIKTOK_SCOPES,
   YOUTUBE_SCOPES,
-  youtubeCallbackUrl,
 } from './oauth';
 import { SOCIAL_PLATFORM_LIST } from './social.constants';
 import {
   SocialProviderError,
+  TiktokProvider,
   YoutubeProvider,
   type SocialProvider,
 } from './social-provider';
+import { TiktokApiError, fetchTiktokCreatorInfo } from './tiktok-api';
 import { decryptSocialToken, encryptSocialToken } from './token-crypto';
 
 const ACCESS_TOKEN_REFRESH_SKEW_MS = 60_000;
@@ -27,14 +39,20 @@ const ACCESS_TOKEN_REFRESH_SKEW_MS = 60_000;
 @Injectable()
 export class SocialService {
   private readonly providers: Map<SocialPlatform, SocialProvider>;
+  /** Refresh token TikTok berotasi: serialkan refresh per akun agar tidak saling menimpa. */
+  private readonly refreshing = new Map<string, Promise<string>>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
     private readonly youtube: YoutubeProvider,
+    private readonly tiktok: TiktokProvider,
     private readonly oauthStates: OAuthStateStore,
   ) {
-    this.providers = new Map([[youtube.platform, youtube]]);
+    this.providers = new Map<SocialPlatform, SocialProvider>([
+      [youtube.platform, youtube],
+      [tiktok.platform, tiktok],
+    ]);
   }
 
   listProviders(): SocialProviderResponse[] {
@@ -79,7 +97,7 @@ export class SocialService {
     }
 
     const provider = this.providers.get(account.platform);
-    if (account.platform === 'youtube' && provider?.revoke) {
+    if (provider?.revoke) {
       try {
         const accessToken = decryptSocialToken(
           account.accessTokenEnc,
@@ -94,27 +112,43 @@ export class SocialService {
     await this.prisma.socialAccount.deleteMany({ where: { id, userId } });
   }
 
-  async youtubeConnectUrl(userId: string): Promise<string> {
-    if (!this.youtube.configured) {
-      throw new SocialProviderError('not_configured');
+  async connectUrl(userId: string, platform: SocialPlatform): Promise<string> {
+    const provider = this.providers.get(platform);
+    if (!provider || !provider.available) {
+      throw new SocialProviderError('provider_unavailable');
     }
+    if (!provider.configured) throw new SocialProviderError('not_configured');
 
-    const pending = createOAuthState(userId, 'youtube');
+    const pending = createOAuthState(userId, platform);
     await this.oauthStates.save(pending);
+    const redirectUri = socialCallbackUrl(this.config.publicWebUrl, platform);
 
+    if (platform === 'tiktok') {
+      // TikTok web: tanpa PKCE; state tetap dikonsumsi sekali pakai.
+      return buildTiktokAuthorizationUrl({
+        clientKey: this.config.tiktokClientKey!,
+        redirectUri,
+        state: pending.state,
+      });
+    }
     return buildYoutubeAuthorizationUrl({
       clientId: this.config.googleClientId!,
-      redirectUri: youtubeCallbackUrl(this.config.publicWebUrl),
+      redirectUri,
       state: pending.state,
       codeChallenge: createPkceChallenge(pending.payload.codeVerifier),
     });
   }
 
-  async completeYoutubeCallback(
+  async completeCallback(
     userId: string,
+    platform: SocialPlatform,
     code: string | undefined,
     state: string | undefined,
   ): Promise<void> {
+    const provider = this.providers.get(platform);
+    if (!provider || !provider.available) {
+      throw new SocialProviderError('provider_unavailable');
+    }
     if (!state) throw new SocialProviderError('invalid_state');
 
     // GET + DEL atomik: callback yang sama tidak dapat dipakai ulang.
@@ -122,18 +156,18 @@ export class SocialService {
     if (
       !pending ||
       pending.userId !== userId ||
-      pending.platform !== 'youtube'
+      pending.platform !== platform
     ) {
       throw new SocialProviderError('invalid_state');
     }
     if (!code) throw new SocialProviderError('missing_code');
 
-    const tokens = await this.youtube.exchangeCode(
+    const tokens = await provider.exchangeCode(
       code,
-      pending.codeVerifier,
-      youtubeCallbackUrl(this.config.publicWebUrl),
+      platform === 'tiktok' ? undefined : pending.codeVerifier,
+      socialCallbackUrl(this.config.publicWebUrl, platform),
     );
-    const external = await this.youtube.fetchAccount(tokens.accessToken);
+    const external = await provider.fetchAccount(tokens.accessToken);
     const key = this.tokenKey();
     const accessTokenEnc = encryptSocialToken(tokens.accessToken, key);
     const refreshTokenEnc = tokens.refreshToken
@@ -142,19 +176,21 @@ export class SocialService {
     const expiresAt = tokens.expiresIn
       ? new Date(Date.now() + tokens.expiresIn * 1000)
       : null;
-    const scopes = tokens.scopes ?? [...YOUTUBE_SCOPES];
+    const scopes =
+      tokens.scopes ??
+      [...(platform === 'tiktok' ? TIKTOK_SCOPES : YOUTUBE_SCOPES)];
 
     await this.prisma.socialAccount.upsert({
       where: {
         userId_platform_externalId: {
           userId,
-          platform: 'youtube',
+          platform,
           externalId: external.externalId,
         },
       },
       create: {
         userId,
-        platform: 'youtube',
+        platform,
         externalId: external.externalId,
         displayName: external.displayName,
         avatarUrl: external.avatarUrl,
@@ -173,6 +209,52 @@ export class SocialService {
         scopes,
       },
     });
+  }
+
+  /** Creator info TikTok untuk akun milik pengguna sesi (privacy options, batas durasi, dsb). */
+  async tiktokCreatorInfo(
+    accountId: string,
+    userId: string,
+  ): Promise<TiktokCreatorInfoResponse> {
+    const account = await this.prisma.socialAccount.findFirst({
+      where: { id: accountId, userId },
+      select: { id: true, platform: true, avatarUrl: true },
+    });
+    if (!account) throw new NotFoundException('Akun sosial tidak ditemukan.');
+    if (account.platform !== 'tiktok') {
+      throw new BadRequestException('platform_mismatch');
+    }
+
+    try {
+      const accessToken = await this.getValidAccessToken(account.id);
+      const info = await fetchTiktokCreatorInfo(accessToken);
+      return {
+        nickname: info.nickname,
+        username: info.username,
+        avatarUrl: info.avatarUrl ?? account.avatarUrl,
+        privacyLevelOptions: info.privacyLevelOptions,
+        commentDisabled: info.commentDisabled,
+        duetDisabled: info.duetDisabled,
+        stitchDisabled: info.stitchDisabled,
+        maxVideoPostDurationSec: info.maxVideoPostDurationSec,
+      };
+    } catch (error) {
+      if (error instanceof SocialProviderError) {
+        if (error.code === 'not_configured') {
+          throw new ServiceUnavailableException('not_configured');
+        }
+        throw new ConflictException('needs_reconnect');
+      }
+      if (error instanceof TiktokApiError) {
+        if (error.needsReconnect) throw new ConflictException('needs_reconnect');
+        throw new BadGatewayException(
+          error.code === 'rate_limit_exceeded'
+            ? 'rate_limited'
+            : 'tiktok_unavailable',
+        );
+      }
+      throw error;
+    }
   }
 
   /**
@@ -197,15 +279,35 @@ export class SocialService {
     if (!account.refreshTokenEnc) {
       throw new SocialProviderError('reconnect_required');
     }
+    const inflight = this.refreshing.get(account.id);
+    if (inflight) return inflight;
+
+    const run = this.refreshAccount(account, key).finally(() =>
+      this.refreshing.delete(account.id),
+    );
+    this.refreshing.set(account.id, run);
+    return run;
+  }
+
+  private async refreshAccount(
+    account: {
+      id: string;
+      platform: SocialPlatform;
+      refreshTokenEnc: string | null;
+      scopes: string[];
+    },
+    key: string,
+  ): Promise<string> {
     const provider = this.providers.get(account.platform);
     if (!provider) throw new SocialProviderError('provider_unavailable');
 
-    const refreshToken = decryptSocialToken(account.refreshTokenEnc, key);
+    const refreshToken = decryptSocialToken(account.refreshTokenEnc!, key);
     const tokens = await provider.refresh(refreshToken);
     await this.prisma.socialAccount.update({
       where: { id: account.id },
       data: {
         accessTokenEnc: encryptSocialToken(tokens.accessToken, key),
+        // TikTok merotasi refresh token: token baru selalu menggantikan yang lama.
         refreshTokenEnc: tokens.refreshToken
           ? encryptSocialToken(tokens.refreshToken, key)
           : account.refreshTokenEnc,

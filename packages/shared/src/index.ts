@@ -217,14 +217,48 @@ export const PUBLISH_TITLE_MAX = 100;
 export const PUBLISH_CAPTION_MAX = 5000;
 export const PUBLISH_TARGETS_MAX = 5;
 
+/** Batas caption TikTok (UTF-16 code unit). */
+export const PUBLISH_TIKTOK_CAPTION_MAX = 2200;
+
+/** Mode publikasi: 'direct' = Direct Post (video.publish), 'inbox' = draf di inbox TikTok (video.upload). */
+export const PUBLISH_MODES = ['direct', 'inbox'] as const;
+export type PublishMode = (typeof PUBLISH_MODES)[number];
+
+export interface TiktokPublishOptions {
+  /** salah satu privacyLevelOptions dari creator_info (mis. SELF_ONLY) */
+  privacyLevel: string;
+  disableComment: boolean;
+  disableDuet: boolean;
+  disableStitch: boolean;
+  brandContent: boolean;
+  brandOrganic: boolean;
+}
+
 export interface PublishTarget {
   accountId: string;
-  /** 1..100 karakter, tanpa '<' atau '>' */
+  /** YouTube: 1..100 karakter, tanpa '<' atau '>'. TikTok: opsional (boleh kosong). */
   title: string;
-  /** 0..5000 karakter; dipakai sebagai deskripsi video */
+  /** YouTube: 0..5000 karakter (deskripsi). TikTok: 0..2200 karakter (caption; tidak dipakai mode inbox). */
   caption: string;
-  privacy: PublicationPrivacy;
+  /** Wajib untuk YouTube; diabaikan untuk TikTok. */
+  privacy?: PublicationPrivacy;
   madeForKids?: boolean;
+  /** Hanya TikTok; default 'direct'. */
+  mode?: PublishMode;
+  /** Hanya TikTok mode direct (wajib di sana); diabaikan pada inbox. */
+  tiktok?: TiktokPublishOptions;
+}
+
+/** Respons GET /api/social/accounts/:id/tiktok/creator-info. */
+export interface TiktokCreatorInfoResponse {
+  nickname: string;
+  username: string;
+  avatarUrl: string | null;
+  privacyLevelOptions: string[];
+  commentDisabled: boolean;
+  duetDisabled: boolean;
+  stitchDisabled: boolean;
+  maxVideoPostDurationSec: number;
 }
 
 /** Body POST /api/clips/:id/publish (1..5 target). */
@@ -240,7 +274,9 @@ export interface PublicationResponse {
   accountName: string;
   title: string;
   caption: string;
-  privacy: PublicationPrivacy;
+  /** YouTube: public|unlisted|private. TikTok: privacy_level (direct) atau 'inbox'. */
+  privacy: string;
+  mode: PublishMode;
   status: PublicationStatus;
   /** 0-100, persentase unggah */
   progress: number;

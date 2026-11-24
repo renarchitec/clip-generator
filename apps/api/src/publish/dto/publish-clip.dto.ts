@@ -12,13 +12,38 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
-import type { PublicationPrivacy } from '@clipper/shared';
+import type { PublicationPrivacy, PublishMode } from '@clipper/shared';
 import {
   CAPTION_MAX,
   PRIVACIES,
+  PUBLISH_MODES,
+  TIKTOK_PRIVACY_LEVEL_MAX,
   TARGETS_MAX,
-  TITLE_MAX,
 } from '../publish-helpers';
+
+/** Opsi Direct Post TikTok; aturan lintas-field divalidasi di publish-helpers. */
+export class TiktokOptionsDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(TIKTOK_PRIVACY_LEVEL_MAX)
+  @Matches(/^[A-Z_]+$/, { message: 'privacyLevel tidak valid.' })
+  privacyLevel: string;
+
+  @IsBoolean()
+  disableComment: boolean;
+
+  @IsBoolean()
+  disableDuet: boolean;
+
+  @IsBoolean()
+  disableStitch: boolean;
+
+  @IsBoolean()
+  brandContent: boolean;
+
+  @IsBoolean()
+  brandOrganic: boolean;
+}
 
 export class PublishTargetDto {
   @IsString()
@@ -26,19 +51,31 @@ export class PublishTargetDto {
   @MaxLength(64)
   accountId: string;
 
+  /** Wajib untuk YouTube (dicek di service); opsional/boleh kosong untuk TikTok. */
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @MaxLength(TITLE_MAX)
   @Matches(/^[^<>]*$/, { message: "title tidak boleh memuat '<' atau '>'." })
-  title: string;
+  title?: string;
 
+  /** Batas 5000 (YouTube); TikTok dibatasi 2200 di service. */
   @IsString()
   @MaxLength(CAPTION_MAX)
   caption: string;
 
+  /** Wajib untuk YouTube (dicek di service); diabaikan untuk TikTok. */
+  @IsOptional()
   @IsIn(PRIVACIES)
-  privacy: PublicationPrivacy;
+  privacy?: PublicationPrivacy;
+
+  @IsOptional()
+  @IsIn(PUBLISH_MODES)
+  mode?: PublishMode;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TiktokOptionsDto)
+  tiktok?: TiktokOptionsDto;
 
   @IsOptional()
   @IsBoolean()

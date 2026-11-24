@@ -6,10 +6,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildSettingsRedirect,
+  buildTiktokAuthorizationUrl,
   buildYoutubeAuthorizationUrl,
   createOAuthState,
   createPkceChallenge,
+  socialCallbackUrl,
   socialOAuthStateKey,
+  TIKTOK_SCOPES,
   YOUTUBE_SCOPES,
   youtubeCallbackUrl,
 } from './oauth.ts';
@@ -75,4 +78,34 @@ test('callback dan redirect settings dibangun tanpa slash ganda', () => {
     }),
   );
   assert.equal(failed.searchParams.get('social_error'), 'not_configured');
+});
+
+
+test('authorization URL TikTok memakai scope comma-separated dan tanpa PKCE', () => {
+  const url = new URL(
+    buildTiktokAuthorizationUrl({
+      clientKey: 'tt-key',
+      redirectUri: 'https://clipper.test/api/social/tiktok/callback',
+      state: 'state-acak',
+    }),
+  );
+  assert.equal(url.origin + url.pathname, 'https://www.tiktok.com/v2/auth/authorize/');
+  assert.equal(url.searchParams.get('client_key'), 'tt-key');
+  assert.equal(url.searchParams.get('scope'), TIKTOK_SCOPES.join(','));
+  assert.equal(
+    url.searchParams.get('scope'),
+    'user.info.basic,video.upload,video.publish',
+  );
+  assert.equal(url.searchParams.get('response_type'), 'code');
+  assert.equal(
+    url.searchParams.get('redirect_uri'),
+    'https://clipper.test/api/social/tiktok/callback',
+  );
+  assert.equal(url.searchParams.get('state'), 'state-acak');
+  assert.equal(url.searchParams.get('code_challenge'), null);
+  assert.equal(url.searchParams.get('code_challenge_method'), null);
+  assert.equal(
+    socialCallbackUrl('https://clipper.test/', 'tiktok'),
+    'https://clipper.test/api/social/tiktok/callback',
+  );
 });

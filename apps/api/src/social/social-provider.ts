@@ -23,9 +23,10 @@ export interface SocialProvider {
   readonly platform: SocialPlatform;
   readonly configured: boolean;
   readonly available: boolean;
+  /** codeVerifier hanya dipakai provider ber-PKCE (YouTube); TikTok web tidak memakainya. */
   exchangeCode(
     code: string,
-    codeVerifier: string,
+    codeVerifier: string | undefined,
     redirectUri: string,
   ): Promise<OAuthTokens>;
   fetchAccount(accessToken: string): Promise<ExternalSocialAccount>;
@@ -57,10 +58,11 @@ export class YoutubeProvider implements SocialProvider {
 
   async exchangeCode(
     code: string,
-    codeVerifier: string,
+    codeVerifier: string | undefined,
     redirectUri: string,
   ): Promise<OAuthTokens> {
     const credentials = this.credentials();
+    if (!codeVerifier) throw new SocialProviderError('token_exchange');
     return this.requestToken(
       {
         code,
@@ -177,6 +179,151 @@ export class YoutubeProvider implements SocialProvider {
       scopes:
         typeof body.scope === 'string'
           ? body.scope.split(/\s+/).filter(Boolean)
+          : undefined,
+    };
+  }
+}
+
+const TIKTOK_TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
+const TIKTOK_REVOKE_URL = 'https://open.tiktokapis.com/v2/oauth/revoke/';
+const TIKTOK_USER_URL =
+  'https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name,avatar_url';
+
+@Injectable()
+export class TiktokProvider implements SocialProvider {
+  readonly platform: SocialPlatform = 'tiktok';
+  readonly available = true;
+
+  constructor(private readonly config: AppConfig) {}
+
+  get configured(): boolean {
+    return Boolean(
+      this.config.tiktokClientKey &&
+        this.config.tiktokClientSecret &&
+        this.config.socialTokenKey,
+    );
+  }
+
+  /** Web flow TikTok tidak memakai PKCE: codeVerifier diabaikan. */
+  async exchangeCode(
+    code: string,
+    _codeVerifier: string | undefined,
+    redirectUri: string,
+  ): Promise<OAuthTokens> {
+    const credentials = this.credentials();
+    return this.requestToken(
+      {
+        client_key: credentials.clientKey,
+        client_secret: credentials.clientSecret,
+        code,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri,
+      },
+      'token_exchange',
+    );
+  }
+
+  async fetchAccount(accessToken: string): Promise<ExternalSocialAccount> {
+    let response: Response;
+    try {
+      response = await fetch(TIKTOK_USER_URL, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+    } catch {
+      throw new SocialProviderError('profile_fetch');
+    }
+    const body = asRecord(await responseJson(response, 'profile_fetch'));
+    const errorCode = asRecord(body?.error)?.code;
+    if (!response.ok || (typeof errorCode === 'string' && errorCode !== 'ok')) {
+      throw new SocialProviderError('profile_fetch');
+    }
+    const user = asRecord(asRecord(body?.data)?.user);
+    if (typeof user?.open_id !== 'string' || !user.open_id) {
+      throw new SocialProviderError('profile_fetch');
+    }
+    return {
+      externalId: user.open_id,
+      displayName:
+        typeof user.display_name === 'string' && user.display_name
+          ? user.display_name
+          : 'TikTok',
+      avatarUrl:
+        typeof user.avatar_url === 'string' && user.avatar_url
+          ? user.avatar_url
+          : undefined,
+    };
+  }
+
+  /** Refresh token TikTok berotasi: pemanggil wajib menyimpan refreshToken baru. */
+  async refresh(refreshToken: string): Promise<OAuthTokens> {
+    const credentials = this.credentials();
+    return this.requestToken(
+      {
+        client_key: credentials.clientKey,
+        client_secret: credentials.clientSecret,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+      },
+      'refresh_failed',
+    );
+  }
+
+  async revoke(accessToken: string): Promise<void> {
+    const credentials = this.credentials();
+    const response = await fetch(TIKTOK_REVOKE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_key: credentials.clientKey,
+        client_secret: credentials.clientSecret,
+        token: accessToken,
+      }),
+    });
+    if (!response.ok) throw new SocialProviderError('revoke_failed');
+  }
+
+  private credentials(): { clientKey: string; clientSecret: string } {
+    const clientKey = this.config.tiktokClientKey;
+    const clientSecret = this.config.tiktokClientSecret;
+    if (!clientKey || !clientSecret || !this.config.socialTokenKey) {
+      throw new SocialProviderError('not_configured');
+    }
+    return { clientKey, clientSecret };
+  }
+
+  private async requestToken(
+    params: Record<string, string>,
+    errorCode: string,
+  ): Promise<OAuthTokens> {
+    let response: Response;
+    try {
+      response = await fetch(TIKTOK_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(params),
+      });
+    } catch {
+      throw new SocialProviderError(errorCode);
+    }
+    if (!response.ok) throw new SocialProviderError(errorCode);
+
+    const body = asRecord(await responseJson(response, errorCode));
+    if (typeof body?.access_token !== 'string' || !body.access_token) {
+      throw new SocialProviderError(errorCode);
+    }
+
+    const expiresIn = Number(body.expires_in);
+    return {
+      accessToken: body.access_token,
+      refreshToken:
+        typeof body.refresh_token === 'string' && body.refresh_token
+          ? body.refresh_token
+          : undefined,
+      expiresIn:
+        Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : undefined,
+      scopes:
+        typeof body.scope === 'string'
+          ? body.scope.split(/[\s,]+/).filter(Boolean)
           : undefined,
     };
   }

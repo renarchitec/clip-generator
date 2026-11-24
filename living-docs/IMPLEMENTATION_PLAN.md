@@ -161,17 +161,23 @@ Event BullMQ bisa hilang saat Redis/worker restart (job selesai di worker, tetap
 
 ## Publikasi Sosial — Fase 1 (YouTube)
 
-Fase 1 menyediakan koneksi akun dan model data publikasi; pengunggahan clip melalui tabel `publications` berada di Fase 2 (bagian berikut). YouTube tersedia lebih dulu, sedangkan Instagram dan TikTok ditampilkan sebagai provider yang belum tersedia. Semua rute berada di balik `AuthGuard` global dan akun dibatasi pada pengguna sesi aktif.
+Fase 1 menyediakan koneksi akun dan model data publikasi; pengunggahan clip melalui tabel `publications` berada di Fase 2 (bagian berikut). YouTube dan TikTok tersedia, sedangkan Instagram ditampilkan sebagai provider yang belum tersedia. Semua rute berada di balik `AuthGuard` global dan akun dibatasi pada pengguna sesi aktif.
 
 | Endpoint | Respons / perilaku |
 | --- | --- |
-| `GET /api/social/providers` | `[{ platform, configured, available }]`. YouTube `available=true`; `configured=true` hanya bila `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, dan `SOCIAL_TOKEN_KEY` terisi. Instagram/TikTok saat ini selalu `available=false, configured=false`. |
+| `GET /api/social/providers` | `[{ platform, configured, available }]`. YouTube dan TikTok `available=true`; TikTok `configured=true` bila `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, dan `SOCIAL_TOKEN_KEY` terisi. Instagram tetap `available=false, configured=false`. |
 | `GET /api/social/accounts` | `[{ id, platform, displayName, avatarUrl, connectedAt, expiresAt, needsReconnect }]`; `needsReconnect=true` bila refresh token tidak ada dan access token sudah kedaluwarsa. Token terenkripsi tidak pernah dikembalikan. |
-| `DELETE /api/social/accounts/:id` | HTTP 204; 404 bila akun bukan milik pengguna. YouTube direvokasi best-effort ke `https://oauth2.googleapis.com/revoke`, lalu baris lokal dihapus. |
+| `DELETE /api/social/accounts/:id` | HTTP 204; 404 bila akun bukan milik pengguna. YouTube direvokasi best-effort ke `https://oauth2.googleapis.com/revoke`, TikTok ke `https://open.tiktokapis.com/v2/oauth/revoke/`, lalu baris lokal dihapus. |
 | `GET /api/social/youtube/connect` | HTTP 302 ke Google OAuth, atau ke `/settings?social_error=not_configured` bila konfigurasi belum lengkap. |
 | `GET /api/social/youtube/callback?code&state` | Menukar code, membaca channel YouTube, meng-upsert akun, lalu HTTP 302 ke `/settings?connected=youtube`. Kegagalan dialihkan ke `/settings?social_error=<short_code>` tanpa token pada URL/log. |
 
-**Alur OAuth YouTube:**
+| `GET /api/social/tiktok/connect` | HTTP 302 ke `https://www.tiktok.com/v2/auth/authorize/?client_key=...&scope=user.info.basic,video.upload,video.publish&response_type=code&redirect_uri=...&state=...` (tanpa PKCE; state tetap disimpan di Redis 10 menit). Belum dikonfigurasi → `/settings?social_error=not_configured`. |
+| `GET /api/social/tiktok/callback?code&state` | State dikonsumsi atomik, token ditukar di `/v2/oauth/token/` (form-urlencoded), profil diambil dari `/v2/user/info/` (`open_id` sebagai externalId), refresh token hasil rotasi selalu disimpan. Sukses → `/settings?connected=tiktok`; galat → `/settings?social_error=<kode>`. |
+| `GET /api/social/accounts/:id/tiktok/creator-info` | 200 `{ nickname, username, avatarUrl, privacyLevelOptions, commentDisabled, duetDisabled, stitchDisabled, maxVideoPostDurationSec }`; 404 bila akun bukan milik pengguna, 400 `platform_mismatch`, 409 `needs_reconnect`, 502 galat TikTok. |
+
+**Alur OAuth TikTok:** redirect_uri = `${PUBLIC_WEB_URL}/api/social/tiktok/callback`; scope dipisah koma; token/refresh memakai `client_key`/`client_secret`; revoke memakai `/v2/oauth/revoke/`. Refresh token berotasi dan diserialkan per akun agar dua refresh bersamaan tidak saling menimpa.
+
+**Alur OAuth YouTube:
 
 1. API membuat `state` acak dan PKCE verifier/challenge S256. Payload `{userId, platform, codeVerifier}` disimpan pada Redis key `social:oauth:<state>` dengan TTL 600 detik. Koneksi memakai `redisConnection()` yang sama dengan BullMQ.
 2. Redirect Google memakai scope `youtube.upload` dan `youtube.readonly`, `access_type=offline`, `prompt=consent`, serta `include_granted_scopes=true`. `redirect_uri` adalah `${PUBLIC_WEB_URL}/api/social/youtube/callback`; web meneruskan `/api/*` ke API same-origin.
@@ -189,7 +195,9 @@ Fase 2 mengunggah klip ke akun YouTube terhubung. Pemrosesan berlangsung di API 
 | `GET /api/clips/:id/publications` | `PublicationResponse[]` milik clip, terbaru dulu. |
 | `POST /api/publications/:id/retry` | Hanya publikasi `failed` (400 selain itu, 409 bila ada publikasi aktif lain untuk clip+akun). Status direset ke `queued` (progres, error, ID/URL eksternal dikosongkan), job dimasukkan ulang, lalu mengembalikan `PublicationResponse`. |
 
-`PublicationResponse = { id, clipId, platform, accountId, accountName, title, caption, privacy, status, progress, externalId, externalUrl, error, createdAt, updatedAt, publishedAt }` (tipe di `packages/shared`). `GET /api/clips/recent`, `GET /api/jobs/:id`, dan snapshot SSE menyertakan ringkasan ringan `publications: { platform, status, externalUrl }[]` per clip (terbaru per akun) untuk badge kartu.
+Untuk TikTok, target dapat menambahkan `mode?: 'direct'|'inbox'` (default `direct`) dan `tiktok?: { privacyLevel, disableComment, disableDuet, disableStitch, brandContent, brandOrganic }`; caption maksimal 2200 UTF-16, title opsional, `privacy` boleh absen. Mode inbox mengabaikan opsi dan menyimpan `privacy = 'inbox'`; direct menyimpan privacy level dan opsi di `publications.options` (JSONB, migrasi `20260125000000_publication_tiktok`). Validasi server: privacy level harus masih ada di `creator_info` segar, durasi klip ≤ `maxVideoPostDurationSec`, dan `brandContent` tidak boleh dipasang dengan `SELF_ONLY`.
+
+`PublicationResponse = { id, clipId, platform, accountId, accountName, title, caption, privacy (string), mode, status, progress, externalId, externalUrl, error, createdAt, updatedAt, publishedAt }` (tipe di `packages/shared`). `GET /api/clips/recent`, `GET /api/jobs/:id`, dan snapshot SSE menyertakan ringkasan ringan `publications: { platform, status, externalUrl }[]` per clip (terbaru per akun) untuk badge kartu.
 
 **Alur `PublishProcessor` (`@Processor('publish')`, concurrency 2):**
 
@@ -198,7 +206,8 @@ Fase 2 mengunggah klip ke akun YouTube terhubung. Pemrosesan berlangsung di API 
 3. File di-`PUT` per chunk 8 MiB (kelipatan 256 KiB) dengan `Content-Range`, di-stream dari disk (`createReadStream` start/end) tanpa buffer penuh. Respons 308 dilanjutkan dari header `Range`; 5xx/galat jaringan memakai backoff eksponensial (maks 5 kali per chunk) lalu menanyakan status sesi dengan `Content-Range: bytes */<size>`. Progres ditulis ke DB per chunk bila persen berubah.
 4. Setelah unggah selesai, status menjadi `processing` dengan `externalId` = id video dan `externalUrl` = `https://youtube.com/shorts/<id>`. Job `check` tertunda 15 detik memanggil `videos.list?part=status,processingDetails`; `processed`/`succeeded` (atau `uploaded` tanpa processingDetails) → `published` + `publishedAt`; `failed`/`rejected`/`deleted` → `failed` dengan alasannya; masih diproses → job `check` berikutnya (maks 80 kali ≈ 20 menit, setelah itu dianggap `published` karena video sudah ada).
 5. Galat Google dipetakan ke pesan singkat (`quotaExceeded`, `uploadLimitExceeded`, `youtubeSignupRequired`, 401 → "Reconnect your account", `forbidden`, dll.). Token tidak pernah dicatat atau disimpan pada `error`. Job BullMQ selalu selesai normal; pengulangan dilakukan lewat endpoint retry.
-6. Saat API boot, publikasi aktif tanpa job BullMQ dipulihkan: `queued` dimasukkan ulang, `uploading` yang lebih tua dari 1 jam ditandai `failed` ("Upload interrupted"), dan `processing` dijadwalkan cek status ulang.
+6. Untuk TikTok, processor mengambil token, memanggil `creator_info` segar untuk validasi privacy/durasi, lalu `POST /v2/post/publish/video/init/` (direct) atau `/v2/post/publish/inbox/video/init/` (inbox). `video_size`/`chunk_size`/`total_chunk_count` dihitung dari ukuran file (5–64 MiB per chunk, chunk terakhir menyerap sisa); `title` = caption untuk direct (maks 2200 UTF-16). PUT chunk berurutan dengan `Content-Type: video/mp4` dan `Content-Range: bytes first-last/total`; galat sementara diulang maksimal 3 kali. Status menjadi `processing` dengan `externalId` = `publish_id`. Job `check` tiap 5 detik memanggil `/v2/post/publish/status/fetch/` maksimal 120 kali (±10 menit, lalu gagal dengan pesan timeout). `SEND_TO_USER_INBOX`/`PUBLISH_COMPLETE` sukses untuk inbox; direct hanya `PUBLISH_COMPLETE`. URL `https://www.tiktok.com/@{username}/video/{id}` dibentuk hanya bila `publicaly_available_post_id` ada dan username diketahui dari `creator_info`; otherwise `null`. `fail_reason` dipetakan ke pesan Inggris (durasi/format/fps/ukuran, spam, auth_removed → reconnect, `unaudited_client_can_only_post_to_private_accounts` → "TikTok account must be private while the app is unaudited"). Aplikasi masih unaudited, sehingga Direct Post praktis hanya berfungsi untuk akun privat; privacy level tetap diambil dari opsi `creator_info`, bukan hardcode.
+7. Saat API boot, publikasi aktif tanpa job BullMQ dipulihkan: `queued` dimasukkan ulang, `uploading` yang lebih tua dari 1 jam ditandai `failed` ("Upload interrupted"), dan `processing` dijadwalkan cek status ulang.
 
 ## Bahasa Caption & Regenerasi Caption
 
@@ -298,6 +307,8 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 | `PUBLIC_WEB_URL` | API | Opsional; origin web untuk callback/redirect OAuth (default `https://clipper.rencraft.site`) |
 | `GOOGLE_CLIENT_ID` | API | Opsional; client ID OAuth Google untuk koneksi YouTube |
 | `GOOGLE_CLIENT_SECRET` | API | Opsional; client secret OAuth Google untuk koneksi YouTube |
+| `TIKTOK_CLIENT_KEY` | API | Opsional; client key OAuth TikTok |
+| `TIKTOK_CLIENT_SECRET` | API | Opsional; client secret OAuth TikTok |
 | `API_INTERNAL_URL` | Web | URL upstream API untuk reverse proxy server (mis. `http://clipper-api:3000`) |
 | `LLM_BASE_URL` | Worker | URL endpoint OpenAI-compatible (mis. OpenRouter / OpenCode Go) |
 | `LLM_API_KEY` | Worker | Kunci API untuk otentikasi LLM |

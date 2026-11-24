@@ -6,6 +6,7 @@ import { SocialModule } from '../social/social.module';
 import { PublishController } from './publish.controller';
 import { PublishProcessor } from './publish.processor';
 import { PublishService } from './publish.service';
+import { TiktokUploader } from './tiktok-uploader';
 import { YoutubeUploader } from './youtube-uploader';
 
 @Module({
@@ -16,6 +17,6 @@ import { YoutubeUploader } from './youtube-uploader';
     BullModule.registerQueue({ name: PUBLISH_QUEUE_NAME }),
   ],
   controllers: [PublishController],
-  providers: [PublishService, PublishProcessor, YoutubeUploader],
+  providers: [PublishService, PublishProcessor, YoutubeUploader, TiktokUploader],
 })
 export class PublishModule {}

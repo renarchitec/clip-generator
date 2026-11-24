@@ -9,6 +9,8 @@ const envSchema = z.object({
   PUBLIC_WEB_URL: z.string().url().default('https://clipper.rencraft.site'),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  TIKTOK_CLIENT_KEY: z.string().optional(),
+  TIKTOK_CLIENT_SECRET: z.string().optional(),
   ALLOW_REGISTRATION: z
     .enum(['true', 'false'])
     .optional()
