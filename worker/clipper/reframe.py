@@ -38,13 +38,27 @@ MAX_FACES = 4
 MOTION_ALPHA = 0.5  # EMA energi gerak bibir per wajah
 SWITCH_MARGIN = 1.25  # kandidat harus jelas lebih "bicara" dari aktif saat ini
 SPEECH_FLOOR = 0.003  # gerak bibir minimal agar dianggap bicara (bukan noise)
-MIN_HOLD_SEC = 0.9  # minimal durasi satu cut
+MIN_HOLD_SEC = 0.9  # minimal durasi satu cut pembicara
+DRIFT_HOLD_SEC = 0.5  # minimal durasi sebelum recenter drift dalam shot yang sama
 DRIFT_CUT = 0.08  # potong ulang bila wajah aktif bergeser cukup jauh
 MISSING_TTL_SEC = 1.0  # wajah hilang se lama ini -> wajib pilih ulang
-MAX_SEGMENTS = 16  # batas panjang ekspresi filter ffmpeg
-MAX_SAMPLES = 1200  # batas runtime: ~4 menit pada 5 fps
-MIN_FACE_HEIGHT = 0.05  # abaikan deteksi wajah terlalu kecil
+MAX_SEGMENTS = 80  # batas panjang ekspresi filter ffmpeg
+MAX_SAMPLES = 1200  # batas runtime: ~4 menit pada 5 fps (cap jumlah FaceMesh)
+MIN_FACE_HEIGHT = 0.03  # abaikan deteksi wajah terlalu kecil (izinkan wide shot)
 MIN_SPEAKER_SEPARATION = 0.08  # jarak minimum dua klaster pembicara x
+SAME_X_EPS = 0.02  # gabungkan segmen berurutan dengan pusat_x hampir sama
+DEFAULT_SRC_ASPECT = 16.0 / 9.0
+PORTRAIT_ASPECT = 9.0 / 16.0
+DEFAULT_CROP_WIDTH_REL = PORTRAIT_ASPECT / DEFAULT_SRC_ASPECT  # ~0.3164 untuk sumber 16:9
+SHOT_NO_FACE_GRACE_SEC = 0.4  # tunggu wajah di awal shot sebelum jatuh ke tengah (0.5)
+
+# Deteksi hard cut antar-frame (murah, dijalankan di tiap frame terdekode)
+SHOT_THUMB_W = 64
+SHOT_THUMB_H = 36
+SHOT_DIFF_THRESHOLD = 0.14  # mean abs diff grayscale 0..1 pada thumbnail 64x36
+SHOT_HIST_CORR_THRESHOLD = 0.75  # korelasi histogram HSV HS di bawah ini + soft diff -> cut
+SHOT_SOFT_DIFF_THRESHOLD = 0.08  # ambang diff minimum saat korelasi histogram jatuh
+SHOT_MIN_GAP_SEC = 0.25  # jarak minimum antar-cut untuk cegah pemicu berulang (flash/transisi)
 
 # Landmark bibir dalam FaceMesh (inner lips): 13 atas, 14 bawah.
 LIP_UPPER, LIP_LOWER = 13, 14
@@ -63,21 +77,65 @@ def face_track_samples(
     end: float,
     sample_fps: float = SAMPLE_FPS,
 ) -> Optional[List[Segment]]:
-    """Segmen cut (t_rel, pusat_x) dari proxy ~360p ~5 fps.
+    """Segmen cut (t_rel, pusat_x) dari proxy ~360p ~5 fps + deteksi shot cut.
 
-    - FaceMesh per sampel; wajah aktif dipilih dari gerak bibir (hysteresis).
+    - Setiap frame didekode untuk mendeteksi hard cut; FaceMesh dijalankan tiap
+      interval sample_fps dan tepat pada frame pertama setelah cut.
     - Tidak ada wajah sama sekali -> None -> pipeline memakai crop tengah.
     """
-    frames = sample_face_frames(video_path, start, end, sample_fps)
-    return select_speaker_segments(frames)
+    frames, cut_times, src_aspect = sample_face_frames_with_cuts(
+        video_path, start, end, sample_fps
+    )
+    crop_width_rel = min(1.0, PORTRAIT_ASPECT / max(1e-6, src_aspect))
+    return select_speaker_segments(
+        frames, cut_times=cut_times, crop_width_rel=crop_width_rel
+    )
 
-def sample_face_frames(
+
+def _shot_signature(frame: Any, cv2: Any) -> Tuple[Any, Any]:
+    """Thumbnail grayscale 64x36 dan histogram HS ternormalisasi untuk deteksi hard cut."""
+    small = cv2.resize(
+        frame, (SHOT_THUMB_W, SHOT_THUMB_H), interpolation=cv2.INTER_AREA
+    )
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+    cv2.normalize(hist, hist)
+    return gray, hist
+
+
+def _is_shot_cut(
+    prev_sig: Optional[Tuple[Any, Any]],
+    curr_sig: Tuple[Any, Any],
+    cv2: Any,
+) -> bool:
+    """True bila perbedaan grayscale/histogram antar frame melewati ambang hard cut."""
+    if prev_sig is None:
+        return False
+    prev_gray, prev_hist = prev_sig
+    curr_gray, curr_hist = curr_sig
+    mad = float(cv2.absdiff(prev_gray, curr_gray).mean()) / 255.0
+    if mad >= SHOT_DIFF_THRESHOLD:
+        return True
+    if mad >= SHOT_SOFT_DIFF_THRESHOLD:
+        corr = float(cv2.compareHist(prev_hist, curr_hist, cv2.HISTCMP_CORREL))
+        if corr < SHOT_HIST_CORR_THRESHOLD:
+            return True
+    return False
+
+
+def sample_face_frames_with_cuts(
     video_path: str,
     start: float,
     end: float,
     sample_fps: float = SAMPLE_FPS,
-) -> List[SampledFrame]:
-    """Deteksi FaceMesh pada frame proxy ~360p ~5 fps (dipakai mode satu & dua pembicara)."""
+) -> Tuple[List[SampledFrame], List[float], float]:
+    """Dekode tiap frame untuk deteksi hard cut; jalankan FaceMesh per sample_fps & tiap cut.
+
+    Mengembalikan (frames, cut_times, src_aspect). `frames` berisi SampledFrame
+    (t_rel, faces); `cut_times` berisi timestamp t_rel saat hard cut terdeteksi;
+    `src_aspect` adalah rasio lebar/tinggi frame sumber.
+    """
     try:
         import cv2
         import mediapipe as mp
@@ -92,42 +150,75 @@ def sample_face_frames(
         if not capture.set(cv2.CAP_PROP_POS_MSEC, start * 1000):
             raise RuntimeError(f"tidak bisa seek ke {start:.2f}s di video: {video_path}")
 
-        fps = capture.get(cv2.CAP_PROP_FPS) or 0.0
+        raw_fps = capture.get(cv2.CAP_PROP_FPS) or 0.0
+        fps = raw_fps if raw_fps > 0 else 0.0
         step = 1 if fps <= 0 else max(1, round(fps / sample_fps))
         dt = step / fps if fps > 0 else 1.0 / sample_fps
         limit = end + 0.5 * dt
-        frames: List[SampledFrame] = []
 
-        with mp.solutions.face_mesh.FaceMesh(
-            max_num_faces=MAX_FACES,
-            refine_landmarks=False,
-            min_detection_confidence=0.4,
-        ) as mesh:
+        frames: List[SampledFrame] = []
+        cut_times: List[float] = []
+        src_aspect = DEFAULT_SRC_ASPECT
+        prev_sig: Optional[Tuple[Any, Any]] = None
+        last_cut_t = -SHOT_MIN_GAP_SEC
+        frame_idx = 0
+
+        with (
+            mp.solutions.face_mesh.FaceMesh(
+                max_num_faces=MAX_FACES,
+                refine_landmarks=False,
+                static_image_mode=True,  # sampel jarang + hard cut: tracking antar-frame tidak valid
+                min_detection_confidence=0.4,
+            ) as mesh,
+            mp.solutions.face_detection.FaceDetection(
+                model_selection=1,
+                min_detection_confidence=0.4,
+            ) as fallback,
+        ):
             while True:
                 ok, frame = capture.read()
                 if not ok:
                     break
+                if frame_idx == 0 and frame.shape[0] > 0:
+                    src_aspect = frame.shape[1] / frame.shape[0]
                 timestamp = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
                 if timestamp > limit:
                     break
+                t_rel = max(0.0, timestamp - start)
 
-                frames.append((max(0.0, timestamp - start), _detect_faces(frame, cv2, mesh)))
-                if len(frames) >= MAX_SAMPLES:
-                    break
+                sig = _shot_signature(frame, cv2)
+                is_cut = False
+                if _is_shot_cut(prev_sig, sig, cv2) and (
+                    t_rel - last_cut_t >= SHOT_MIN_GAP_SEC
+                ):
+                    is_cut = True
+                    last_cut_t = t_rel
+                    cut_times.append(t_rel)
+                prev_sig = sig
 
-                grabbed = True
-                for _ in range(step - 1):
-                    if not capture.grab():
-                        grabbed = False
+                if frame_idx % step == 0 or is_cut:
+                    frames.append(
+                        (t_rel, _detect_faces(frame, cv2, mesh, fallback))
+                    )
+                    if len(frames) >= MAX_SAMPLES:
                         break
-                if not grabbed:
-                    break
-                if capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 > limit:
-                    break
 
-        return frames
+                frame_idx += 1
+
+        return frames, cut_times, src_aspect
     finally:
         capture.release()
+
+
+def sample_face_frames(
+    video_path: str,
+    start: float,
+    end: float,
+    sample_fps: float = SAMPLE_FPS,
+) -> List[SampledFrame]:
+    """Deteksi FaceMesh pada frame proxy ~360p ~5 fps (dipakai mode satu & dua pembicara)."""
+    frames, _, _ = sample_face_frames_with_cuts(video_path, start, end, sample_fps)
+    return frames
 
 def two_speaker_centers(
     video_path: str,
@@ -496,7 +587,7 @@ def panel_crop_filter(center_x: Optional[float]) -> str:
 
 
 
-def _detect_faces(frame, cv2, mesh) -> List[Face]:
+def _detect_faces(frame, cv2, mesh, fallback=None) -> List[Face]:
     height = frame.shape[0]
     if height > PROXY_HEIGHT:
         scale = PROXY_HEIGHT / height
@@ -517,6 +608,22 @@ def _detect_faces(frame, cv2, mesh) -> List[Face]:
         cy = (max(ys) + min(ys)) / 2
         mouth = (landmarks.landmark[LIP_LOWER].y - landmarks.landmark[LIP_UPPER].y) / face_height
         faces.append((float(cx), float(cy), float(face_height), max(0.0, float(mouth))))
+    if not faces and fallback is not None:
+        # wide shot: FaceMesh sering gagal pada wajah kecil -> BlazeFace jarak jauh, mulut=0
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = fallback.process(rgb)
+        for detection in getattr(result, "detections", None) or []:
+            box = detection.location_data.relative_bounding_box
+            if box.height < MIN_FACE_HEIGHT:
+                continue
+            faces.append(
+                (
+                    float(min(1.0, max(0.0, box.xmin + box.width / 2))),
+                    float(min(1.0, max(0.0, box.ymin + box.height / 2))),
+                    float(box.height),
+                    0.0,
+                )
+            )
     return faces
 
 
@@ -536,19 +643,65 @@ class _Track:
         self.cx, self.cy, self.height, self.mouth, self.last_seen = cx, cy, height, mouth, t
 
 
+# Jenis segmen (internal): menentukan boleh/tidaknya digabung saat normalisasi
+_KIND_SWITCH = 0  # ganti pembicara: digabung bila lebih pendek dari MIN_HOLD_SEC
+_KIND_CUT = 1  # awal shot baru / wajah baru muncul di shot: tidak pernah dibuang duluan
+_KIND_DRIFT = 2  # recenter dalam shot: digabung bila lebih pendek dari DRIFT_HOLD_SEC
+
+_Seg = Tuple[float, float, int]
+
+
+def _shot_target(
+    visible: Sequence[_Track], crop_width_rel: float
+) -> Tuple[float, _Track, bool]:
+    """Target x untuk awal shot: titik tengah grup bila muat satu crop, else wajah terbesar."""
+    largest = max(visible, key=lambda track: track.height)
+    if len(visible) > 1:
+        lo = min(track.cx for track in visible)
+        hi = max(track.cx for track in visible)
+        if hi - lo <= crop_width_rel:
+            return (lo + hi) / 2, largest, True
+    return largest.cx, largest, False
+
+
 def select_speaker_segments(
     frames: Sequence[SampledFrame],
+    cut_times: Optional[Sequence[float]] = None,
+    crop_width_rel: float = DEFAULT_CROP_WIDTH_REL,
 ) -> Optional[List[Segment]]:
     """Pilih wajah aktif per sampel -> segmen cut statis.
 
+    `cut_times` (t_rel hard cut kamera) mereset track dan langsung memunculkan
+    segmen baru tepat di waktu cut (tanpa gate MIN_HOLD). Awal klip diperlakukan
+    sebagai awal shot. Shot tanpa wajah -> x=0.5 (bukan x lama).
+    `crop_width_rel` = lebar crop relatif lebar sumber.
     Terpisah dari deteksi agar bisa diuji tanpa mediapipe.
     """
+    cuts = sorted(cut_times or [])
+    cut_i = 0
     tracks: List[_Track] = []
     active: Optional[_Track] = None
-    last_cut_t: Optional[float] = None
-    segments: List[Segment] = []
+    group_mode = False
+    current_x = 0.5
+    last_cut_t = 0.0
+    segments: List[_Seg] = []
+    seen_face = False
+    shot_start = 0.0
+    shot_resolved = True  # sudah ada segmen untuk shot ini
 
-    for t, faces in frames:
+    for frame_i, (t, faces) in enumerate(frames):
+        shot_t: Optional[float] = t if frame_i == 0 else None
+        while cut_i < len(cuts) and cuts[cut_i] <= t + 1e-6:
+            shot_t = max(0.0, cuts[cut_i]) if frame_i > 0 else t
+            cut_i += 1
+        if shot_t is not None:
+            if not shot_resolved:  # shot sebelumnya berakhir sebelum grace habis tanpa wajah
+                segments.append((shot_start, 0.5, _KIND_CUT))
+            tracks, active, group_mode = [], None, False
+            last_cut_t = shot_t
+            shot_start = shot_t
+            shot_resolved = False
+
         # pasangkan deteksi ke track lama berdasar kedekatan posisi
         for track in tracks:
             track.score *= 0.8  # meluruh kalau bibir berhenti bergerak
@@ -571,45 +724,94 @@ def select_speaker_segments(
 
         visible = [track for track in tracks if t - track.last_seen <= MISSING_TTL_SEC]
 
+        if not visible:
+            if not shot_resolved and t - shot_start >= SHOT_NO_FACE_GRACE_SEC - 1e-6:
+                # shot tanpa wajah: tengah, bukan x lama; diperbarui saat wajah muncul
+                segments.append((shot_start, 0.5, _KIND_CUT))
+                current_x, shot_resolved = 0.5, True
+            continue
+        seen_face = True
+
         forced = active is None or t - active.last_seen > MISSING_TTL_SEC
-        if visible:
-            candidate = max(visible, key=lambda track: (track.score, track.height))
-            switch = forced or (
+        if forced:
+            x, target, group_mode = _shot_target(visible, crop_width_rel)
+            at_shot_start = not shot_resolved
+            seg_t = shot_start if at_shot_start else t
+            kind = _KIND_CUT if (at_shot_start or active is None) else _KIND_SWITCH
+            shot_resolved = True
+            segments.append((seg_t, x, kind))
+            active, current_x, last_cut_t = target, x, seg_t
+            continue
+
+        hold = t - last_cut_t
+        candidate = max(visible, key=lambda track: (track.score, track.height))
+        if group_mode:
+            switch = (
+                candidate.score > SPEECH_FLOOR
+                and hold >= MIN_HOLD_SEC
+                and abs(candidate.cx - current_x) > DRIFT_CUT
+            )
+        else:
+            switch = (
                 candidate is not active
                 and candidate.score > max(SPEECH_FLOOR, active.score * SWITCH_MARGIN)
-                and last_cut_t is not None
-                and t - last_cut_t >= MIN_HOLD_SEC
+                and hold >= MIN_HOLD_SEC
             )
-            drift = (
-                active is not None
-                and not switch
-                and abs(active.cx - segments[-1][1]) > DRIFT_CUT
-                and t - last_cut_t >= MIN_HOLD_SEC
-            )
-            if switch or drift:
-                active, last_cut_t = candidate, t
-                segments.append((t, active.cx))
+        if switch:
+            active, group_mode = candidate, False
+            current_x, last_cut_t = active.cx, t
+            segments.append((t, current_x, _KIND_SWITCH))
+        elif (
+            not group_mode
+            and abs(active.cx - current_x) > DRIFT_CUT
+            and hold >= DRIFT_HOLD_SEC
+        ):
+            current_x, last_cut_t = active.cx, t
+            segments.append((t, current_x, _KIND_DRIFT))
 
-    if not segments:
+    if not segments or not seen_face:
         return None
     return _normalize_segments(segments)
 
 
-def _normalize_segments(segments: List[Segment]) -> List[Segment]:
-    """Gabungkan segmen terlalu pendek, batasi jumlah segmen, mulai dari t=0."""
-    merged: List[Segment] = [segments[0]]
-    for t, x in segments[1:]:
-        if t - merged[-1][0] < MIN_HOLD_SEC - 1e-6:
-            continue  # cut terlalu pendek: biarkan cut sebelumnya berlanjut
-        merged.append((t, x))
+def _normalize_segments(segments: Sequence[Tuple[Any, ...]]) -> List[Segment]:
+    """Gabungkan segmen pergantian pembicara yang terlalu pendek, batasi jumlah, mulai dari t=0.
+
+    Segmen shot-cut tidak pernah dibuang karena terlalu pendek; segmen 2-tuple
+    (t, x) dianggap pergantian pembicara. Segmen berurutan dengan x hampir sama
+    digabung agar ekspresi ffmpeg pendek.
+    """
+    items: List[_Seg] = [
+        (float(s[0]), float(s[1]), int(s[2]) if len(s) > 2 else _KIND_SWITCH)
+        for s in segments
+    ]
+    merged: List[_Seg] = [items[0]]
+    for item in items[1:]:
+        t, _, kind = item
+        min_gap = {
+            _KIND_SWITCH: MIN_HOLD_SEC,
+            _KIND_DRIFT: DRIFT_HOLD_SEC,
+        }.get(kind, 0.0)
+        if t - merged[-1][0] < min_gap - 1e-6:
+            continue  # terlalu pendek: biarkan segmen sebelumnya berlanjut
+        merged.append(item)
+
+    deduped: List[_Seg] = [merged[0]]
+    for item in merged[1:]:
+        if abs(item[1] - deduped[-1][1]) < SAME_X_EPS:
+            continue
+        deduped.append(item)
+    merged = deduped
+
     while len(merged) > MAX_SEGMENTS:
-        # buang cut dengan rentang terpendek (cut sebelumnya diperpanjang)
-        shortest = min(
-            range(1, len(merged)), key=lambda i: merged[i][0] - merged[i - 1][0]
+        # buang segmen non-cut dengan rentang terpendek dulu; baru cut bila terpaksa
+        pool = [i for i in range(1, len(merged)) if merged[i][2] != _KIND_CUT] or list(
+            range(1, len(merged))
         )
+        shortest = min(pool, key=lambda i: merged[i][0] - merged[i - 1][0])
         merged.pop(shortest)
-    merged[0] = (0.0, merged[0][1])
-    return merged
+    merged[0] = (0.0, merged[0][1], merged[0][2])
+    return [(t, x) for t, x, _ in merged]
 
 
 def portrait_crop_filter(
@@ -643,9 +845,9 @@ def cut_crop_filter(
     ratio = width / height
     terms: List[str] = []
     for index, (t, x) in enumerate(segments):
-        cond = f"gte(t,{t:.2f})"
+        cond = f"gte(t,{t:.3f})"
         if index + 1 < len(segments):
-            cond += f"*lt(t,{segments[index + 1][0]:.2f})"
+            cond += f"*lt(t,{segments[index + 1][0]:.3f})"
         terms.append(f"{max(0.0, min(1.0, x)):.4f}*{cond}")
 
     x_expr = (

@@ -34,8 +34,9 @@ def test_portrait_crop_defaults_to_center_without_face():
 def test_cut_crop_filter_is_piecewise_static():
     chain = reframe.cut_crop_filter([(0.0, 0.4), (1.5, 0.6)])
 
-    assert "0.4000*gte(t,0.00)*lt(t,1.50)" in chain
-    assert "0.6000*gte(t,1.50)" in chain
+    # waktu kini 3 desimal (sebelumnya 2) agar cut tepat di frame
+    assert "0.4000*gte(t,0.000)*lt(t,1.500)" in chain
+    assert "0.6000*gte(t,1.500)" in chain
     assert "lerp" not in chain  # cut statis, bukan pan halus
     assert chain.endswith("scale=1080:1920")
 
@@ -78,9 +79,11 @@ def test_short_cut_is_absorbed_by_min_hold():
 
 
 def test_normalize_merges_segments_shorter_than_min_hold():
-    merged = reframe._normalize_segments([(0.0, 0.3), (0.4, 0.7), (2.0, 0.3)])
+    # x akhir diubah 0.3 -> 0.5: x sama berurutan kini digabung (dedupe), jadi
+    # pakai x berbeda agar tetap menguji penggabungan segmen pendek.
+    merged = reframe._normalize_segments([(0.0, 0.3), (0.4, 0.7), (2.0, 0.5)])
 
-    assert merged == [(0.0, 0.3), (2.0, 0.3)]
+    assert merged == [(0.0, 0.3), (2.0, 0.5)]
 
 
 def test_no_faces_returns_none_for_center_fallback():
@@ -339,3 +342,136 @@ def test_facecam_box_centers_corner_face_by_zooming_in():
     assert (face_y - y) / h == pytest.approx(0.5, abs=0.02)
     assert w * 640 == pytest.approx(h * 1080, rel=0.01)  # rasio 27:16 tetap
     assert 0 <= x and x + w <= 2560 and 0 <= y and y + h <= 1440
+
+
+# --- shot-cut aware speaker selection -------------------------------------------
+
+
+def test_cut_filter_uses_three_decimals():
+    chain = reframe.cut_crop_filter([(0.0, 0.4), (1.2345, 0.6)])
+
+    assert "gte(t,1.234)" in chain or "gte(t,1.235)" in chain
+    assert "lt(t,1.234)" in chain
+
+
+def test_shot_cut_switches_to_new_face_immediately():
+    # Close-up A (x=0.3) lalu hard cut di 1.4s ke close-up B (x=0.7). Tanpa
+    # gerak bibir; MIN_HOLD (0.9s) tidak boleh menunda crop baru.
+    def speakers(t, index):
+        return [(0.3, 0.4, 0.0)] if t < 1.4 else [(0.7, 0.4, 0.0)]
+
+    segments = reframe.select_speaker_segments(
+        _frames(speakers, duration=3.0), cut_times=[1.4]
+    )
+
+    assert segments == [(0.0, 0.3), (1.4, 0.7)]
+
+
+def test_cut_shorter_than_min_hold_is_preserved():
+    def speakers(t, index):
+        return [(0.7, 0.4, 0.0)] if 1.0 <= t < 1.4 else [(0.3, 0.4, 0.0)]
+
+    segments = reframe.select_speaker_segments(
+        _frames(speakers, duration=3.0), cut_times=[1.0, 1.4]
+    )
+
+    assert segments == [(0.0, 0.3), (1.0, 0.7), (1.4, 0.3)]
+
+
+def test_shot_without_face_goes_to_center_not_stale_x():
+    def speakers(t, index):
+        return [(0.2, 0.4, 0.0)] if t < 1.0 else []
+
+    segments = reframe.select_speaker_segments(
+        _frames(speakers, duration=3.0), cut_times=[1.0]
+    )
+
+    assert segments == [(0.0, 0.2), (1.0, 0.5)]
+
+
+def test_face_appearing_late_in_shot_updates_from_center():
+    def speakers(t, index):
+        return [(0.8, 0.4, 0.0)] if t >= 1.8 else []
+
+    segments = reframe.select_speaker_segments(
+        _frames(speakers, duration=3.0), cut_times=[]
+    )
+
+    assert segments == [(0.0, 0.5), (1.8, 0.8)]
+
+
+def test_wide_shot_group_midpoint_when_faces_fit_crop():
+    # Dua wajah x=0.4 & 0.55 (span 0.15 < 0.316) -> titik tengah 0.475.
+    def speakers(t, index):
+        if t < 1.0:
+            return [(0.2, 0.4, 0.0)]
+        return [(0.4, 0.1, 0.0), (0.55, 0.12, 0.0)]
+
+    segments = reframe.select_speaker_segments(
+        _frames(speakers, duration=3.0), cut_times=[1.0]
+    )
+
+    assert segments[1][0] == 1.0
+    assert segments[1][1] == pytest.approx(0.475)
+
+
+def test_wide_shot_wide_group_uses_largest_face():
+    def speakers(t, index):
+        return [(0.15, 0.1, 0.0), (0.8, 0.14, 0.0)]
+
+    segments = reframe.select_speaker_segments(
+        _frames(speakers, duration=2.0), cut_times=[]
+    )
+
+    assert segments == [(0.0, 0.8)]
+
+
+def test_many_shot_cuts_exceed_old_segment_limit_and_are_kept():
+    cuts = [round(1.0 + i * 1.0, 3) for i in range(30)]
+
+    def speakers(t, index):
+        shot = int(t)  # tiap detik = shot baru; x bergantian
+        return [(0.3 if shot % 2 == 0 else 0.7, 0.4, 0.0)]
+
+    segments = reframe.select_speaker_segments(
+        _frames(speakers, duration=31.0), cut_times=cuts
+    )
+
+    assert len(segments) == 31 > 16
+    assert [t for t, _ in segments[1:]] == cuts
+
+
+def test_normalize_never_drops_cut_segments_when_trimming():
+    segs = [(i * 0.3, 0.1 + 0.8 * (i % 2), reframe._KIND_CUT) for i in range(100)]
+
+    merged = reframe._normalize_segments(segs)
+
+    assert len(merged) == reframe.MAX_SEGMENTS
+
+
+def test_normalize_trims_speaker_switch_before_cuts():
+    segs = [(0.0, 0.2, reframe._KIND_CUT)]
+    segs += [(i * 1.0, 0.2 + 0.1 * (i % 2) * 3, reframe._KIND_CUT) for i in range(1, 80)]
+    segs.append((79.95, 0.9, reframe._KIND_SWITCH))  # terlalu dekat cut sebelumnya
+
+    merged = reframe._normalize_segments(segs)
+
+    assert (79.95, 0.9) not in merged
+
+
+def test_normalize_drops_consecutive_same_x():
+    merged = reframe._normalize_segments([(0.0, 0.5), (1.5, 0.51), (3.0, 0.8)])
+
+    assert merged == [(0.0, 0.5), (3.0, 0.8)]
+
+
+def test_drift_recenter_allowed_after_half_second():
+    # Satu wajah bergeser dari 0.3 ke 0.4 pada t=1.0 (tanpa cut): recenter segera (hold 0.5s).
+    def speakers(t, index):
+        return [(0.3 if t < 1.0 else 0.4, 0.4, 0.0)]
+
+    segments = reframe.select_speaker_segments(_frames(speakers, duration=3.0))
+
+    assert len(segments) == 2
+    assert segments[1][0] < 1.0 + reframe.MIN_HOLD_SEC
+    assert segments[1][1] == pytest.approx(0.4)

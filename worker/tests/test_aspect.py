@@ -37,7 +37,8 @@ def test_portrait_crop_filter_targets_1_1():
 def test_cut_crop_filter_targets_1_1():
     chain = reframe.cut_crop_filter([(0.0, 0.4), (1.5, 0.6)], 1080, 1080)
 
-    assert "0.4000*gte(t,0.00)*lt(t,1.50)" in chain
+    # Waktu 3 desimal (presisi shot-cut) — sebelumnya 2 desimal.
+    assert "0.4000*gte(t,0.000)*lt(t,1.500)" in chain
     assert chain.endswith("scale=1080:1080")
 
 
