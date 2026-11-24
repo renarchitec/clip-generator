@@ -131,7 +131,6 @@ def test_download_auto_limit_uses_single_section(tmp_path):
         dl = asyncio.run(pipeline.download(job, str(tmp_path)))
 
     assert dl.video == str(tmp_path / "source.mp4")
-    assert dl.sections == []
     assert len(section_cmds) == 1
     cmd = section_cmds[0]
     assert cmd[cmd.index("--download-sections") + 1] == "*0.000-900.000"

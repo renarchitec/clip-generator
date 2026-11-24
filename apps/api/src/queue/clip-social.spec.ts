@@ -51,7 +51,7 @@ test('hashtag dibersihkan, Unicode dipertahankan, dedupe, maksimal 15', () => {
   assert.equal(many.hashtags[14], 'topik14');
 });
 
-test('input non-array aman dan QueueListener memakai sanitizer saat createMany', async () => {
+test('input non-array aman dan QueueListener memakai sanitizer saat menyimpan clip', async () => {
   assert.deepEqual(sanitizeClipSocialMetadata({ hashtags: '#bukan-array' }), {
     caption: null,
     hashtags: [],
@@ -61,8 +61,20 @@ test('input non-array aman dan QueueListener memakai sanitizer saat createMany',
     join(process.cwd(), 'src/queue/queue.listener.ts'),
     'utf8',
   );
+  // Clip dibuat lewat progress dan lewat hasil akhir; keduanya disanitasi.
   assert.match(listener, /\.\.\.sanitizeClipSocialMetadata\(clip\)/);
-  assert.match(listener, /tx\.clip\.createMany/);
+  assert.match(listener, /tx\.clip\.create\(/);
+  const onCompleted = listener.slice(
+    listener.indexOf('private async onCompleted'),
+    listener.indexOf('private async saveProgressClip'),
+  );
+  assert.match(onCompleted, /caption: clip\.caption,/);
+  assert.match(onCompleted, /hashtags: clip\.hashtags,/);
+  assert.match(onCompleted, /transcript: clip\.transcript,/);
+  assert.match(onCompleted, /sanitizeClipTranscript\(clip\.transcript\)/);
+  const saveProgressClip = listener.slice(listener.indexOf('private async saveProgressClip'));
+  assert.match(saveProgressClip, /sanitizeClipSocialMetadata\(clip\)/);
+  assert.match(saveProgressClip, /sanitizeClipTranscript\(clip\.transcript\)/);
 
   const jobs = await readFile(
     join(process.cwd(), 'src/jobs/jobs.service.ts'),

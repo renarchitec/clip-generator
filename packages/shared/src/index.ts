@@ -90,6 +90,13 @@ export interface JobProgress {
   /** 0-100 */
   percent: number;
   message?: string;
+  /**
+   * Satu klip yang baru selesai dirender, dikirim tepat setelah file-nya
+   * ditulis ke CLIPS_DIR/<jobId>/<file>. Dipakai API untuk menyimpan baris clip
+   * selagi job masih berjalan, jadi UI bisa menampilkannya lebih awal.
+   * Boleh tanpa caption/hashtags.
+   */
+  clip?: ClipResult;
 }
 
 export interface ClipResult {

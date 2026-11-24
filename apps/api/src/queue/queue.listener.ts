@@ -8,7 +8,7 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
 import { Queue, QueueEvents } from 'bullmq';
-import type { JobData, JobProgress, JobResult } from '@clipper/shared';
+import type { ClipResult, JobData, JobProgress, JobResult } from '@clipper/shared';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { PrismaService } from '../prisma/prisma.service';
 import { latestPerAccount } from '../publish/publish-helpers';
@@ -87,6 +87,10 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
     const progress = parseJobProgress(data);
     if (!progress) return;
 
+    // Worker mengirim payload `clip` tepat setelah file klip selesai dirender.
+    // Simpan lebih awal supaya snapshot SSE sudah memuat klip yang sedang jadi.
+    if (progress.clip) await this.saveProgressClip(jobId, progress.clip);
+
     await this.prisma.job.updateMany({
       where: { id: jobId, startedAt: null },
       data: { startedAt: new Date() },
@@ -138,17 +142,45 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
     });
 
     // Idempoten: recovery bisa memanggil ini ulang setelah event `completed`
-    // pertama hilang. Jangan duplikasi clip dan jangan sentuh job yang sudah
-    // selesai/batal.
+    // pertama hilang, dan klip bisa sudah dibuat lebih awal lewat progress.
+    // Upsert per filePath: buat yang belum ada, perbarui metadata yang sudah
+    // ada, dan jangan hidupkan ulang klip yang sudah dihapus pengguna.
     const existing = await this.prisma.job.findUnique({
       where: { id: jobId },
-      select: { clips: { select: { id: true }, take: 1 } },
+      select: {
+        clips: { select: { id: true, filePath: true, deletedAt: true } },
+      },
     });
     if (!existing) return;
 
     await this.prisma.$transaction(async (tx) => {
-      if (clips.length > 0 && existing.clips.length === 0) {
-        await tx.clip.createMany({ data: clips.map((clip) => ({ ...clip, jobId })) });
+      const byFilePath = new Map(
+        existing.clips.map((clip) => [clip.filePath, clip]),
+      );
+
+      for (const clip of clips) {
+        const found = byFilePath.get(clip.filePath);
+
+        if (!found) {
+          const created = await tx.clip.create({ data: { ...clip, jobId } });
+          byFilePath.set(clip.filePath, {
+            id: created.id,
+            filePath: clip.filePath,
+            deletedAt: null,
+          });
+          continue;
+        }
+
+        if (found.deletedAt) continue; // klip yang dihapus tidak dibangkitkan
+
+        await tx.clip.update({
+          where: { id: found.id },
+          data: {
+            caption: clip.caption,
+            hashtags: clip.hashtags,
+            transcript: clip.transcript,
+          },
+        });
       }
 
       await tx.job.updateMany({
@@ -166,6 +198,42 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
 
     await this.emit(jobId);
     this.jobEvents.close(jobId);
+  }
+
+  /**
+   * Simpan satu klip dari payload progress worker. Idempoten per jobId+filePath:
+   * klip yang sudah ada (mis. event progress terkirim dua kali) tidak
+   * diduplikasi. Schema tidak punya unique constraint di (jobId, filePath), jadi
+   * pemeriksaan keberadaan dilakukan di transaksi yang sama dengan insert.
+   */
+  private async saveProgressClip(jobId: string, clip: ClipResult): Promise<void> {
+    const filePath = clipFilePath(jobId, clip.file);
+    if (!filePath) return;
+
+    const data = {
+      title: clip.title,
+      startSec: clip.start,
+      endSec: clip.end,
+      filePath,
+      ...sanitizeClipSocialMetadata(clip),
+      transcript: sanitizeClipTranscript(clip.transcript),
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      const job = await tx.job.findUnique({
+        where: { id: jobId },
+        select: { id: true },
+      });
+      if (!job) return; // job sudah dihapus
+
+      const found = await tx.clip.findFirst({
+        where: { jobId, filePath },
+        select: { id: true },
+      });
+      if (found) return;
+
+      await tx.clip.create({ data: { ...data, jobId } });
+    });
   }
 
   private async onFailed(jobId: string, failedReason: string): Promise<void> {
@@ -315,11 +383,32 @@ function parseJobProgress(data: unknown): JobProgress | null {
   if (typeof candidate.stage !== 'string') return null;
   if (typeof candidate.percent !== 'number') return null;
 
+  const clip = parseClipResult(candidate.clip);
+
   return {
     stage: candidate.stage,
     percent: candidate.percent,
     message: typeof candidate.message === 'string' ? candidate.message : undefined,
+    // Klip yang tidak valid diabaikan; progress-nya tetap dipakai.
+    ...(clip ? { clip } : {}),
   };
+}
+
+/** Validasi minimal satu klip hasil worker (dipakai progress & returnvalue). */
+function parseClipResult(value: unknown): ClipResult | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const clip = value as Partial<ClipResult>;
+  if (
+    typeof clip.title !== 'string' ||
+    typeof clip.start !== 'number' ||
+    typeof clip.end !== 'number' ||
+    typeof clip.file !== 'string'
+  ) {
+    return null;
+  }
+
+  return clip as ClipResult;
 }
 
 function parseJobResult(value: unknown): JobResult | null {
@@ -329,14 +418,10 @@ function parseJobResult(value: unknown): JobResult | null {
   const clips = (parsed as Partial<JobResult>).clips;
   if (!Array.isArray(clips)) return null;
 
-  const valid = clips.filter(
-    (clip) =>
-      clip &&
-      typeof clip.title === 'string' &&
-      typeof clip.start === 'number' &&
-      typeof clip.end === 'number' &&
-      typeof clip.file === 'string',
-  );
+  const valid = clips.flatMap((clip) => {
+    const parsedClip = parseClipResult(clip);
+    return parsedClip ? [parsedClip] : [];
+  });
 
   if (valid.length === 0) return null;
 

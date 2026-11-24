@@ -48,16 +48,61 @@ test('job yang hilang dari antrean dan lebih tua dari 1 jam ditandai gagal', asy
   );
 });
 
-test('onCompleted idempoten: tanpa duplikasi clip dan tanpa menyentuh job final', async () => {
+test('onCompleted upsert per filePath: tidak duplikat, tanpa membangkitkan clip terhapus', async () => {
   const listener = await read('apps/api/src/queue/queue.listener.ts');
-  // Clip hanya dibuat bila job belum punya clip sama sekali.
-  assert.match(listener, /clips: \{ select: \{ id: true \}, take: 1 \}/);
-  assert.match(listener, /if \(clips\.length > 0 && existing\.clips\.length === 0\)/);
+  const completed = listener.slice(
+    listener.indexOf('private async onCompleted'),
+    listener.indexOf('private async saveProgressClip'),
+  );
+
+  // Clip yang sudah ada (termasuk yang dibuat dari progress) dicocokkan per path.
+  assert.match(
+    completed,
+    /clips: \{ select: \{ id: true, filePath: true, deletedAt: true \} \}/,
+  );
+  assert.match(completed, /new Map\(/);
+  assert.match(completed, /byFilePath\.get\(clip\.filePath\)/);
+  assert.match(completed, /tx\.clip\.create\(/);
+  assert.match(completed, /byFilePath\.set\(/);
+  assert.match(completed, /tx\.clip\.update\(/);
+  assert.match(completed, /if \(found\.deletedAt\) continue;/);
+  assert.doesNotMatch(completed, /createMany/);
+  // Metadata akhir worker (caption/hashtag/transkrip) menimpa nilai dari progress.
+  assert.match(completed, /caption: clip\.caption,/);
+  assert.match(completed, /hashtags: clip\.hashtags,/);
+  assert.match(completed, /transcript: clip\.transcript,/);
   // Update bersyarat: job done/failed/cancelled tidak ditimpa.
   assert.match(
-    listener,
+    completed,
     /where: \{ id: jobId, status: \{ in: \[JobStatus\.queued, JobStatus\.running\] \} \}/,
   );
+});
+
+test('progress clip disimpan sebelum emit, dan job batal tetap diabaikan', async () => {
+  const listener = await read('apps/api/src/queue/queue.listener.ts');
+  const progress = listener.slice(
+    listener.indexOf('private async onProgress'),
+    listener.indexOf('private async onCompleted'),
+  );
+  assert.match(listener, /if \(await this\.isCancelled\(jobId\)\) return;/);
+  assert.match(progress, /if \(progress\.clip\) await this\.saveProgressClip\(jobId, progress\.clip\);/);
+  assert.ok(
+    progress.indexOf('saveProgressClip(jobId, progress.clip)') <
+      progress.indexOf('await this.emit(jobId)'),
+  );
+});
+
+test('clip progress diverifikasi seperti hasil job, path diamankan, dan idempoten per path', async () => {
+  const listener = await read('apps/api/src/queue/queue.listener.ts');
+  const shared = await read('packages/shared/src/index.ts');
+  assert.match(shared, /clip\?: ClipResult;/);
+  assert.match(listener, /const clip = parseClipResult\(candidate\.clip\);/);
+  assert.match(listener, /function parseClipResult\(value: unknown\): ClipResult \| null/);
+  assert.match(listener, /const valid = clips\.flatMap\(\(clip\) => \{/);
+  assert.match(listener, /where: \{ jobId, filePath \},/);
+  assert.match(listener, /tx\.clip\.findFirst/);
+  assert.match(listener, /normalized\.includes\('\.\.'\)/);
+  assert.match(listener, /sanitizeClipTranscript\(clip\.transcript\)/);
 });
 
 test('fail hanya mengubah job yang masih queued/running (cancelled tidak disentuh)', async () => {

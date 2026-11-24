@@ -80,8 +80,12 @@ async def handle_job(job, token: str | None = None, redis_client: redis.Redis | 
             log.warning("gagal cek sinyal pembatalan: %s", exc)
             return False
 
-    async def on_progress(stage: str, percent: float, message: str = "") -> None:
-        payload = models.JobProgress(stage=stage, percent=percent, message=message).to_dict()
+    async def on_progress(
+        stage: str, percent: float, message: str = "", *, clip: dict | None = None
+    ) -> None:
+        payload = models.JobProgress(
+            stage=stage, percent=percent, message=message, clip=clip
+        ).to_dict()
         try:
             await job.updateProgress(payload)
         except Exception as exc:  # progress gagal tidak boleh membatalkan render

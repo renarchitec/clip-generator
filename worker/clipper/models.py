@@ -287,6 +287,10 @@ class JobProgress:
     stage: JobStage
     percent: float
     message: str = ""
+    # Laporan satu klip yang baru saja selesai dirender (ClipResult.to_dict tanpa
+    # caption/hashtags, karena caption baru dibuat di akhir job). API memakai
+    # `data.clip` dari event progress BullMQ untuk menampilkan klip per tahap.
+    clip: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -295,6 +299,8 @@ class JobProgress:
         }
         if self.message:
             payload["message"] = self.message
+        if self.clip:
+            payload["clip"] = dict(self.clip)
         return payload
 
 

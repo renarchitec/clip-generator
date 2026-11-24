@@ -10,12 +10,13 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import llm
 from . import reframe as reframe_mod
 from .models import (
+    CLIP_TRANSCRIPT_MAX,
     JOB_ID_RE,
     MAX_DESCRIPTION_CHARS,
     ClipResult,
@@ -53,11 +54,27 @@ DEFAULT_MIN_FREE_GB = 5.0
 NO_SUBTITLE_ERROR = "Subtitle YouTube tidak tersedia untuk video ini."
 
 
-async def _emit(on_progress, stage: str, percent: float, message: str = "") -> None:
-    """Dukung callback sync maupun async (worker memakai async)."""
+def _accepts_clip(callback) -> bool:
+    try:
+        params = inspect.signature(callback).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(p.name == "clip" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
+async def _emit(on_progress, stage: str, percent: float, message: str = "", *, clip=None) -> None:
+    """Dukung callback sync maupun async (worker memakai async).
+
+    `clip` hanya diteruskan bila diisi dan callback menerimanya, supaya
+    callback lama 3-argumen (mis. selftest) tetap jalan.
+    """
     if on_progress is None:
         return
-    result = on_progress(stage, max(0.0, min(100.0, float(percent))), message)
+    value = max(0.0, min(100.0, float(percent)))
+    if clip is not None and _accepts_clip(on_progress):
+        result = on_progress(stage, value, message, clip=clip)
+    else:
+        result = on_progress(stage, value, message)
     if inspect.isawaitable(result):
         await result
 
@@ -102,8 +119,6 @@ def _run(cmd: Sequence[str], cwd: Optional[str] = None, timeout: Optional[float]
 class Downloaded:
     video: Optional[str] = None
     subtitles: Optional[str] = None
-    # Mode manual: satu file per rentang, berisi (path, offset awal di video asli).
-    sections: List[Tuple[str, float]] = field(default_factory=list)
 
 
 def _valid_ranges(ranges: Sequence[ManualRange]) -> List[ManualRange]:
@@ -281,9 +296,9 @@ def _ensure_opencv_readable(path: str) -> str:
 async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     """yt-dlp: mp4 terbaik + subtitle asli; tanpa subtitle job gagal.
 
-    Mode manual hanya mengunduh rentang terpilih (satu `section-NN.*` per
-    rentang via --download-sections), bukan video penuh. yt-dlp mereset
-    timestamp file section ke 0; offset awal rentang disimpan untuk render.
+    Mode manual: hanya subtitle yang diunduh di sini; section per rentang
+    diunduh satu per satu oleh _download_one_section (dipanggil dari loop
+    streaming di run_job) supaya tidak ada dua proses berat bersamaan.
 
     Mode auto dengan `max_source_sec` hanya mengunduh 0–limit sebagai satu
     section (offset 0) dan memakai file itu sebagai sumber render.
@@ -294,64 +309,20 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
     if job.mode == "manual" and not ranges:
         # Gagal cepat: jangan unduh video penuh untuk job manual tanpa rentang sah.
         raise ValueError("mode manual butuh minimal satu range")
-    sections: List[Tuple[str, float]] = []
+
     video: Optional[str] = None
 
+    # --- Mode manual: hanya ambil subtitle di sini; section diunduh streaming ---
     if ranges:
-        await _emit(on_progress, "download", 0, f"mengunduh {len(ranges)} rentang")
+        await _emit(on_progress, "download", 0, f"mengunduh subtitle untuk {len(ranges)} rentang")
+        subtitles = await asyncio.to_thread(_fetch_subtitles, job.url, workdir)
+        if not subtitles:
+            raise RuntimeError(NO_SUBTITLE_ERROR)
+        await _emit(on_progress, "download", 100, "subtitle siap")
+        return Downloaded(video=None, subtitles=subtitles)
 
-        async def fetch(index: int, item) -> Tuple[str, float]:
-            cmd = _yt_dlp_base(sections=True) + [
-                "--download-sections",
-                f"*{item.start:.3f}-{item.end:.3f}",
-                # Re-encode keyframe agar potongan tepat pada batas rentang.
-                "--force-keyframes-at-cuts",
-                "-o",
-                os.path.join(workdir, f"section-{index:02d}.%(ext)s"),
-                job.url,
-            ]
-            await asyncio.to_thread(_run, cmd)
-            path = _find_media(workdir, f"section-{index:02d}")
-            if not path:
-                raise RuntimeError(
-                    f"yt-dlp selesai tanpa file untuk rentang {item.start:.1f}-{item.end:.1f}"
-                )
-            return path, item.start
-
-        results = await asyncio.gather(
-            *(fetch(index, item) for index, item in enumerate(ranges)),
-            return_exceptions=True,
-        )
-        failed = [r for r in results if isinstance(r, BaseException)]
-        if failed:
-            log.warning(
-                "gagal unduh section, fallback unduh video penuh: %s", failed[0]
-            )
-            for result in results:
-                if not isinstance(result, BaseException):
-                    os.remove(result[0])
-        else:
-            sections = list(results)
-        probes = [await asyncio.to_thread(_has_video, path) for path, _ in sections]
-        if not all(probes):
-            # yt-dlp kadang menghasilkan section audio-saja (format terbatas/429).
-            log.warning("section tanpa stream video, fallback unduh video penuh")
-            for path, _ in sections:
-                os.remove(path)
-            sections = []
-        elif any(
-            [await asyncio.to_thread(_section_video_lags_audio, path) for path, _ in sections]
-        ):
-            log.warning("section A/V tidak sinkron (video mulai lebih lambat), fallback unduh video penuh")
-            for path, _ in sections:
-                os.remove(path)
-            sections = []
-        else:
-            sections = [
-                (await asyncio.to_thread(_ensure_opencv_readable, path), offset)
-                for path, offset in sections
-            ]
-    if not sections and job.mode == "auto" and job.max_source_sec:
+    # --- Mode auto: section batas sumber atau video penuh ---
+    if not ranges and job.mode == "auto" and job.max_source_sec:
         # Batas pemindaian sumber: unduh hanya 0–limit sebagai satu section
         # (offset 0, jadi timestamp identik dengan video asli). Section gagal
         # / tanpa stream video / A/V tidak sinkron -> jatuh ke unduhan video
@@ -382,7 +353,7 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
                 log.warning("section batas sumber tanpa stream video, fallback unduh penuh")
                 os.remove(path)
 
-    if not sections and not video:
+    if not video:
         await _emit(on_progress, "download", 0, "mengunduh video")
         cmd = _yt_dlp_base() + [
             "-o",
@@ -399,7 +370,56 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
         raise RuntimeError(NO_SUBTITLE_ERROR)
 
     await _emit(on_progress, "download", 100, "media siap dirender")
-    return Downloaded(video=video, subtitles=subtitles, sections=sections)
+    return Downloaded(video=video, subtitles=subtitles)
+
+
+def _remove_section_files(workdir: str, index: int) -> None:
+    """Buang sisa file section yang gagal (mis. yt-dlp error setelah menulis)."""
+    for path in glob.glob(os.path.join(workdir, f"section-{index:02d}*")):
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+async def _download_one_section(
+    job: JobData,
+    index: int,
+    item,
+    workdir: str,
+) -> Tuple[str, float]:
+    """Unduh satu rentang manual sebagai section yt-dlp; kembalikan (path, offset).
+
+    Validasi (_has_video, _section_video_lags_audio, _ensure_opencv_readable)
+    dilakukan di sini sebelum dikembalikan. RuntimeError bila gagal.
+    """
+    cmd = _yt_dlp_base(sections=True) + [
+        "--download-sections",
+        f"*{item.start:.3f}-{item.end:.3f}",
+        "--force-keyframes-at-cuts",
+        "-o",
+        os.path.join(workdir, f"section-{index:02d}.%(ext)s"),
+        job.url,
+    ]
+    await asyncio.to_thread(_run, cmd)
+    path = _find_media(workdir, f"section-{index:02d}")
+    if not path:
+        raise RuntimeError(
+            f"yt-dlp selesai tanpa file untuk rentang {item.start:.1f}-{item.end:.1f}"
+        )
+    if not await asyncio.to_thread(_has_video, path):
+        os.remove(path)
+        raise RuntimeError(
+            f"section {index} tanpa stream video (format terbatas/429)"
+        )
+    if await asyncio.to_thread(_section_video_lags_audio, path):
+        os.remove(path)
+        raise RuntimeError(
+            f"section {index} A/V tidak sinkron (video mulai lebih lambat dari audio)"
+        )
+    path = await asyncio.to_thread(_ensure_opencv_readable, path)
+    return path, item.start
 
 
 def _read_vtt(path: str) -> List[Cue]:
@@ -775,6 +795,62 @@ def _render_one(
             os.remove(ass_path)
 
 
+def _clip_report(clip: ClipResult) -> Dict[str, Any]:
+    """Payload `clip` untuk progress: sama dengan ClipResult.to_dict tanpa
+    caption/hashtags (caption baru dibuat setelah semua klip dirender)."""
+    payload: Dict[str, Any] = {
+        "title": clip.title,
+        "start": round(clip.start, 2),
+        "end": round(clip.end, 2),
+        "file": clip.file,
+    }
+    transcript = (clip.transcript or "").strip()[:CLIP_TRANSCRIPT_MAX].strip()
+    if transcript:
+        payload["transcript"] = transcript
+    return payload
+
+
+def _render_clip_sync(
+    job: JobData,
+    moment: llm.Moment,
+    subs: Sequence[Cue],
+    src_video: str,
+    filename: str,
+    outdir: str,
+    offset: float,
+) -> ClipResult:
+    """Render satu klip (dipanggil via asyncio.to_thread)."""
+    render_moment = (
+        replace(
+            moment,
+            start=max(0.0, moment.start - offset),
+            end=max(0.0, moment.end - offset),
+        )
+        if offset
+        else moment
+    )
+    _render_one(
+        src_video,
+        render_moment,
+        subs,
+        outdir,
+        filename,
+        job.reframe,
+        job.captions,
+        job.two_speakers,
+        job.facecam,
+        offset,
+        job.aspect_ratio,
+    )
+    return ClipResult(
+        title=moment.title,
+        start=round(moment.start, 2),
+        end=round(moment.end, 2),
+        file=filename,
+        transcript=llm.clip_transcript(subs, moment.start, moment.end) or None,
+    )
+
+
 async def render(
     job: JobData,
     moments: Sequence[llm.Moment],
@@ -783,7 +859,6 @@ async def render(
     outdir: str,
     on_progress=None,
     should_cancel=None,
-    sections: Optional[Sequence[Tuple[str, float]]] = None,
 ) -> List[ClipResult]:
     """Render tiap momen sesuai aspectRatio; subtitle terbakar bila job.captions.
 
@@ -791,15 +866,12 @@ async def render(
     (reframe dengan target persegi), 16:9 -> 1920x1080 (reframe diabaikan:
     skala pas + pad hitam). twoSpeakers hanya berlaku untuk 9:16.
 
-    Jika sections diberikan (mode manual), tiap klip membaca file section
-    terkait dengan offset start relatif (= moment.start - section_offset).
+    Mode manual tidak lewat sini: lihat render_manual (streaming per rentang).
     """
     if not moments:
         raise ValueError("tidak ada momen untuk dirender")
-    if not video and not sections:
+    if not video:
         raise ValueError("sumber video tidak tersedia untuk render")
-    if sections is not None and len(sections) != len(moments):
-        raise ValueError("jumlah section tidak sama dengan jumlah momen")
 
     os.makedirs(outdir, exist_ok=True)
     _FACECAM_BOX_CACHE.clear()
@@ -810,49 +882,129 @@ async def render(
     for index, moment in enumerate(moments, start=1):
         await _check_cancel(should_cancel)  # berhenti di antara clip, bukan di tengah ffmpeg
         filename = f"clip-{index:02d}.mp4"
-
-        # Tentukan file video input dan pergeseran timestamp momen
-        if sections:
-            src_video, offset = sections[index - 1]
-            render_moment = replace(
-                moment,
-                start=max(0.0, moment.start - offset),
-                end=max(0.0, moment.end - offset),
-            )
-        else:
-            if not video:
-                raise RuntimeError("file video sumber tidak ditemukan")
-            src_video = video
-            offset = 0.0
-            render_moment = moment
-
-        await asyncio.to_thread(
-            _render_one,
-            src_video,
-            render_moment,
-            subs,
-            outdir,
-            filename,
-            job.reframe,
-            job.captions,
-            job.two_speakers,
-            job.facecam,
-            offset,
-            job.aspect_ratio,
+        clip = await asyncio.to_thread(
+            _render_clip_sync, job, moment, subs, video, filename, outdir, 0.0
         )
-        clips.append(
-            ClipResult(
-                title=moment.title,
-                start=round(moment.start, 2),
-                end=round(moment.end, 2),
-                file=filename,
-                transcript=llm.clip_transcript(subs, moment.start, moment.end) or None,
-            )
+        clips.append(clip)
+        # Klip langsung dilaporkan selagi job masih jalan (API mem-parse data.clip).
+        await _emit(
+            on_progress,
+            "render",
+            index * 100 / total,
+            f"clip {index}/{total} selesai",
+            clip=_clip_report(clip),
         )
-        await _emit(on_progress, "render", index * 100 / total, f"clip {index}/{total} selesai")
 
     log.info("job %s: %s clip dirender", job.job_id, total)
     return clips
+
+
+async def render_manual(
+    job: JobData,
+    moments: Sequence[llm.Moment],
+    subs: Sequence[Cue],
+    outdir: str,
+    workdir: str,
+    on_progress=None,
+    should_cancel=None,
+) -> List[ClipResult]:
+    """Mode manual: unduh satu section → validasi → render → hapus, per rentang.
+
+    Hanya satu proses berat (yt-dlp/ffmpeg) yang hidup pada satu waktu supaya
+    host kecil tidak OOM. Klip dilaporkan lewat progress begitu file-nya ada,
+    jadi UI tidak perlu menunggu seluruh job selesai.
+
+    Fallback: bila section gagal (unduh error / tanpa stream video / A/V tidak
+    sinkron), video penuh diunduh sekali lalu rentang itu dan semua rentang
+    berikutnya dirender dari video penuh (offset 0).
+    """
+    if not moments:
+        raise ValueError("tidak ada momen untuk dirender")
+
+    os.makedirs(outdir, exist_ok=True)
+    _FACECAM_BOX_CACHE.clear()
+    total = len(moments)
+    await _emit(on_progress, "render", 0, f"merender {total} clip")
+
+    clips: List[ClipResult] = []
+    # Diisi setelah fallback: sumber video penuh untuk semua klip berikutnya.
+    full_video: Optional[str] = None
+
+    for index, moment in enumerate(moments, start=1):
+        await _check_cancel(should_cancel)  # berhenti di antara klip
+        filename = f"clip-{index:02d}.mp4"
+        section: Optional[str] = None
+
+        if full_video is None:
+            await _emit(
+                on_progress,
+                "download",
+                (index - 1) * 100 / total,
+                f"mengunduh clip {index}/{total}",
+            )
+            try:
+                section, offset = await _download_one_section(
+                    job, index, moment, workdir
+                )
+            except Exception as exc:
+                log.warning(
+                    "job %s: section %s gagal (%s), fallback unduh video penuh",
+                    job.job_id,
+                    index,
+                    exc,
+                )
+                _remove_section_files(workdir, index)
+                await _emit(
+                    on_progress,
+                    "download",
+                    (index - 1) * 100 / total,
+                    "section gagal, mengunduh video penuh",
+                )
+                full_video = await _download_full(job, workdir, on_progress)
+
+        if full_video is not None:
+            src_video, offset = full_video, 0.0
+        elif section is not None:
+            src_video = section
+        else:  # pragma: no cover - tidak mungkin: section atau full video ada
+            raise RuntimeError("sumber video tidak tersedia untuk render")
+
+        try:
+            clip = await asyncio.to_thread(
+                _render_clip_sync, job, moment, subs, src_video, filename, outdir, offset
+            )
+        finally:
+            # Section besar (ratusan MB) dibuang segera setelah dipakai.
+            if section is not None and os.path.exists(section):
+                os.remove(section)
+
+        clips.append(clip)
+        await _emit(
+            on_progress,
+            "render",
+            index * 100 / total,
+            f"clip {index}/{total} selesai",
+            clip=_clip_report(clip),
+        )
+
+    log.info("job %s: %s clip dirender (manual, streaming)", job.job_id, total)
+    return clips
+
+
+async def _download_full(job: JobData, workdir: str, on_progress=None) -> str:
+    """Unduhan video penuh (satu-satunya proses berat yang jalan saat itu)."""
+    await _emit(on_progress, "download", 0, "mengunduh video penuh")
+    cmd = _yt_dlp_base() + [
+        "-o",
+        os.path.join(workdir, "source.%(ext)s"),
+        job.url,
+    ]
+    await asyncio.to_thread(_run, cmd)
+    video = _find_video(workdir)
+    if not video:
+        raise RuntimeError("yt-dlp selesai tanpa menghasilkan file video")
+    return video
+
 
 
 def clip_dir(clips_dir: str, job_id: str) -> str:
@@ -920,16 +1072,21 @@ async def run_job(
         await _check_cancel(should_cancel)
         moments = await select(job, cues, on_progress)
         await _check_cancel(should_cancel)
-        clips = await render(
-            job,
-            moments,
-            media.video,
-            cues,
-            output_dir,
-            on_progress,
-            should_cancel,
-            sections=media.sections or None,
-        )
+        if job.mode == "manual":
+            # Streaming: satu section diunduh, dirender, lalu dihapus per rentang.
+            clips = await render_manual(
+                job, moments, cues, output_dir, workdir, on_progress, should_cancel
+            )
+        else:
+            clips = await render(
+                job,
+                moments,
+                media.video,
+                cues,
+                output_dir,
+                on_progress,
+                should_cancel,
+            )
         await _check_cancel(should_cancel)
         await _emit(on_progress, "save", 0, "membuat caption sosial")
         try:

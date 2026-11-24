@@ -281,20 +281,32 @@ function JobDetail() {
             </div>
             <div className="p-4">
               {failed ? (
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="flex min-w-0 gap-3">
-                    <CircleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-destructive" />
-                    <div>
-                      <p className="font-medium">{t.status[snapshot.status]}</p>
-                      <p className="mt-1 break-words text-sm text-muted-foreground">{snapshot.error || (snapshot.status === "failed" ? t.jobFailedFallback : t.jobCancelledFallback)}</p>
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 gap-3">
+                      <CircleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-destructive" />
+                      <div>
+                        <p className="font-medium">{t.status[snapshot.status]}</p>
+                        <p className="mt-1 break-words text-sm text-muted-foreground">{snapshot.error || (snapshot.status === "failed" ? t.jobFailedFallback : t.jobCancelledFallback)}</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 sm:shrink-0">
+                      <Button className="min-h-11" disabled={retryJob.isPending} onClick={() => retryJob.mutate()}>
+                        {retryJob.isPending && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin" />}{t.retryJobInline}
+                      </Button>
+                      <Button variant="outline" asChild className="min-h-11"><Link to="/">{t.newSource}</Link></Button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 sm:shrink-0">
-                    <Button className="min-h-11" disabled={retryJob.isPending} onClick={() => retryJob.mutate()}>
-                      {retryJob.isPending && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin" />}{t.retryJobInline}
-                    </Button>
-                    <Button variant="outline" asChild className="min-h-11"><Link to="/">{t.newSource}</Link></Button>
-                  </div>
+                  {activeClips.length > 0 && (
+                    <>
+                      <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+                        <p className="font-medium">{activeClips.length} {t.clipsReady}</p>
+                      </div>
+                      <ClipCardGrid aspectRatio={snapshot.aspectRatio} aria-label={t.readyClips}>
+                        {activeClips.map((clip, index) => <ClipCard key={clip.id} clip={{ ...clip, job: { id: snapshot.id, url: snapshot.url, aspectRatio: snapshot.aspectRatio } }} index={index} meta={`${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} />)}
+                      </ClipCardGrid>
+                    </>
+                  )}
                 </div>
               ) : running ? (
                 <JobAssembly job={snapshot} t={t} />
