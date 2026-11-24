@@ -4,8 +4,8 @@ async function proxy({ request }: { request: Request }) {
   const incoming = new URL(request.url)
   const upstream = new URL(`${incoming.pathname}${incoming.search}`, process.env.API_INTERNAL_URL || "http://localhost:3000")
   const headers = new Headers(request.headers)
-  headers.delete("host")
-  headers.delete("connection")
+  // Hop-by-hop headers must not be forwarded; undici rejects transfer-encoding outright.
+  for (const name of ["host", "connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "content-length"]) headers.delete(name)
   const response = await fetch(upstream, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, duplex: "half", redirect: "manual" } as RequestInit)
   const responseHeaders = new Headers(response.headers)
   responseHeaders.delete("connection")
