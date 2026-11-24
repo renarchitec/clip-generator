@@ -18,6 +18,6 @@ function LoginPage() {
     <div className="flex flex-1 flex-col items-center justify-center px-4 py-8 sm:py-12">
       <LoginForm className="w-full max-w-[400px]" title={t.logIn} description={t.appDesc} emailLabel={t.email} passwordLabel={t.password} submitLabel={t.logIn} error={mutation.isError?error:undefined} pending={mutation.isPending} onSubmit={(values)=>{setError("");mutation.mutate(values)}} footer={<>{t.noAccount} {registration.data?.registrationOpen&&<Link to="/register" className="font-medium text-primary underline-offset-4 hover:underline">{t.signUp}</Link>}</>}/>
     </div>
-    <footer className="px-4 pb-5 text-center text-xs text-muted-foreground"><LegalFooterLinks className="mb-1"/>© Clipper</footer>
+    <footer className="px-4 pb-5 text-center text-xs text-muted-foreground"><LegalFooterLinks className="mb-1"/>© DartClip</footer>
   </main>
 }

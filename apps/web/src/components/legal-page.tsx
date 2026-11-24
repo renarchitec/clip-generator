@@ -48,6 +48,6 @@ export function LegalPage({ kind }: { kind: "privacy" | "terms" }) {
       </div>
       <p className="mt-14 border-t border-border pt-6 text-sm text-muted-foreground"><Link to={other.to} className="font-medium text-foreground underline-offset-4 hover:underline">{other.label} →</Link></p>
     </main>
-    <footer className="px-4 pb-5 text-center text-xs text-muted-foreground"><LegalFooterLinks className="mb-1"/>© Clipper · rencraft.site</footer>
+    <footer className="px-4 pb-5 text-center text-xs text-muted-foreground"><LegalFooterLinks className="mb-1"/>© DartClip · rencraft.site</footer>
   </div>
 }

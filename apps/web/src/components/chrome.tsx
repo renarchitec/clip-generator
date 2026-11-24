@@ -1,13 +1,31 @@
+import { useId } from "react"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
-import { Film, Languages, Library, ListVideo, LogOut, Scissors, Settings } from "lucide-react"
+import { Film, Languages, Library, ListVideo, LogOut, Settings } from "lucide-react"
 import { api, type User } from "@/lib/api"
 import { useLanguage, useT } from "@/lib/i18n"
 import { ThemeSelect } from "@/lib/theme"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
+export function BrandMark({ className }: { className?: string }) {
+  const maskId = useId()
+  return <svg viewBox="0 0 64 64" fill="none" aria-hidden="true" className={className}>
+    <defs>
+      <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+        <rect width="64" height="64" fill="#fff" />
+        <g transform="translate(26 38) rotate(42)"><path d="M0 0L-3.2 -10.5L-8.4 -16.5V-39.5L0 -33.2L8.4 -39.5V-16.5L3.2 -10.5Z" fill="#000" stroke="#000" strokeWidth="6.5" strokeLinejoin="round" /></g>
+      </mask>
+    </defs>
+    <g mask={`url(#${maskId})`}>
+      <circle cx="26" cy="38" r="22.5" stroke="currentColor" strokeWidth="5" />
+      <circle cx="26" cy="38" r="11.5" stroke="currentColor" strokeWidth="5" />
+    </g>
+    <g transform="translate(26 38) rotate(42)"><path d="M0 0L-3.2 -10.5L-8.4 -16.5V-39.5L0 -33.2L8.4 -39.5V-16.5L3.2 -10.5Z" className="fill-[#5ce1c4] stroke-[#5ce1c4] dark:fill-[#087f68] dark:stroke-[#087f68]" strokeWidth="1.2" strokeLinejoin="round" /></g>
+  </svg>
+}
+
 export function Brand({ compact = false }: { compact?: boolean }) {
-  return <Link to="/" className="group inline-flex min-h-10 items-center gap-2 font-display text-lg font-semibold tracking-[-0.06em]" aria-label="Clipper home"><span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground"><Scissors className="size-4" strokeWidth={2.2} /></span>{!compact && <span>clipper</span>}</Link>
+  return <Link to="/" className="group inline-flex min-h-10 items-center gap-2 font-display text-lg font-semibold tracking-[-0.06em]" aria-label="DartClip home"><span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground"><BrandMark className="size-5" /></span>{!compact && <span>DartClip</span>}</Link>
 }
 
 export function Preferences() {
@@ -52,7 +70,7 @@ export function WorkspaceShell({ children, user }: { children: React.ReactNode; 
     <div className="flex min-h-screen min-w-0 flex-col">
       <Topbar user={user}/>
       <main id="main-content" className={`mx-auto w-full flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8 ${editorWorkspace ? "max-w-none lg:px-5" : "max-w-[1600px]"}`}><a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-card focus:px-4 focus:py-3 focus:text-foreground focus:ring-2 focus:ring-ring">{t.skipToContent}</a>{children}
-        <footer className="mt-8 flex flex-col items-center justify-between gap-2 border-t border-border pt-5 text-xs text-muted-foreground sm:flex-row"><span>© Clipper</span><span>{t.appDesc}</span></footer>
+        <footer className="mt-8 flex flex-col items-center justify-between gap-2 border-t border-border pt-5 text-xs text-muted-foreground sm:flex-row"><span>© DartClip</span><span>{t.appDesc}</span></footer>
       </main>
     </div>
   </div>
