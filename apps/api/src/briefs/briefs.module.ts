@@ -5,6 +5,7 @@ import { AppConfig } from '../config/app-config.service';
 import { QueueModule } from '../queue/queue.module';
 import { CAPTION_QUEUE_NAME } from '../queue/queue.constants';
 import { redisConnection } from '../queue/redis';
+import { BriefHistoryService } from './brief-history.service';
 import { BriefsController } from './briefs.controller';
 import { BRIEF_QUEUE_EVENTS, BriefsService } from './briefs.service';
 
@@ -13,6 +14,7 @@ import { BRIEF_QUEUE_EVENTS, BriefsService } from './briefs.service';
   controllers: [BriefsController],
   providers: [
     BriefsService,
+    BriefHistoryService,
     {
       provide: BRIEF_QUEUE_EVENTS,
       inject: [AppConfig],
@@ -21,5 +23,6 @@ import { BRIEF_QUEUE_EVENTS, BriefsService } from './briefs.service';
       }),
     },
   ],
+  exports: [BriefsService, BriefHistoryService],
 })
 export class BriefsModule {}

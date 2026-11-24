@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -20,6 +21,7 @@ import {
   DEFAULT_CAPTION_LANGUAGE,
   DEFAULT_REFRAME,
 } from '@clipper/shared';
+import { BriefHistoryService } from '../briefs/brief-history.service';
 import { resolveClipPath } from '../clips/clip-path';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { latestPerAccount } from '../publish/publish-helpers';
@@ -45,12 +47,15 @@ type JobDataWithWatermark = JobData & {
 
 @Injectable()
 export class JobsService {
+  private readonly logger = new Logger(JobsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobEvents: JobEventsService,
     private readonly config: AppConfig,
     private readonly watermarks: WatermarksService,
     private readonly outros: OutrosService,
+    private readonly briefHistory: BriefHistoryService,
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
   ) {}
 
@@ -99,6 +104,17 @@ export class JobsService {
         userId,
       },
     });
+
+    // Riwayat brief bersifat best-effort: gagal menyimpan tidak boleh menggagalkan job.
+    if (description) {
+      try {
+        await this.briefHistory.record(userId, description);
+      } catch (error) {
+        this.logger.warn(
+          `Gagal menyimpan riwayat brief: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
 
     const watermark: WatermarkJobPayload | null = storedWatermark
       ? {

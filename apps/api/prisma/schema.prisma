@@ -36,6 +36,7 @@ model User {
   socialAccounts SocialAccount[]
   watermarks     Watermark[]
   outros         Outro[]
+  briefHistory   BriefHistory[]
 
   @@map("users")
 }
@@ -120,6 +121,21 @@ model Outro {
 
   @@index([userId])
   @@map("outros")
+}
+
+model BriefHistory {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Maksimal 500 karakter setelah trim.
+  text       String
+  useCount   Int      @default(1)
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@unique([userId, text])
+  @@index([userId, lastUsedAt])
+  @@map("brief_history")
 }
 
 model Clip {
