@@ -40,7 +40,7 @@ export const Route = createFileRoute("/")({
   component: Dashboard,
 })
 
-type ClipRange = { start: string; end: string }
+type ClipRange = { start: string; end: string; title?: string; reason?: string }
 type RangePayload = { start: number; end: number; title?: string; reason?: string }
 type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkSettings | null; outro: { outroId: string } | null }
 
@@ -157,7 +157,7 @@ function Dashboard() {
         createPreview.mutate({ url: value.url.trim(), clipCount: value.clipCount, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), ...(description.trim() ? { description: description.trim() } : {}) })
         return
       }
-      const body: JobInput = { url: value.url.trim(), mode, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end }) => ({ start: Number(start), end: Number(end) })) }) }
+      const body: JobInput = { url: value.url.trim(), mode, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end, title, reason }) => ({ start: Number(start), end: Number(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}) })) }) }
       create.mutate(body)
     },
   })
@@ -203,7 +203,7 @@ function Dashboard() {
     setWatermarkSettings(job.watermark ? clampWatermark({ watermarkId: job.watermark.watermarkId, x: job.watermark.x, y: job.watermark.y, scale: job.watermark.scale, opacity: job.watermark.opacity }) : null)
     outroPrefilled.current = true
     setOutroId(job.outro?.outroId ?? null)
-    if (job.ranges?.length) form.setFieldValue("ranges", job.ranges.map(({ start, end }) => ({ start: String(start), end: String(end) })))
+    if (job.ranges?.length) form.setFieldValue("ranges", job.ranges.map(({ start, end, title, reason }) => ({ start: String(start), end: String(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}) })))
   }, [source.data, form])
   const outroDefaults = useOutroDefault()
   const outros = useOutroLibrary()
@@ -294,7 +294,7 @@ function Dashboard() {
     },
     onError: (e: Error) => setError((e as Error & { status?: number }).status === 401 ? t.error : t.apiError),
   })
-  const updateRange = (index: number, field: keyof ClipRange, value: string) => form.setFieldValue("ranges", formValues.ranges.map((item, i) => i === index ? { ...item, [field]: value } : item))
+  const updateRange = (index: number, field: keyof ClipRange, value: string) => form.setFieldValue("ranges", formValues.ranges.map((item, i) => i === index ? { start: item.start, end: item.end, [field]: value } : item))
   const changeAspectRatio = (value: string) => {
     const next = value as Job["aspectRatio"]
     setAspectRatio(next)

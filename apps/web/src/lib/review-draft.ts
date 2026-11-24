@@ -13,7 +13,7 @@ export type ReviewDraft = {
   duration: number
   description: string
   captionLanguage?: CaptionLanguage
-  ranges: { start: string; end: string }[]
+  ranges: { start: string; end: string; title?: string; reason?: string }[]
   reviewFirst: boolean
   previewId: string | null
   selectedCandidates: number[]
