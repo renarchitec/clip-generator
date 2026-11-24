@@ -234,3 +234,29 @@ def test_run_job_manual_uses_streaming_and_keeps_final_result(tmp_path, monkeypa
     assert [clip.start for clip in result.clips] == [10.0, 40.0]
     assert [clip.transcript for clip in result.clips] == ["halo", "kedua"]
     assert all(clip.caption is None for clip in result.clips)
+
+
+def test_ensure_saved_skips_clips_deleted_during_job(tmp_path):
+    # Klip yang dihapus pengguna selagi job berjalan tidak boleh menggagalkan job.
+    from clipper import pipeline
+    from clipper.models import ClipResult, JobResult
+
+    (tmp_path / "clip-02.mp4").write_bytes(b"x")
+    result = JobResult(clips=[
+        ClipResult(title="a", start=0, end=1, file="clip-01.mp4"),
+        ClipResult(title="b", start=1, end=2, file="clip-02.mp4"),
+    ])
+
+    pipeline._ensure_saved(result, str(tmp_path))
+
+    assert [clip.file for clip in result.clips] == ["clip-02.mp4"]
+
+
+def test_ensure_saved_fails_when_no_clip_left(tmp_path):
+    import pytest
+    from clipper import pipeline
+    from clipper.models import ClipResult, JobResult
+
+    result = JobResult(clips=[ClipResult(title="a", start=0, end=1, file="clip-01.mp4")])
+    with pytest.raises(RuntimeError):
+        pipeline._ensure_saved(result, str(tmp_path))

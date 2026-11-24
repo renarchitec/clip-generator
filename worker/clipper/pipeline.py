@@ -1015,11 +1015,24 @@ def clip_dir(clips_dir: str, job_id: str) -> str:
 
 
 def _ensure_saved(result: JobResult, folder: str) -> None:
+    """Buang klip yang file-nya sudah tidak ada dari hasil.
+
+    Klip dilaporkan satu per satu selagi job berjalan, jadi pengguna bisa
+    menghapusnya sebelum job selesai. Itu bukan kegagalan: klip tersebut
+    cukup tidak ikut di hasil akhir (API tidak membuatnya ulang). Job baru
+    gagal bila tidak ada satu pun klip yang tersisa.
+    """
     os.makedirs(folder, exist_ok=True)
+    kept = []
     for clip in result.clips:
         path = os.path.join(folder, clip.file)
-        if not os.path.isfile(path) or os.path.getsize(path) == 0:
-            raise RuntimeError(f"file clip tidak ditemukan setelah render: {clip.file}")
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            kept.append(clip)
+        else:
+            log.info("klip %s tidak ada lagi (dihapus pengguna?), dilewati", clip.file)
+    if not kept:
+        raise RuntimeError("tidak ada file clip yang tersisa setelah render")
+    result.clips[:] = kept
 
 
 async def save(result: JobResult, clips_dir: str, job_id: str, on_progress=None) -> str:
