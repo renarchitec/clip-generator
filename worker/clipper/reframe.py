@@ -173,6 +173,7 @@ def two_speaker_centers_from_frames(
 FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 640  # panel atas 27:16
 FACECAM_FACE_SCALE = 3.0  # tinggi panel = 3x tinggi wajah
 FACECAM_MIN_PANEL_H = 64  # piksel; di bawah ini upscale terlalu kasar
+FACECAM_MIN_FACE_SCALE = 1.8  # batas zoom-in saat memusatkan wajah di sudut
 
 
 def facecam_box(
@@ -206,6 +207,18 @@ def facecam_box(
     if h > src_h:
         w = int(round(w * src_h / h))
         h = src_h
+    # Facecam di sudut: kotak yang dijepit ke tepi frame membuat wajah tidak
+    # di tengah panel. Perkecil kotak (zoom in) sampai muat dengan wajah di
+    # tengah, tapi wajah maksimal ~1/FACECAM_MIN_FACE_SCALE tinggi panel.
+    fit = min(
+        1.0,
+        2 * min(cx, 1 - cx) * src_w / w,
+        2 * min(cy, 1 - cy) * src_h / h,
+    )
+    floor = min(1.0, FACECAM_MIN_FACE_SCALE * face_h * src_h / h)
+    scale = max(fit, floor)
+    if scale < 1.0:
+        w, h = int(w * scale), int(h * scale)
     w, h = max(2, w - w % 2), max(2, h - h % 2)  # dimensi genap untuk x264
 
     x = int(round(cx * src_w - w / 2))

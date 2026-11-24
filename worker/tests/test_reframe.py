@@ -323,3 +323,19 @@ def test_facecam_box_for_samples_whole_video_once(monkeypatch):
     assert first is not None and first == second
     # Satu deteksi untuk seluruh video, bukan per klip.
     assert calls == [(0.0, 600.0, pipeline._facecam_sample_fps(600.0))]
+
+
+def test_facecam_box_centers_corner_face_by_zooming_in():
+    # Regresi job 9ce6198c: facecam di tepi kiri (cx ~0.12 di 2560x1440). Kotak
+    # 3x wajah dijepit ke x=0 sehingga wajah di ~37% lebar panel. Kotak harus
+    # diperkecil supaya wajah di tengah panel.
+    frames = [(t, [(0.12, 0.47, 0.114, 0.0)]) for t in range(10)]
+
+    x, y, w, h = reframe.facecam_box(frames, 2560, 1440)
+
+    face_x = 0.12 * 2560
+    face_y = 0.47 * 1440
+    assert (face_x - x) / w == pytest.approx(0.5, abs=0.02)
+    assert (face_y - y) / h == pytest.approx(0.5, abs=0.02)
+    assert w * 640 == pytest.approx(h * 1080, rel=0.01)  # rasio 27:16 tetap
+    assert 0 <= x and x + w <= 2560 and 0 <= y and y + h <= 1440
