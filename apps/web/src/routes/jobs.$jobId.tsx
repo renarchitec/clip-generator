@@ -20,9 +20,9 @@ import { JobAssembly } from "@/components/job-assembly"
 import { ClipCard, ClipCardGrid } from "@/components/clip-card"
 
 export const Route = createFileRoute("/jobs/$jobId")({
-  beforeLoad: async () => {
+  beforeLoad: async ({ location }) => {
     const user = await getCurrentUser()
-    if (!user) throw redirect({ to: "/login" })
+    if (!user) throw redirect({ to: "/login", search: { redirect: location.href } })
     return { user }
   },
   component: JobDetail,
@@ -64,7 +64,14 @@ function JobDetail() {
   const job = useQuery({
     queryKey,
     queryFn: () => api<JobSnapshot>(`/jobs/${jobId}`),
-    refetchInterval: (query) => query.state.data && ["done", "failed", "cancelled"].includes(query.state.data.status) ? false : 3000,
+    retry: (failureCount, err) => {
+      if ((err as Error & { status?: number }).status === 404) return false
+      return failureCount < 3
+    },
+    refetchInterval: (query) => {
+      if ((query.state.error as (Error & { status?: number }) | null)?.status === 404) return false
+      return query.state.data && ["done", "failed", "cancelled"].includes(query.state.data.status) ? false : 3000
+    },
   })
   const cancel = useMutation({ mutationFn: () => api(`/jobs/${jobId}/cancel`, { method: "POST" }), onSuccess: () => client.invalidateQueries({ queryKey }) })
   const retryJob = useMutation({
@@ -80,15 +87,16 @@ function JobDetail() {
   const deleteJob = useMutation({
     mutationFn: () => api<void>(`/jobs/${jobId}`, { method: "DELETE" }),
     onSuccess: () => {
+      client.removeQueries({ queryKey })
       void client.invalidateQueries({ queryKey: ["jobs"] })
       void client.invalidateQueries({ queryKey: ["clips", "recent"] })
       toast.success(t.jobDeleted)
-      void navigate({ to: "/" })
+      void navigate({ to: "/jobs" })
     },
     onError: () => toast.error(t.jobDeleteFailed),
     onSettled: () => setDeleteJobOpen(false),
   })
-  const terminal = !!job.data && ["done", "failed", "cancelled"].includes(job.data.status)
+  const terminal = (job.error as (Error & { status?: number }) | null)?.status === 404 || (!!job.data && ["done", "failed", "cancelled"].includes(job.data.status))
 
   useEffect(() => {
     if (terminal) return
@@ -131,12 +139,19 @@ function JobDetail() {
           <Skeleton className="h-40 w-full rounded-xl lg:col-span-2 lg:row-start-2" />
         </div>
       ) : job.isError ? (
-        <Alert variant="destructive">
-          <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-            <span>{t.apiError}</span>
-            <Button variant="outline" onClick={() => job.refetch()}>{t.retry}</Button>
-          </AlertDescription>
-        </Alert>
+        (job.error as Error & { status?: number }).status === 404 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-12 text-center">
+            <p className="font-medium">{t.jobNotFound}</p>
+            <Button variant="outline" asChild className="mt-4 min-h-11"><Link to="/jobs">{t.back}</Link></Button>
+          </div>
+        ) : (
+          <Alert variant="destructive">
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>{t.apiError}</span>
+              <Button variant="outline" onClick={() => job.refetch()}>{t.retry}</Button>
+            </AlertDescription>
+          </Alert>
+        )
       ) : snapshot ? (
         <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,400px)] lg:grid-rows-[minmax(560px,calc(100vh-120px))_auto]">
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:col-start-1 lg:row-start-1 lg:h-full" aria-label={t.sourceMonitor}>

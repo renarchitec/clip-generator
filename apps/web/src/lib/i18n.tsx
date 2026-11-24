@@ -347,6 +347,8 @@ const messages = {
     privacyPolicy: "Privacy",
     termsOfService: "Terms",
     legalBack: "Back to DartClip",
+    pageNotFound: "Page not found",
+    jobNotFound: "This job no longer exists.",
     legalEffective: "Effective 23 November 2026",
     legal: {
       privacy: {
@@ -730,6 +732,8 @@ const messages = {
     privacyPolicy: "Privasi",
     termsOfService: "Ketentuan",
     legalBack: "Kembali ke DartClip",
+    pageNotFound: "Halaman tidak ditemukan",
+    jobNotFound: "Pekerjaan ini sudah tidak ada.",
     legalEffective: "Berlaku sejak 23 November 2026",
     legal: {
       privacy: {

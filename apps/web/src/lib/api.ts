@@ -25,3 +25,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
+
+export function safeRedirectTarget(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return undefined
+  return value
+}

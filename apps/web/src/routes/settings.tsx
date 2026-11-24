@@ -17,9 +17,9 @@ export const Route = createFileRoute("/settings")({
     connected: PLATFORMS.includes(search.connected as SocialPlatform) ? (search.connected as SocialPlatform) : undefined,
     social_error: typeof search.social_error === "string" && search.social_error ? search.social_error : undefined,
   }),
-  beforeLoad: async () => {
+  beforeLoad: async ({ location }) => {
     const user = await getCurrentUser()
-    if (!user) throw redirect({ to: "/login" })
+    if (!user) throw redirect({ to: "/login", search: { redirect: location.href } })
     return { user }
   },
   component: SettingsPage,

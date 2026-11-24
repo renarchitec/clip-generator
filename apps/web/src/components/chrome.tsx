@@ -1,11 +1,18 @@
 import { useId } from "react"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
-import { Film, Languages, Library, ListVideo, LogOut, Settings } from "lucide-react"
+import { Film, Globe, Library, ListVideo, LogOut, Settings } from "lucide-react"
 import { api, type User } from "@/lib/api"
 import { useLanguage, useT } from "@/lib/i18n"
 import { ThemeSelect } from "@/lib/theme"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+
+// "/" must match exactly; "/jobs" stays active on /jobs/<id>.
+const navItems = [
+  { to: "/", exact: true, icon: Film, label: "dashboard" },
+  { to: "/jobs", exact: false, icon: ListVideo, label: "jobs" },
+  { to: "/clips", exact: false, icon: Library, label: "clips" },
+] as const
 
 export function BrandMark({ className }: { className?: string }) {
   const maskId = useId()
@@ -25,13 +32,13 @@ export function BrandMark({ className }: { className?: string }) {
 }
 
 export function Brand({ compact = false }: { compact?: boolean }) {
-  return <Link to="/" className="group inline-flex min-h-10 items-center gap-2 font-display text-lg font-semibold tracking-[-0.06em]" aria-label="DartClip home"><span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground"><BrandMark className="size-5" /></span>{!compact && <span>DartClip</span>}</Link>
+  return <Link to="/" className="group inline-flex min-h-10 items-center gap-2 font-display text-lg font-semibold tracking-[-0.06em]" aria-label="DartClip home"><span className="grid size-8 place-items-center rounded-md bg-[#18181b] text-white dark:bg-primary dark:text-primary-foreground"><BrandMark className="size-5" /></span>{!compact && <span>DartClip</span>}</Link>
 }
 
 export function Preferences() {
   const t = useT()
   const { language, setLanguage } = useLanguage()
-  return <div className="flex items-center gap-1"><DropdownMenu><DropdownMenuTrigger aria-label={t.language} title={t.language} className="relative inline-flex size-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Languages className="size-[18px]" aria-hidden="true"/><span className="absolute bottom-0.5 right-0.5 rounded-sm bg-background px-0.5 text-[8px] font-bold leading-3 text-foreground">{language.toUpperCase()}</span><span className="sr-only">{t.language}: {language.toUpperCase()}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="min-w-40"><DropdownMenuLabel>{t.language}</DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => setLanguage("en")}><span className="w-6 font-mono text-[10px]">EN</span>English{language === "en" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem><DropdownMenuItem onSelect={() => setLanguage("id")}><span className="w-6 font-mono text-[10px]">ID</span>Bahasa Indonesia{language === "id" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem></DropdownMenuContent></DropdownMenu><ThemeSelect /></div>
+  return <div className="flex items-center gap-1"><DropdownMenu><DropdownMenuTrigger aria-label={t.language} title={t.language} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md px-2.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Globe className="size-[18px]" aria-hidden="true"/><span aria-hidden="true" className="font-mono text-xs font-semibold leading-none tracking-wide">{language.toUpperCase()}</span><span className="sr-only">{t.language}: {language.toUpperCase()}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="min-w-40"><DropdownMenuLabel>{t.language}</DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => setLanguage("en")}><span className="w-6 font-mono text-[10px]">EN</span>English{language === "en" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem><DropdownMenuItem onSelect={() => setLanguage("id")}><span className="w-6 font-mono text-[10px]">ID</span>Bahasa Indonesia{language === "id" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem></DropdownMenuContent></DropdownMenu><ThemeSelect /></div>
 }
 
 function AccountMenu({ user }: { user: User }) {
@@ -54,7 +61,7 @@ export function Topbar({ user }: { user?: User }) {
         <div className="flex min-w-0 items-center gap-4"><span className="md:hidden"><Brand/></span><h1 className="hidden truncate font-display text-sm font-medium tracking-[-.01em] text-muted-foreground md:block">{pageTitle}</h1></div>
         <div className="flex shrink-0 items-center gap-1 sm:gap-2"><Preferences />{user && <AccountMenu user={user}/>}</div>
       </div>
-      <nav aria-label={t.mainNavigation} className="flex gap-1 pb-2 md:hidden"><Link to="/" activeOptions={{ exact: true }} activeProps={{ className: "bg-secondary text-foreground" }} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"><Film className="size-4"/><span>{t.dashboard}</span></Link><Link to="/jobs" activeOptions={{ exact: true }} activeProps={{ className: "bg-secondary text-foreground" }} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"><ListVideo className="size-4"/><span>{t.jobs}</span></Link><Link to="/clips" activeOptions={{ exact: true }} activeProps={{ className: "bg-secondary text-foreground" }} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"><Library className="size-4"/><span>{t.clips}</span></Link></nav>
+      <nav aria-label={t.mainNavigation} className="flex gap-1 pb-2 md:hidden">{navItems.map(({ to, exact, icon: Icon, label }) => <Link key={to} to={to} activeOptions={{ exact }} className="group relative inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-xs transition-colors" inactiveProps={{ className: "text-muted-foreground hover:bg-secondary hover:text-foreground" }} activeProps={{ className: "bg-accent/10 font-medium text-foreground before:absolute before:inset-x-3 before:bottom-0 before:h-0.5 before:rounded-full before:bg-accent dark:bg-accent/15" }}><Icon className="size-4 group-data-[status=active]:text-accent" aria-hidden="true"/><span>{t[label]}</span></Link>)}</nav>
     </div>
   </header>
 }
@@ -65,7 +72,7 @@ export function WorkspaceShell({ children, user }: { children: React.ReactNode; 
   const editorWorkspace = pathname === "/"
   return <div className="min-h-screen bg-background md:grid md:grid-cols-[184px_minmax(0,1fr)]">
     <aside className="hidden border-r border-sidebar-border bg-sidebar px-3 py-5 md:flex md:min-h-screen md:flex-col">
-      <div><Brand/><nav aria-label={t.mainNavigation} className="mt-8 space-y-1"><Link to="/" activeOptions={{ exact: true }} activeProps={{ className: "bg-sidebar-accent font-medium text-sidebar-accent-foreground" }} className="flex min-h-10 items-center gap-3 rounded-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"><Film className="size-4"/>{t.dashboard}</Link><Link to="/jobs" activeOptions={{ exact: true }} activeProps={{ className: "bg-sidebar-accent font-medium text-sidebar-accent-foreground" }} className="flex min-h-10 items-center gap-3 rounded-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"><ListVideo className="size-4"/>{t.jobs}</Link><Link to="/clips" activeOptions={{ exact: true }} activeProps={{ className: "bg-sidebar-accent font-medium text-sidebar-accent-foreground" }} className="flex min-h-10 items-center gap-3 rounded-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"><Library className="size-4"/>{t.clips}</Link></nav></div>
+      <div><Brand/><nav aria-label={t.mainNavigation} className="mt-8 space-y-1">{navItems.map(({ to, exact, icon: Icon, label }) => <Link key={to} to={to} activeOptions={{ exact }} className="group relative flex min-h-10 items-center gap-3 rounded-md px-3 text-sm transition-colors" inactiveProps={{ className: "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" }} activeProps={{ className: "bg-accent/10 font-medium text-foreground before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-accent dark:bg-accent/15" }}><Icon className="size-4 group-data-[status=active]:text-accent" aria-hidden="true"/>{t[label]}</Link>)}</nav></div>
     </aside>
     <div className="flex min-h-screen min-w-0 flex-col">
       <Topbar user={user}/>

@@ -14,9 +14,9 @@ import { useLanguage, useT } from "@/lib/i18n"
 import { ClipCard, ClipCardGrid, type ClipCardData } from "@/components/clip-card"
 
 export const Route = createFileRoute("/clips")({
-  beforeLoad: async () => {
+  beforeLoad: async ({ location }) => {
     const user = await getCurrentUser()
-    if (!user) throw redirect({ to: "/login" })
+    if (!user) throw redirect({ to: "/login", search: { redirect: location.href } })
     return { user }
   },
   component: ClipsPage,

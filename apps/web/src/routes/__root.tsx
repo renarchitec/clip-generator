@@ -1,4 +1,5 @@
-import { createRootRoute, Outlet, useRouterState } from "@tanstack/react-router"
+import { createRootRoute, Link, Outlet, useRouterState } from "@tanstack/react-router"
+import { ArrowLeft } from "lucide-react"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequestHeader } from "@tanstack/react-start/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
@@ -6,7 +7,7 @@ import { useState } from "react"
 import { HeadContent, Scripts } from "@tanstack/react-router"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { I18nProvider, type Language } from "@/lib/i18n"
+import { I18nProvider, useT, type Language } from "@/lib/i18n"
 import { ThemeProvider } from "@/lib/theme"
 import appCss from "../styles.css?url"
 
@@ -23,8 +24,13 @@ export const Route = createRootRoute({
   head: () => ({ meta: [{ charSet: "utf-8" }, { name: "viewport", content: "width=device-width, initial-scale=1" }, { name: "theme-color", content: "#18181b" }, { title: "DartClip — Make the moments worth sharing." }, { name: "description", content: "A calmer way to turn long videos into short clips." }], links: [{ rel: "icon", href: "/favicon.ico", sizes: "any" }, { rel: "icon", href: "/logo.svg", type: "image/svg+xml" }, { rel: "apple-touch-icon", href: "/apple-touch-icon.png" }, { rel: "manifest", href: "/manifest.json" }, { rel: "stylesheet", href: appCss }] }),
   component: RootComponent,
   shellComponent: ({ children }) => <html lang="en"><head><HeadContent /><script dangerouslySetInnerHTML={{ __html: `(()=>{try{const c=document.cookie.split('; ').find(x=>x.startsWith('clipper_theme='))?.split('=')[1]||'system';const d=c==='dark'||(c==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d)}catch{}})()` }} /></head><body>{children}<Scripts /></body></html>,
-  notFoundComponent: () => <main className="mx-auto max-w-2xl p-12 text-center"><h1 className="font-display text-3xl">Page not found</h1></main>,
+  notFoundComponent: NotFound,
 })
+
+function NotFound() {
+  const t = useT()
+  return <main className="mx-auto max-w-2xl p-12 text-center"><h1 className="font-display text-3xl">{t.pageNotFound}</h1><Link to="/" className="mt-6 inline-flex min-h-11 items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"><ArrowLeft aria-hidden="true" className="size-4" />{t.legalBack}</Link></main>
+}
 
 function RootComponent() {
   const preferences = Route.useRouteContext()

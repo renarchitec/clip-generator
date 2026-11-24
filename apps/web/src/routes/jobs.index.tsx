@@ -11,9 +11,9 @@ import { relativeAge, sourceLabel } from "@/lib/format"
 import { useLanguage, useT } from "@/lib/i18n"
 
 export const Route = createFileRoute("/jobs/")({
-  beforeLoad: async () => {
+  beforeLoad: async ({ location }) => {
     const user = await getCurrentUser()
-    if (!user) throw redirect({ to: "/login" })
+    if (!user) throw redirect({ to: "/login", search: { redirect: location.href } })
     return { user }
   },
   component: JobsIndex,
