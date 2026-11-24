@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import {
-  JobStatus,
   PublicationStatus,
   type Prisma,
 } from '@prisma/client';
@@ -63,14 +62,14 @@ export class PublishService {
 
     const clip = await this.prisma.clip.findFirst({
       where: { id: clipId, job: { userId } },
-      select: { id: true, deletedAt: true, job: { select: { status: true } } },
+      select: { id: true, deletedAt: true },
     });
     if (!clip || clip.deletedAt) {
       throw new NotFoundException(`Clip ${clipId} tidak ditemukan.`);
     }
-    if (clip.job.status !== JobStatus.done) {
-      throw new BadRequestException('clip_not_ready');
-    }
+    // Baris clip hanya dibuat setelah file-nya selesai dirender (progress
+    // worker atau hasil akhir), jadi clip dari job yang masih berjalan atau
+    // gagal di tengah sudah bisa dipublikasikan; status job tidak dicek.
 
     const accountIds = dto.targets.map((target) => target.accountId);
     const accounts = await this.prisma.socialAccount.findMany({
