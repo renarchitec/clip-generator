@@ -103,7 +103,7 @@ test('zod menerima settings valid dan menolak nilai di luar rentang', () => {
     { ...valid, x: 1.5 },
     { ...valid, y: -0.1 },
     { ...valid, scale: 0.02 },
-    { ...valid, scale: 0.7 },
+    { ...valid, scale: 1.1 },
     { ...valid, opacity: 0 },
     { ...valid, opacity: 1.2 },
     { ...valid, watermarkId: '' },

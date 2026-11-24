@@ -23,7 +23,7 @@ import { getVideoEmbed } from "@/lib/embed"
 import { JobAssembly } from "@/components/job-assembly"
 import { useWatermarkDefault, WatermarkManager, watermarkKey } from "@/components/watermark-manager"
 import { WatermarkOverlay } from "@/components/watermark-overlay"
-import { clamp, clampWatermark, defaultWatermarkSettings, type Watermark, type WatermarkSettings } from "@/lib/watermark"
+import { clamp, clampWatermark, defaultWatermarkSettings, WATERMARK_SCALE_MAX, WATERMARK_SCALE_MIN, type Watermark, type WatermarkSettings } from "@/lib/watermark"
 import { formatFrameTime, FRAME_DEFAULT_SEC, useFramePreview, type FrameErrorKind } from "@/lib/frame-preview"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
@@ -375,7 +375,7 @@ function Dashboard() {
              <FieldDescription>{t.watermarkHint}</FieldDescription>
              {watermarkSettings && <div className="mt-3 space-y-3">
                <WatermarkManager compact selectedId={watermarkSettings.watermarkId} onSelect={(watermark) => setWatermarkSettings((current) => ({ ...(current ?? defaultWatermarkSettings(watermark.id)), watermarkId: watermark.id }))}/>
-               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.scale * 100)}%</span></div><input id="watermark-size" type="range" min={0.03} max={0.6} step={0.01} value={watermarkSettings.scale} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, scale: clamp(Number(event.target.value), 0.03, 0.6) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
+               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.scale * 100)}%</span></div><input id="watermark-size" type="range" min={WATERMARK_SCALE_MIN} max={WATERMARK_SCALE_MAX} step={0.01} value={watermarkSettings.scale} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, scale: clamp(Number(event.target.value), WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
                <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-opacity" className="text-xs font-normal text-muted-foreground">{t.watermarkOpacity}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.opacity * 100)}%</span></div><input id="watermark-opacity" type="range" min={0.1} max={1} step={0.05} value={watermarkSettings.opacity} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, opacity: clamp(Number(event.target.value), 0.1, 1) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
                <p className="text-xs leading-relaxed text-muted-foreground">{t.watermarkPositionHint}</p>
                <Field className="space-y-2 rounded-lg border border-border/70 bg-card/60 p-2.5">

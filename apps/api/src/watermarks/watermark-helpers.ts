@@ -10,7 +10,7 @@ export const WATERMARK_MAX_PER_USER = 20;
 export const WATERMARK_NAME_MAX = 80;
 
 export const WATERMARK_SCALE_MIN = 0.03;
-export const WATERMARK_SCALE_MAX = 0.6;
+export const WATERMARK_SCALE_MAX = 1;
 export const WATERMARK_OPACITY_MIN = 0.1;
 export const WATERMARK_OPACITY_MAX = 1;
 
