@@ -18,6 +18,7 @@ import { getVideoEmbed } from "@/lib/embed"
 import { LlmStatus } from "@/components/llm-status"
 import { JobAssembly } from "@/components/job-assembly"
 import { ClipCard, ClipCardGrid } from "@/components/clip-card"
+import { useWatermarkLibrary } from "@/components/watermark-manager"
 
 export const Route = createFileRoute("/jobs/$jobId")({
   beforeLoad: async ({ location }) => {
@@ -61,6 +62,7 @@ function JobDetail() {
   const client = useQueryClient()
   const navigate = useNavigate()
   const queryKey = useMemo(() => ["jobs", jobId], [jobId])
+  const watermarks = useWatermarkLibrary()
   const job = useQuery({
     queryKey,
     queryFn: () => api<JobSnapshot>(`/jobs/${jobId}`),
@@ -246,7 +248,19 @@ function JobDetail() {
                   <FieldDescription>{t.captionLanguageHint}</FieldDescription>
                 </Field>
 
-                {snapshot.description && <Field>
+                {snapshot.watermark && <Field>
+                   <FieldTitle>{t.watermark}</FieldTitle>
+                   <div className="mt-2 flex items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
+                     <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border bg-background text-xs text-muted-foreground">{watermarks.data?.find((item) => item.id === snapshot.watermark?.watermarkId) ? <img src={watermarks.data.find((item) => item.id === snapshot.watermark?.watermarkId)?.url} alt="" className="size-full object-contain"/> : "—"}</span>
+                     <div className="min-w-0 flex-1 font-mono text-xs tabular-nums text-foreground">
+                       <p>{t.watermarkPosition}: {Math.round(snapshot.watermark.x * 100)}%, {Math.round(snapshot.watermark.y * 100)}%</p>
+                       <p>{t.watermarkSize}: {Math.round(snapshot.watermark.scale * 100)}% · {t.watermarkOpacity}: {Math.round(snapshot.watermark.opacity * 100)}%</p>
+                       {snapshot.watermark.filePath && <p className="mt-0.5 truncate text-muted-foreground" title={snapshot.watermark.filePath}>{snapshot.watermark.filePath}</p>}
+                     </div>
+                   </div>
+                 </Field>}
+
+                 {snapshot.description && <Field>
                   <FieldTitle>{t.description}</FieldTitle>
                   <p className="mt-2 whitespace-pre-wrap rounded-md border border-border/80 bg-secondary/25 p-3 text-sm leading-relaxed text-muted-foreground">{snapshot.description}</p>
                 </Field>}

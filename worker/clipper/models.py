@@ -121,6 +121,59 @@ def to_max_source_sec(value: Any) -> Optional[int]:
     return parsed if MIN_SOURCE_SEC <= parsed <= MAX_SOURCE_SEC else None
 
 
+WATERMARK_DEFAULTS = {"x": 0.5, "y": 0.5, "scale": 0.25, "opacity": 1.0}
+WATERMARK_MAX_PATH_CHARS = 512
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _finite_float(value: Any, default: float) -> float:
+    parsed = _to_float(value, default)
+    return parsed if parsed == parsed and parsed not in (float("inf"), float("-inf")) else default
+
+
+@dataclass
+class Watermark:
+    """Watermark gambar. x/y = PUSAT sebagai pecahan frame output (0..1);
+    scale = lebar watermark sebagai pecahan lebar output; opacity 0..1."""
+
+    file_path: str  # relatif terhadap CLIPS_DIR, mis. watermarks/<user>/<id>.png
+    x: float = 0.5
+    y: float = 0.5
+    scale: float = 0.25
+    opacity: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "filePath": self.file_path,
+            "x": self.x,
+            "y": self.y,
+            "scale": self.scale,
+            "opacity": self.opacity,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["Watermark"]:
+        """Parse toleran + clamp; bukan object / filePath kosong -> None."""
+        if not isinstance(data, MappingABC):
+            return None
+        file_path = _to_text(
+            _first(data, "filePath", "file_path", "path"), WATERMARK_MAX_PATH_CHARS
+        )
+        if not file_path:
+            return None
+        d = WATERMARK_DEFAULTS
+        return cls(
+            file_path=file_path,
+            x=_clamp(_finite_float(data.get("x"), d["x"]), 0.0, 1.0),
+            y=_clamp(_finite_float(data.get("y"), d["y"]), 0.0, 1.0),
+            scale=_clamp(_finite_float(data.get("scale"), d["scale"]), 0.0, 1.0),
+            opacity=_clamp(_finite_float(data.get("opacity"), d["opacity"]), 0.0, 1.0),
+        )
+
+
 @dataclass
 class ManualRange:
     """detik"""
@@ -192,9 +245,12 @@ class JobData:
     description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
+    # Watermark gambar opsional; None = tanpa watermark.
+    watermark: Optional[Watermark] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "watermark": self.watermark.to_dict() if self.watermark else None,
             "jobId": self.job_id,
             "url": self.url,
             "mode": self.mode,
@@ -279,6 +335,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,
+        watermark=Watermark.from_dict(_first(data, "watermark")),
     )
 
 

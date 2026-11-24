@@ -1,0 +1,424 @@
+"""Uji watermark gambar: parse payload, clamp, graph filter tiap jalur, smoke ffmpeg."""
+
+import os
+import shutil
+import subprocess
+from unittest.mock import patch
+
+import pytest
+
+from clipper import pipeline
+from clipper.models import JobData, Watermark, job_data_from_dict
+
+BASE = {"jobId": "abc", "url": "https://youtu.be/x"}
+MOMENT = pipeline.llm.Moment(0.0, 4.0, "t")
+
+
+# ---------- parsing ----------
+
+def test_watermark_absent_or_null_is_none():
+    assert job_data_from_dict(BASE).watermark is None
+    assert job_data_from_dict({**BASE, "watermark": None}).watermark is None
+    assert job_data_from_dict({**BASE, "watermark": "x"}).watermark is None
+    assert job_data_from_dict({**BASE, "watermark": {"x": 0.5}}).watermark is None  # tanpa filePath
+    assert job_data_from_dict({**BASE, "watermark": {"filePath": "  "}}).watermark is None
+    assert job_data_from_dict(BASE).to_dict()["watermark"] is None
+
+
+def test_watermark_parses_camel_case():
+    job = job_data_from_dict(
+        {
+            **BASE,
+            "watermark": {
+                "filePath": "watermarks/u1/w1.png",
+                "x": 0.8,
+                "y": 0.1,
+                "scale": 0.3,
+                "opacity": 0.5,
+            },
+        }
+    )
+    assert job.watermark == Watermark("watermarks/u1/w1.png", 0.8, 0.1, 0.3, 0.5)
+    assert job.to_dict()["watermark"] == {
+        "filePath": "watermarks/u1/w1.png",
+        "x": 0.8,
+        "y": 0.1,
+        "scale": 0.3,
+        "opacity": 0.5,
+    }
+
+
+def test_watermark_clamps_and_defaults():
+    wm = Watermark.from_dict(
+        {"filePath": "a.png", "x": -3, "y": 9, "scale": 50, "opacity": 2}
+    )
+    assert (wm.x, wm.y, wm.scale, wm.opacity) == (0.0, 1.0, 1.0, 1.0)
+
+    wm = Watermark.from_dict({"filePath": "a.png", "scale": 0, "opacity": -1})
+    assert wm.scale == 0.0
+    assert wm.opacity == 0.0
+
+    # Nilai sampah / NaN / inf -> default.
+    wm = Watermark.from_dict(
+        {"filePath": "a.png", "x": "abc", "y": float("nan"), "scale": float("inf"), "opacity": None}
+    )
+    assert (wm.x, wm.y, wm.scale, wm.opacity) == (0.5, 0.5, 0.25, 1.0)
+
+
+# ---------- resolusi path ----------
+
+def test_resolve_path_ok_missing_and_traversal(tmp_path):
+    root = tmp_path / "clips"
+    (root / "watermarks" / "u").mkdir(parents=True)
+    png = root / "watermarks" / "u" / "w.png"
+    png.write_bytes(b"x")
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(b"x")
+
+    resolve = pipeline.resolve_watermark_path
+    assert resolve(str(root), Watermark("watermarks/u/w.png")) == os.path.realpath(png)
+    assert resolve(str(root), None) is None
+    assert resolve(str(root), Watermark("watermarks/u/nope.png")) is None
+    assert resolve(str(root), Watermark("../secret.png")) is None
+    assert resolve(str(root), Watermark("watermarks/../../secret.png")) is None
+    assert resolve(str(root), Watermark(str(outside))) is None
+    assert resolve(str(root), Watermark("watermarks/u")) is None  # direktori
+
+    # Symlink keluar dari clips dir ditolak.
+    link = root / "watermarks" / "u" / "link.png"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink tidak didukung")
+    assert resolve(str(root), Watermark("watermarks/u/link.png")) is None
+
+
+# ---------- graph ----------
+
+def test_watermark_chain_and_overlay_expressions():
+    wm = Watermark("a.png", x=0.8, y=0.1, scale=0.3, opacity=0.5)
+    chain = pipeline._watermark_chain(1080, 1920, wm)
+    # round(1080*0.3/2)*2 = 324
+    assert chain == "[1:v]scale=w=324:h=-2,format=rgba,colorchannelmixer=aa=0.500[wm]"
+
+    overlay = pipeline._watermark_overlay("[v]", wm)
+    assert overlay.startswith("[v][wm]overlay=")
+    assert "main_w*0.8000-overlay_w/2" in overlay
+    assert "main_h*0.1000-overlay_h/2" in overlay
+    assert "min(main_w-overlay_w" in overlay and "max(0," in overlay
+    assert "shortest=1" in overlay
+    assert overlay.endswith("[wmout]")
+
+
+def test_watermark_chain_uses_output_width_per_ratio():
+    wm = Watermark("a.png", scale=0.25)
+    assert "scale=w=480:h=-2" in pipeline._watermark_chain(1920, 1080, wm)  # 16:9
+    assert "scale=w=270:h=-2" in pipeline._watermark_chain(1080, 1920, wm)  # 9:16
+
+
+def _capture(tmp_path, **kwargs):
+    commands = []
+
+    def fake_run(cmd, cwd=None, timeout=None):
+        commands.append(list(cmd))
+        return ""
+
+    wm_file = tmp_path / "wm.png"
+    wm_file.write_bytes(b"x")
+    with patch.object(pipeline, "_run", side_effect=fake_run):
+        pipeline._render_one(
+            str(tmp_path / "src.mp4"),
+            MOMENT,
+            [],
+            str(tmp_path),
+            "clip-01.mp4",
+            **kwargs,
+        )
+    return commands[0]
+
+
+def _wm_kwargs(tmp_path):
+    return {
+        "watermark": Watermark("wm.png", 0.9, 0.9, 0.2, 0.7),
+        "watermark_path": str(tmp_path / "wm.png"),
+    }
+
+
+def test_render_one_without_watermark_unchanged(tmp_path):
+    cmd = _capture(tmp_path, reframe="black_bars", captions=False)
+    assert "-vf" in cmd and "-filter_complex" not in cmd
+    assert cmd.count("-i") == 1
+
+
+def test_render_one_watermark_none_path_ignored(tmp_path):
+    cmd = _capture(
+        tmp_path,
+        reframe="black_bars",
+        captions=False,
+        watermark=Watermark("wm.png"),
+        watermark_path=None,
+    )
+    assert "-vf" in cmd and cmd.count("-i") == 1
+
+
+def test_render_one_plain_path_uses_filter_complex(tmp_path):
+    cmd = _capture(tmp_path, reframe="black_bars", captions=False, **_wm_kwargs(tmp_path))
+
+    assert "-vf" not in cmd
+    assert cmd.count("-i") == 2
+    # Input ke-2 = gambar, di-loop dan dibatasi durasi klip; -ss hanya untuk video.
+    wm_i = len(cmd) - 1 - cmd[::-1].index("-i")
+    assert cmd[wm_i + 1] == str(tmp_path / "wm.png")
+    assert cmd[wm_i - 4 : wm_i] == ["-loop", "1", "-t", "4.000"]
+    assert cmd.index("-ss") < cmd.index("-i") < wm_i
+
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert graph.startswith("[0:v]scale=1080:1920")
+    assert "[base]" in graph and "[1:v]scale=w=216:h=-2" in graph
+    assert graph.endswith("[wmout]")
+    maps = [cmd[i + 1] for i, part in enumerate(cmd) if part == "-map"]
+    assert maps == ["[wmout]", "0:a:0?"]
+
+
+def test_render_one_plain_path_watermark_after_subtitles(tmp_path):
+    cues = [pipeline.Cue(0.0, 3.0, "halo dunia")]
+    commands = []
+
+    def fake_run(cmd, cwd=None, timeout=None):
+        commands.append(list(cmd))
+        return ""
+
+    (tmp_path / "wm.png").write_bytes(b"x")
+    with patch.object(pipeline, "_run", side_effect=fake_run):
+        pipeline._render_one(
+            str(tmp_path / "src.mp4"), MOMENT, cues, str(tmp_path), "clip-01.mp4",
+            reframe="black_bars", captions=True, **_wm_kwargs(tmp_path),
+        )
+    graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert graph.index("subtitles=") < graph.index("overlay=")
+
+
+def test_render_one_16_9_uses_landscape_output_width(tmp_path):
+    cmd = _capture(
+        tmp_path, reframe="blurred_fill", captions=False, aspect_ratio="16:9",
+        **_wm_kwargs(tmp_path),
+    )
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    # round(1920*0.2/2)*2 = 384
+    assert "scale=w=384:h=-2" in graph
+
+
+def test_render_one_two_speakers_graph_with_watermark(tmp_path):
+    with patch.object(pipeline.reframe_mod, "two_speaker_centers", return_value=None):
+        cmd = _capture(tmp_path, two_speakers=True, captions=False, **_wm_kwargs(tmp_path))
+
+    assert cmd.count("-i") == 2
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "vstack=inputs=2[vstacked]" in graph
+    assert "[vstacked][wm]overlay=" in graph
+    maps = [cmd[i + 1] for i, part in enumerate(cmd) if part == "-map"]
+    assert maps == ["[wmout]", "0:a:0?"]
+
+
+def test_render_one_facecam_graph_with_watermark(tmp_path):
+    with patch.object(pipeline, "_facecam_box_for", return_value=(10, 20, 300, 200)):
+        cmd = _capture(tmp_path, facecam=True, captions=False, **_wm_kwargs(tmp_path))
+
+    assert cmd.count("-i") == 2
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "[top][bot]vstack=inputs=2[v]" in graph
+    assert "[v][wm]overlay=" in graph
+    maps = [cmd[i + 1] for i, part in enumerate(cmd) if part == "-map"]
+    assert maps == ["[wmout]", "0:a:0?"]
+
+
+def test_render_one_facecam_fallback_still_gets_watermark(tmp_path):
+    with patch.object(pipeline, "_facecam_box_for", return_value=None):
+        cmd = _capture(
+            tmp_path, facecam=True, reframe="black_bars", captions=False,
+            **_wm_kwargs(tmp_path),
+        )
+    assert "-vf" not in cmd and cmd.count("-i") == 2
+    assert "[base][wm]overlay=" in cmd[cmd.index("-filter_complex") + 1]
+
+
+def test_render_one_corrupt_watermark_retries_without_watermark(tmp_path, caplog):
+    commands = []
+
+    def fake_run(cmd, cwd=None, timeout=None):
+        commands.append(list(cmd))
+        if "-filter_complex" in cmd:
+            raise RuntimeError("ffmpeg gagal: Invalid data found when processing input")
+        return ""
+
+    (tmp_path / "wm.png").write_bytes(b"not-a-png")
+    with patch.object(pipeline, "_run", side_effect=fake_run):
+        with caplog.at_level("WARNING"):
+            pipeline._render_one(
+                str(tmp_path / "src.mp4"), MOMENT, [], str(tmp_path), "clip-01.mp4",
+                reframe="black_bars", captions=False, **_wm_kwargs(tmp_path),
+            )
+
+    assert len(commands) == 2
+    assert "-filter_complex" in commands[0]
+    assert "-vf" in commands[1] and commands[1].count("-i") == 1
+    assert "tanpa watermark" in caplog.text.lower()
+
+
+# ---------- penerusan lewat _render_clip_sync ----------
+
+def _job(watermark):
+    return JobData(job_id="jobwm", url="https://youtu.be/x", watermark=watermark)
+
+
+def test_render_clip_sync_passes_resolved_watermark(tmp_path):
+    clips = tmp_path / "clips"
+    (clips / "watermarks").mkdir(parents=True)
+    (clips / "watermarks" / "w.png").write_bytes(b"x")
+    outdir = clips / "jobwm"
+    outdir.mkdir()
+    wm = Watermark("watermarks/w.png")
+    seen = {}
+
+    def fake_render_one(*args, **kwargs):
+        seen.update(kwargs)
+
+    with patch.object(pipeline, "_render_one", side_effect=fake_render_one):
+        pipeline._render_clip_sync(_job(wm), MOMENT, [], "src.mp4", "clip-01.mp4", str(outdir), 0.0)
+
+    assert seen["watermark"] == wm
+    assert seen["watermark_path"] == os.path.realpath(clips / "watermarks" / "w.png")
+
+
+def test_render_clip_sync_missing_watermark_renders_without(tmp_path, caplog):
+    outdir = tmp_path / "clips" / "jobwm"
+    outdir.mkdir(parents=True)
+    seen = {"called": 0}
+
+    def fake_render_one(*args, **kwargs):
+        seen["called"] += 1
+        seen.update(kwargs)
+
+    with patch.object(pipeline, "_render_one", side_effect=fake_render_one):
+        with caplog.at_level("WARNING"):
+            pipeline._render_clip_sync(
+                _job(Watermark("watermarks/gone.png")), MOMENT, [], "src.mp4",
+                "clip-01.mp4", str(outdir), 0.0,
+            )
+
+    assert seen["called"] == 1
+    assert "watermark" not in seen
+    assert "watermark" in caplog.text.lower()
+
+
+def test_render_clip_sync_no_watermark_adds_no_kwargs(tmp_path):
+    seen = {}
+    with patch.object(pipeline, "_render_one", side_effect=lambda *a, **k: seen.update(k)):
+        pipeline._render_clip_sync(
+            _job(None), MOMENT, [], "src.mp4", "clip-01.mp4", str(tmp_path / "jobwm"), 0.0
+        )
+    assert seen == {}
+
+
+# ---------- smoke ffmpeg nyata ----------
+
+needs_ffmpeg = pytest.mark.skipif(
+    not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg tidak ada"
+)
+
+
+def _probe_duration(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return float(out.strip())
+
+
+def _frame_rgb(path, at=1.0):
+    """Ambil satu frame (detik `at`) sebagai numpy RGB24 melalui ffmpeg."""
+    import numpy as np
+
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().split(",")
+    w, h = int(probe[0]), int(probe[1])
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{at}", "-i", path,
+         "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True, check=True,
+    ).stdout
+    return np.frombuffer(raw, dtype=np.uint8)[: w * h * 3].reshape(h, w, 3), w, h
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("ratio", ["9:16", "16:9"])
+def test_ffmpeg_smoke_renders_with_watermark(tmp_path, ratio):
+    src = tmp_path / "src.mp4"
+    png = tmp_path / "wm.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25:duration=4",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src)],
+        check=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "color=c=red:s=200x100,format=rgba", "-frames:v", "1", str(png)],
+        check=True,
+    )
+
+    wm = Watermark("wm.png", x=0.9, y=0.95, scale=0.2, opacity=1.0)
+    for name, kwargs in (
+        ("plain.mp4", {}),
+        ("out.mp4", {"watermark": wm, "watermark_path": str(png)}),
+    ):
+        pipeline._render_one(
+            str(src),
+            pipeline.llm.Moment(0.0, 3.0, "t"),
+            [],
+            str(tmp_path),
+            name,
+            reframe="black_bars",
+            captions=False,
+            aspect_ratio=ratio,
+            **kwargs,
+        )
+
+    out = tmp_path / "out.mp4"
+    assert out.is_file() and out.stat().st_size > 0
+    # Durasi output = durasi klip, bukan durasi input gambar.
+    assert _probe_duration(str(out)) == pytest.approx(3.0, abs=0.25)
+    assert _probe_duration(str(out)) == pytest.approx(
+        _probe_duration(str(tmp_path / "plain.mp4")), abs=0.05
+    )
+    # Audio tetap terpetakan.
+    streams = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert sorted(streams) == ["audio", "video"]
+
+    # Watermark benar-benar tercetak di posisi yang diminta (bukan cuma graph valid).
+    import numpy as np
+
+    with_wm, w, h = _frame_rgb(str(out))
+    without_wm, _, _ = _frame_rgb(str(tmp_path / "plain.mp4"))
+
+    wm_w = round(w * wm.scale / 2) * 2
+    wm_h = round(wm_w * 100 / 200)  # png 200x100
+    cx = min(max(w * wm.x, wm_w / 2), w - wm_w / 2)
+    cy = min(max(h * wm.y, wm_h / 2), h - wm_h / 2)
+    top, left = int(cy - wm_h / 2), int(cx - wm_w / 2)
+
+    inside = np.abs(
+        with_wm[top + 5 : top + wm_h - 5, left + 5 : left + wm_w - 5].astype(int)
+        - without_wm[top + 5 : top + wm_h - 5, left + 5 : left + wm_w - 5].astype(int)
+    ).mean()
+    outside = np.abs(with_wm.astype(int) - without_wm.astype(int)).mean()
+
+    assert inside > 20, f"watermark tidak terlihat (diff={inside:.1f})"
+    assert inside > outside * 5, f"watermark bocor keluar area (in={inside:.1f}, out={outside:.1f})"

@@ -24,6 +24,7 @@ from .models import (
     JobParams,
     JobResult,
     ManualRange,
+    Watermark,
     job_data_from_dict,
     to_max_source_sec,
 )
@@ -678,6 +679,61 @@ def _facecam_graph(
     return graph, label
 
 
+def _watermark_chain(width: int, height: int, wm: Watermark, input_label: str = "[1:v]") -> str:
+    """Rantai filter untuk gambar watermark: skala (lebar genap), RGBA, opacity."""
+    wm_w = max(2, round(width * wm.scale / 2) * 2)
+    return (
+        f"{input_label}scale=w={wm_w}:h=-2,format=rgba,"
+        f"colorchannelmixer=aa={wm.opacity:.3f}[wm]"
+    )
+
+
+def _watermark_overlay(label: str, wm: Watermark, out_label: str = "[wmout]") -> str:
+    """Overlay dengan PUSAT di (x,y) pecahan frame, dijepit agar tetap di dalam frame."""
+    x_expr = f"max(0,min(main_w-overlay_w,main_w*{wm.x:.4f}-overlay_w/2))"
+    y_expr = f"max(0,min(main_h-overlay_h,main_h*{wm.y:.4f}-overlay_h/2))"
+    return (
+        f"{label}[wm]overlay=x='{x_expr}':y='{y_expr}':shortest=1:format=auto{out_label}"
+    )
+
+
+def _with_watermark(
+    graph: List[str], label: str, width: int, height: int, wm: Watermark
+) -> tuple[List[str], str]:
+    """Tambahkan watermark (input ffmpeg ke-1) di atas label terakhir graph."""
+    return (
+        graph
+        + [_watermark_chain(width, height, wm), _watermark_overlay(label, wm)],
+        "[wmout]",
+    )
+
+
+def resolve_watermark_path(clips_root: str, wm: Optional[Watermark]) -> Optional[str]:
+    """Path absolut file watermark di bawah clips_root; None bila tidak aman/tidak ada.
+
+    Tidak pernah melempar: watermark bermasalah = render tanpa watermark.
+    """
+    if wm is None:
+        return None
+    try:
+        rel = wm.file_path.replace("\\", "/")
+        if os.path.isabs(rel) or rel.startswith("/") or ".." in rel.split("/"):
+            log.warning("watermark ditolak (path tidak aman): %r", wm.file_path)
+            return None
+        root = os.path.realpath(clips_root)
+        path = os.path.realpath(os.path.join(root, rel))
+        if os.path.commonpath([root, path]) != root or path == root:
+            log.warning("watermark ditolak (di luar folder clips): %r", wm.file_path)
+            return None
+        if not os.path.isfile(path) or not os.access(path, os.R_OK):
+            log.warning("file watermark tidak ditemukan/terbaca: %s", wm.file_path)
+            return None
+        return path
+    except Exception as exc:  # noqa: BLE001 - jangan pernah gagalkan job
+        log.warning("watermark dilewati karena error: %s", exc)
+        return None
+
+
 def _render_one(
     video: str,
     moment: llm.Moment,
@@ -690,7 +746,12 @@ def _render_one(
     facecam: bool = False,
     timeline_offset: float = 0.0,
     aspect_ratio: str = "9:16",
+    watermark: Optional[Watermark] = None,
+    watermark_path: Optional[str] = None,
 ) -> None:
+    if watermark is None or not watermark_path:
+        watermark = None
+        watermark_path = None
     width, height = OUTPUT_SIZES.get(str(aspect_ratio), OUTPUT_SIZES["9:16"])
     landscape = aspect_ratio == "16:9"
     if aspect_ratio != "9:16":
@@ -728,7 +789,7 @@ def _render_one(
             )
 
     duration = max(0.5, moment.end - moment.start)
-    cmd = [
+    head = [
         "ffmpeg",
         "-y",
         "-hide_banner",
@@ -741,32 +802,7 @@ def _render_one(
         "-i",
         video,
     ]
-
-    if two_speakers:
-        graph, label = _two_speaker_graph(
-            video, moment, ass_path if burn_captions else None
-        )
-        cmd += ["-filter_complex", ";".join(graph), "-map", label, "-map", "0:a:0?"]
-    else:
-        graph: Optional[tuple[List[str], str]] = None
-        if facecam:
-            try:
-                box = _facecam_box_for(video)
-            except Exception as exc:
-                log.warning("facecam: deteksi wajah gagal, fallback reframe biasa: %s", exc)
-                box = None
-            if box:
-                graph = _facecam_graph(box, ass_path if burn_captions else None)
-        if graph:
-            filters, label = graph
-            cmd += ["-filter_complex", ";".join(filters), "-map", label, "-map", "0:a:0?"]
-        else:
-            filters = _reframe_filters(reframe, video, moment, width, height, landscape)
-            if burn_captions:
-                filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
-            cmd += ["-vf", ",".join(filters), "-map", "0:v:0", "-map", "0:a:0?"]
-
-    cmd += [
+    tail = [
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -784,8 +820,66 @@ def _render_one(
         "-sn",
         out_path,
     ]
+    wm_input = (
+        ["-loop", "1", "-t", f"{duration:.3f}", "-i", watermark_path]
+        if watermark_path
+        else []
+    )
+
+    # Graph dasar dibangun sekali; dipakai ulang bila render dengan watermark
+    # gagal dan harus diulang tanpa watermark (file rusak tetap tak menggagalkan job).
+    base_graph: Optional[List[str]] = None
+    base_label = ""
+    vf: Optional[str] = None
+    if two_speakers:
+        base_graph, base_label = _two_speaker_graph(
+            video, moment, ass_path if burn_captions else None
+        )
+    else:
+        graph: Optional[tuple[List[str], str]] = None
+        if facecam:
+            try:
+                box = _facecam_box_for(video)
+            except Exception as exc:
+                log.warning("facecam: deteksi wajah gagal, fallback reframe biasa: %s", exc)
+                box = None
+            if box:
+                graph = _facecam_graph(box, ass_path if burn_captions else None)
+        if graph:
+            base_graph, base_label = graph
+        else:
+            filters = _reframe_filters(reframe, video, moment, width, height, landscape)
+            if burn_captions:
+                filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
+            vf = ",".join(filters)
+            base_graph, base_label = [f"[0:v]{vf}[base]"], "[base]"
+
+    def command(use_watermark: bool) -> List[str]:
+        if use_watermark and watermark:
+            chain, label = _with_watermark(base_graph, base_label, width, height, watermark)
+            return (
+                head + wm_input + [
+                    "-filter_complex", ";".join(chain), "-map", label, "-map", "0:a:0?"
+                ] + tail
+            )
+        if vf is not None:
+            # Tanpa watermark: pertahankan jalur -vf yang sudah ada (lebih ringan).
+            return head + ["-vf", vf, "-map", "0:v:0", "-map", "0:a:0?"] + tail
+        return (
+            head + [
+                "-filter_complex", ";".join(base_graph),
+                "-map", base_label, "-map", "0:a:0?",
+            ] + tail
+        )
+
     try:
-        _run(cmd)
+        try:
+            _run(command(True))
+        except Exception as exc:
+            if not watermark:
+                raise
+            log.warning("gagal membakar watermark (%s), render ulang tanpa watermark", exc)
+            _run(command(False))
     finally:
         if os.path.exists(ass_path):
             os.remove(ass_path)
@@ -825,6 +919,13 @@ def _render_clip_sync(
         if offset
         else moment
     )
+    extra: Dict[str, Any] = {}
+    if job.watermark:
+        # outdir = <clips_dir>/<job_id>; watermark relatif terhadap clips_dir.
+        wm_path = resolve_watermark_path(os.path.dirname(os.path.abspath(outdir)), job.watermark)
+        if wm_path:
+            extra = {"watermark": job.watermark, "watermark_path": wm_path}
+
     _render_one(
         src_video,
         render_moment,
@@ -837,6 +938,7 @@ def _render_clip_sync(
         job.facecam,
         offset,
         job.aspect_ratio,
+        **extra,
     )
     return ClipResult(
         title=moment.title,

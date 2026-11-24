@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react"
 import { toast } from "sonner"
 import { WorkspaceShell } from "@/components/chrome"
 import { SocialAccounts, type SocialPlatform } from "@/components/social-accounts"
+import { WatermarkManager } from "@/components/watermark-manager"
 import type { User } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { useT } from "@/lib/i18n"
@@ -51,7 +52,18 @@ function SettingsPage() {
         <h2 className="font-display text-3xl font-medium tracking-[-.045em]">{t.settings}</h2>
         <p className="mt-2 text-sm text-muted-foreground">{t.settingsIntro}</p>
       </header>
-      <SocialAccounts />
+      <div className="space-y-10">
+        <SocialAccounts />
+        <section aria-labelledby="watermark-library-heading">
+          <div className="mb-4">
+            <h3 id="watermark-library-heading" className="font-display text-lg font-medium tracking-[-.02em]">{t.watermarkLibrary}</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{t.watermarkLibraryIntro}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+            <WatermarkManager selectedId={null} onSelect={() => {}} />
+          </div>
+        </section>
+      </div>
     </div>
   </WorkspaceShell>
 }

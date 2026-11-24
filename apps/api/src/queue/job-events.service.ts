@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { StoredWatermark } from '../watermarks/watermark-helpers';
 import { Observable, Subject } from 'rxjs';
 
 export interface JobSnapshot {
@@ -18,6 +19,8 @@ export interface JobSnapshot {
   /** Batas pemindaian sumber (detik); null = durasi penuh. */
   maxSourceSec?: number | null;
   ranges?: unknown;
+  /** Snapshot watermark job: { watermarkId, filePath, x, y, scale, opacity } | null */
+  watermark?: StoredWatermark | null;
   status: string;
   stage: string | null;
   progress: number;

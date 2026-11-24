@@ -11,6 +11,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { PublishModule } from './publish/publish.module';
 import { SocialModule } from './social/social.module';
 import { SystemModule } from './system/system.module';
+import { WatermarksModule } from './watermarks/watermarks.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { SystemModule } from './system/system.module';
     PrismaModule,
     AuthModule,
     JobsModule,
+    WatermarksModule,
     PreviewsModule,
     ClipsModule,
     BriefsModule,

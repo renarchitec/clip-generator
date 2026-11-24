@@ -6,7 +6,17 @@ async function proxy({ request }: { request: Request }) {
   const headers = new Headers(request.headers)
   // Hop-by-hop headers must not be forwarded; undici rejects transfer-encoding outright.
   for (const name of ["host", "connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "content-length"]) headers.delete(name)
-  const response = await fetch(upstream, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, duplex: "half", redirect: "manual" } as RequestInit)
+  // Multipart (file upload) dikirim utuh lewat arrayBuffer: boundary tetap ada di
+  // content-type, dan body tidak bergantung pada stream yang sudah dikonsumsi.
+  // Untuk method lain, stream diteruskan langsung (duplex half).
+  const isMultipart = (request.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")
+  const noBody = ["GET", "HEAD"].includes(request.method)
+  const body = noBody
+    ? undefined
+    : isMultipart
+      ? new Uint8Array(await request.arrayBuffer())
+      : request.body
+  const response = await fetch(upstream, { method: request.method, headers, body, duplex: "half", redirect: "manual" } as RequestInit)
   const responseHeaders = new Headers(response.headers)
   responseHeaders.delete("connection")
   responseHeaders.delete("transfer-encoding")

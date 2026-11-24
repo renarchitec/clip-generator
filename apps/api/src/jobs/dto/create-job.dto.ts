@@ -1,3 +1,4 @@
+import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -117,4 +118,48 @@ export class CreateJobDto {
   @Min(MIN_SOURCE_SEC)
   @Max(MAX_SOURCE_SEC)
   maxSourceSec?: number | null;
+
+  /** Watermark dari pustaka pengguna; null = tanpa watermark. Divalidasi lewat zod. */
+  @IsOptional()
+  @IsWatermarkSettings()
+  watermark?: WatermarkSettingsDto | null;
 }
+
+/** Objek pengaturan watermark; prop didefinisikan agar tidak dihapus ValidationPipe(whitelist). */
+export class WatermarkSettingsDto {
+  watermarkId?: string;
+  x?: number;
+  y?: number;
+  scale?: number;
+  opacity?: number;
+}
+
+/** Izinkan null atau settings { watermarkId, x, y, scale, opacity }; nilai dibatasi zod di service. */
+export function IsWatermarkSettings(validationOptions?: ValidationOptions) {
+  return function (object: object, propertyName: string): void {
+    registerDecorator({
+      name: 'isWatermarkSettings',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown, _args: ValidationArguments) {
+          if (value === null) return true;
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+          const candidate = value as Record<string, unknown>;
+          return (
+            typeof candidate.watermarkId === 'string' &&
+            typeof candidate.x === 'number' &&
+            typeof candidate.y === 'number' &&
+            typeof candidate.scale === 'number' &&
+            typeof candidate.opacity === 'number'
+          );
+        },
+        defaultMessage() {
+          return 'watermark harus null atau { watermarkId, x, y, scale, opacity }.';
+        },
+      },
+    });
+  };
+}
+

@@ -29,6 +29,14 @@ import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
 import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
 import { CreateJobDto } from './dto/create-job.dto';
 import { assertAllowedUrl, normalizeDescription } from './validation';
+import { WatermarksService } from '../watermarks/watermarks.service';
+import type {
+  StoredWatermark,
+  WatermarkJobPayload,
+} from '../watermarks/watermark-helpers';
+
+/** JobData shared belum memuat watermark; payload worker memakai filePath + posisi. */
+type JobDataWithWatermark = JobData & { watermark: WatermarkJobPayload | null };
 
 @Injectable()
 export class JobsService {
@@ -36,6 +44,7 @@ export class JobsService {
     private readonly prisma: PrismaService,
     private readonly jobEvents: JobEventsService,
     private readonly config: AppConfig,
+    private readonly watermarks: WatermarksService,
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
   ) {}
 
@@ -55,6 +64,8 @@ export class JobsService {
       aspectRatio === '9:16' && !twoSpeakers ? (dto.facecam ?? false) : false;
     // Batas pemindaian sumber: null = durasi penuh; hanya dipakai mode auto.
     const maxSourceSec = dto.mode === 'auto' ? (dto.maxSourceSec ?? null) : null;
+    // Cek kepemilikan + ambil snapshot path; null bila tidak memakai watermark.
+    const storedWatermark = await this.watermarks.resolveSettings(dto.watermark, userId);
 
     const job = await this.prisma.job.create({
       data: {
@@ -71,11 +82,24 @@ export class JobsService {
         facecam,
         captionLanguage,
         ranges: ranges as unknown as Prisma.InputJsonValue,
+        watermark: storedWatermark
+          ? (storedWatermark as unknown as Prisma.InputJsonValue)
+          : Prisma.DbNull,
         userId,
       },
     });
 
-    const data: JobData = {
+    const watermark: WatermarkJobPayload | null = storedWatermark
+      ? {
+          filePath: storedWatermark.filePath,
+          x: storedWatermark.x,
+          y: storedWatermark.y,
+          scale: storedWatermark.scale,
+          opacity: storedWatermark.opacity,
+        }
+      : null;
+
+    const data: JobDataWithWatermark = {
       jobId: job.id,
       url,
       mode: dto.mode,
@@ -92,6 +116,7 @@ export class JobsService {
         targetDurationSec: dto.targetDurationSec,
       },
       ranges,
+      watermark,
     };
 
     try {
@@ -232,6 +257,7 @@ export class JobsService {
     dto.ranges = (old.ranges as ManualRange[] | null) ?? undefined;
     // maxSourceSec hanya relevan untuk mode auto; null = durasi penuh.
     dto.maxSourceSec = old.mode === 'auto' ? old.maxSourceSec : null;
+    dto.watermark = (old.watermark as StoredWatermark | null) ?? null;
 
     return this.create(dto, userId);
   }
@@ -331,6 +357,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     targetDurationSec: job.targetDurationSec,
     maxSourceSec: job.maxSourceSec ?? null,
     ranges: job.ranges ?? null,
+    watermark: (job.watermark as StoredWatermark | null) ?? null,
     status: job.status,
     stage: job.stage,
     progress: job.progress,
