@@ -130,6 +130,16 @@ export interface CaptionJobResult {
   hashtags: string[];
 }
 
+/** Payload job `brief` pada antrean `captions` (enhance brief). */
+export interface BriefJobData {
+  brief: string;
+}
+
+/** Hasil job `brief` dan body respons POST /api/briefs/expand. */
+export interface BriefJobResult {
+  brief: string;
+}
+
 /** Body POST /api/clips/:id/caption. */
 export interface RegenerateCaptionRequest {
   language: CaptionLanguage;

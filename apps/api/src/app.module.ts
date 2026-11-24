@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
+import { BriefsModule } from './briefs/briefs.module';
 import { ClipsModule } from './clips/clips.module';
 import { AppConfigModule } from './config/app-config.module';
 import { validateEnv } from './config/env.validation';
@@ -20,6 +21,7 @@ import { SystemModule } from './system/system.module';
     JobsModule,
     PreviewsModule,
     ClipsModule,
+    BriefsModule,
     SocialModule,
     PublishModule,
     SystemModule,

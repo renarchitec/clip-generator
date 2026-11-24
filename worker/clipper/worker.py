@@ -133,10 +133,19 @@ async def handle_preview_job(job, token: str | None = None, redis_client: redis.
 
 
 async def handle_caption_job(job, token: str | None = None, redis_client: redis.Redis | None = None):
-    """Regenerasi caption satu klip. Gagal apa pun -> job failed (API membalas 503)."""
+    """Job antrean captions: `brief` memperluas brief, lainnya regenerasi caption.
+
+    Gagal apa pun -> job failed (API membalas 503).
+    """
     job_id = getattr(job, "id", None) or "caption"
+    is_brief = getattr(job, "name", None) == "brief"
     try:
-        caption = await asyncio.to_thread(llm.regenerate_caption, getattr(job, "data", None) or {})
+        if is_brief:
+            brief = await asyncio.to_thread(llm.expand_brief, getattr(job, "data", None) or {})
+            result = {"brief": brief}
+        else:
+            caption = await asyncio.to_thread(llm.regenerate_caption, getattr(job, "data", None) or {})
+            result = {"caption": caption.caption, "hashtags": list(caption.hashtags)}
     except llm.CaptionUnavailable as exc:
         log.warning("caption job %s gagal: %s", job_id, exc)
         raise RuntimeError("caption_unavailable") from None
@@ -146,7 +155,7 @@ async def handle_caption_job(job, token: str | None = None, redis_client: redis.
     finally:
         await write_llm_status(redis_client)
     log.info("caption job %s selesai", job_id)
-    return {"caption": caption.caption, "hashtags": list(caption.hashtags)}
+    return result
 
 
 async def main() -> None:
