@@ -97,9 +97,11 @@ function PublishBadge({ publications }: { publications?: ClipPublication[] }) {
   const busy = publications.some((item) => isActivePublication(item.status))
   const published = publications.some((item) => item.status === "published")
   if (!busy && !published) return null
-  const tiktokOnly = publications.every((item) => item.platform === "tiktok")
-  const label = tiktokOnly ? (busy ? t.publishingTo : t.publishedOn).replace("{platform}", "TikTok") : busy ? t.publishingBadge : t.publishedBadge
+  const shown = publications.filter((item) => item.status === "published" || isActivePublication(item.status))
+  const hasYouTube = shown.some((item) => item.platform === "youtube"), hasTikTok = shown.some((item) => item.platform === "tiktok")
+  const single = hasYouTube !== hasTikTok ? (hasTikTok ? "TikTok" : "YouTube") : null
+  const label = single ? (busy ? t.publishingTo : t.publishedOn).replace("{platform}", single) : busy ? t.publishingBadge : t.publishedBadge
   return <span title={label} className="inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 pl-1 pr-1.5 text-white shadow-sm backdrop-blur-sm sm:bottom-20">
-    {tiktokOnly ? <TikTokMark className="size-3.5"/> : <YouTubeMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
+    {hasYouTube && <YouTubeMark className="size-3.5"/>}{hasTikTok && <TikTokMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
   </span>
 }
