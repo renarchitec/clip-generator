@@ -44,6 +44,14 @@ test('rencana chunk TikTok: floor(size/chunk), sisa di chunk terakhir', () => {
   assert.equal(tiktokChunkRange(plan, -1), null);
 });
 
+test('file 10-20 MiB tetap satu chunk dengan chunk_size = video_size', () => {
+  assert.deepEqual(planTiktokChunks(11967162), {
+    videoSize: 11967162,
+    chunkSize: 11967162,
+    totalChunkCount: 1,
+  });
+});
+
 test('chunk size maks 64 MiB dan total_chunk_count maks 1000', () => {
   const plan = planTiktokChunks(100 * MiB)!;
   assert.ok(plan.chunkSize >= 5 * MiB && plan.chunkSize <= 64 * MiB);

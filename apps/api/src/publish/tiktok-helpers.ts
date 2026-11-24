@@ -47,6 +47,10 @@ export function planTiktokChunks(
     if (chunkSize > TIKTOK_MAX_CHUNK) return null;
   }
   const totalChunkCount = Math.max(1, Math.floor(size / chunkSize));
+  // TikTok menolak 1 chunk bila chunk_size != video_size (invalid_params).
+  if (totalChunkCount === 1) {
+    return size > TIKTOK_MAX_CHUNK ? null : { videoSize: size, chunkSize: size, totalChunkCount: 1 };
+  }
   const lastChunk = size - chunkSize * (totalChunkCount - 1);
   if (lastChunk > TIKTOK_MAX_LAST_CHUNK) return null;
   return { videoSize: size, chunkSize, totalChunkCount };
@@ -203,6 +207,7 @@ export function mapTiktokApiError(code: string, httpStatus = 0): string {
       return 'TikTok could not verify the upload source';
     case 'invalid_file_upload':
     case 'invalid_param':
+    case 'invalid_params':
       return 'TikTok rejected the upload request';
     case 'network':
       return 'Could not reach TikTok, retry later';
@@ -212,5 +217,6 @@ export function mapTiktokApiError(code: string, httpStatus = 0): string {
   if (httpStatus === 401) return TIKTOK_RECONNECT_MESSAGE;
   if (httpStatus === 429) return 'Too many requests to TikTok, try again in a minute';
   if (httpStatus >= 500) return 'TikTok is temporarily unavailable, retry later';
-  return 'TikTok publishing failed';
+  const safe = code.replace(/[^a-z0-9_]/gi, '').slice(0, 60);
+  return safe ? `TikTok publishing failed (${safe})` : 'TikTok publishing failed';
 }
