@@ -111,7 +111,7 @@ function Dashboard() {
   const [facecam, setFacecam] = useState(draft?.facecam ?? false)
   const [aspectRatio, setAspectRatio] = useState<Job["aspectRatio"]>(draft?.aspectRatio ?? "9:16")
   const [maxSourceChoice, setMaxSourceChoice] = useState(draft?.maxSourceSec === null || draft?.maxSourceSec === undefined ? "full" : [600, 1200, 1800, 3600, 5400].includes(draft.maxSourceSec) ? String(draft.maxSourceSec) : "custom")
-  const [reviewFirst, setReviewFirst] = useState(draft?.reviewFirst ?? false)
+  const [reviewFirst, setReviewFirst] = useState(draft?.reviewFirst ?? true)
   const [previewId, setPreviewId] = useState<string | null>(draft?.previewId ?? null)
   const [previewExpired, setPreviewExpired] = useState(false)
   const [selectedCandidates, setSelectedCandidates] = useState<number[]>(draft?.selectedCandidates ?? [])
