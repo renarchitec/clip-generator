@@ -225,6 +225,12 @@ function JobDetail() {
                   </Field>
                 </div>
 
+                <Field>
+                  <FieldTitle>{t.captionLanguage}</FieldTitle>
+                  <div className="mt-2 flex min-h-11 items-center rounded-md border border-border bg-muted/40 px-3 text-sm text-foreground">{t.captionLanguageOptions[snapshot.captionLanguage ?? "auto"] ?? t.captionLanguageOptions.auto}</div>
+                  <FieldDescription>{t.captionLanguageHint}</FieldDescription>
+                </Field>
+
                 {snapshot.description && <Field>
                   <FieldTitle>{t.description}</FieldTitle>
                   <p className="mt-2 whitespace-pre-wrap rounded-md border border-border/80 bg-secondary/25 p-3 text-sm leading-relaxed text-muted-foreground">{snapshot.description}</p>

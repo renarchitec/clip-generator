@@ -26,3 +26,13 @@ export function cancelKey(jobId: string): string {
  * Harus sama dengan PUBLISH_QUEUE_NAME di packages/shared/src/index.ts.
  */
 export const PUBLISH_QUEUE_NAME = 'publish';
+
+/**
+ * Antrean regenerasi caption satu klip; dikonsumsi worker Python (kredensial LLM
+ * hanya ada di worker). Harus sama dengan CAPTION_QUEUE_NAME di
+ * packages/shared/src/index.ts dan worker/clipper/models.py.
+ */
+export const CAPTION_QUEUE_NAME = 'captions';
+
+/** Batas tunggu hasil regenerasi caption sebelum API membalas 503 (ms). */
+export const CAPTION_WAIT_TIMEOUT_MS = 60_000;

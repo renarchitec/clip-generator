@@ -24,6 +24,9 @@ CONCURRENCY = 1
 # Antrean preview punya worker sendiri supaya tidak menunggu render.
 PREVIEW_QUEUE_NAME = models.PREVIEW_QUEUE_NAME
 PREVIEW_CONCURRENCY = 2
+# Regenerasi caption satu klip (hanya LLM, cepat).
+CAPTION_QUEUE_NAME = models.CAPTION_QUEUE_NAME
+CAPTION_CONCURRENCY = 2
 
 # Kunci status LLM untuk UI. Harus sama dengan apps/api/src/system/llm-status.constants.ts.
 LLM_STATUS_KEY = "worker:status:llm"
@@ -125,6 +128,23 @@ async def handle_preview_job(job, token: str | None = None, redis_client: redis.
         await write_llm_status(redis_client)
 
 
+async def handle_caption_job(job, token: str | None = None, redis_client: redis.Redis | None = None):
+    """Regenerasi caption satu klip. Gagal apa pun -> job failed (API membalas 503)."""
+    job_id = getattr(job, "id", None) or "caption"
+    try:
+        caption = await asyncio.to_thread(llm.regenerate_caption, getattr(job, "data", None) or {})
+    except llm.CaptionUnavailable as exc:
+        log.warning("caption job %s gagal: %s", job_id, exc)
+        raise RuntimeError("caption_unavailable") from None
+    except Exception as exc:  # noqa: BLE001 - input rusak tidak boleh menjatuhkan worker
+        log.warning("caption job %s error tak terduga: %s", job_id, exc.__class__.__name__)
+        raise RuntimeError("caption_unavailable") from None
+    finally:
+        await write_llm_status(redis_client)
+    log.info("caption job %s selesai", job_id)
+    return {"caption": caption.caption, "hashtags": list(caption.hashtags)}
+
+
 async def main() -> None:
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
@@ -169,6 +189,18 @@ async def main() -> None:
         },
     )
 
+    async def _handle_caption(job, token: str | None = None):
+        return await handle_caption_job(job, token, redis_client=redis_client)
+
+    caption_worker = Worker(
+        CAPTION_QUEUE_NAME,
+        _handle_caption,
+        {
+            "connection": redis_client,
+            "concurrency": CAPTION_CONCURRENCY,
+        },
+    )
+
     async def _status_loop():
         while True:
             await write_llm_status(redis_client)
@@ -190,8 +222,9 @@ async def main() -> None:
             # Windows tidak mendukung add_signal_handler.
             signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
 
-    log.info("worker menunggu job di antrean %s (concurrency=%s) dan %s (concurrency=%s)",
-             QUEUE_NAME, CONCURRENCY, PREVIEW_QUEUE_NAME, PREVIEW_CONCURRENCY)
+    log.info("worker menunggu job di antrean %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s)",
+             QUEUE_NAME, CONCURRENCY, PREVIEW_QUEUE_NAME, PREVIEW_CONCURRENCY,
+             CAPTION_QUEUE_NAME, CAPTION_CONCURRENCY)
     try:
         await stop.wait()
     finally:
@@ -204,6 +237,7 @@ async def main() -> None:
         await asyncio.gather(
             render_worker.close(),
             preview_worker.close(),
+            caption_worker.close(),
             return_exceptions=True,
         )
 

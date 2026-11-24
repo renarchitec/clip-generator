@@ -14,6 +14,23 @@ from typing import Any, Dict, List, Literal, Mapping, Optional
 QUEUE_NAME = "clip-jobs"
 # Antrean pratinjau momen; harus sama dengan PREVIEW_QUEUE_NAME di versi TypeScript.
 PREVIEW_QUEUE_NAME = "previews"
+# Antrean regenerasi caption satu klip; harus sama dengan CAPTION_QUEUE_NAME.
+CAPTION_QUEUE_NAME = "captions"
+
+# Bahasa caption sosial; harus sama dengan CAPTION_LANGUAGES.
+CAPTION_LANGUAGES = ("auto", "id", "en")
+DEFAULT_CAPTION_LANGUAGE = "auto"
+CaptionLanguage = Literal["auto", "id", "en"]
+# Batas cuplikan transkrip per klip; harus sama dengan CLIP_TRANSCRIPT_MAX.
+CLIP_TRANSCRIPT_MAX = 2000
+
+
+def to_caption_language(value: Any) -> str:
+    """Parse toleran: nilai tidak dikenal/hilang -> 'auto'."""
+    if not isinstance(value, str):
+        return DEFAULT_CAPTION_LANGUAGE
+    lowered = value.strip().lower()
+    return lowered if lowered in CAPTION_LANGUAGES else DEFAULT_CAPTION_LANGUAGE
 
 # Kunci Redis sinyal pembatalan; harus sama dengan cancelKey() di
 # apps/api/src/queue/queue.constants.ts.
@@ -167,6 +184,8 @@ class JobData:
     # hanya berlaku untuk 9:16 dan saat twoSpeakers false (twoSpeakers menang).
     facecam: bool = DEFAULT_FACECAM
     aspect_ratio: AspectRatio = DEFAULT_ASPECT
+    # Bahasa caption sosial: auto (ikut transkrip) / id / en.
+    caption_language: CaptionLanguage = DEFAULT_CAPTION_LANGUAGE  # type: ignore[assignment]
     # Batas pemindaian sumber (detik); None = durasi penuh. Dipakai mode auto
     # dan preview; mode manual mengabaikannya (rentang sudah eksplisit).
     max_source_sec: Optional[int] = None
@@ -184,6 +203,7 @@ class JobData:
             "twoSpeakers": self.two_speakers,
             "facecam": self.facecam,
             "aspectRatio": self.aspect_ratio,
+            "captionLanguage": self.caption_language,
             "maxSourceSec": self.max_source_sec,
             "description": self.description,
             "params": self.params.to_dict(),
@@ -252,6 +272,9 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         two_speakers=two_speakers,
         facecam=facecam,
         aspect_ratio=aspect_ratio,  # type: ignore[arg-type]
+        caption_language=to_caption_language(
+            _first(data, "captionLanguage", "caption_language")
+        ),  # type: ignore[arg-type]
         max_source_sec=max_source_sec,
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
@@ -283,6 +306,8 @@ class ClipResult:
     file: str
     caption: Optional[str] = None
     hashtags: List[str] = field(default_factory=list)
+    # Cuplikan transkrip klip (<= CLIP_TRANSCRIPT_MAX karakter).
+    transcript: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -295,6 +320,9 @@ class ClipResult:
             payload["caption"] = self.caption
         if self.hashtags:
             payload["hashtags"] = list(self.hashtags)
+        transcript = (self.transcript or "").strip()[:CLIP_TRANSCRIPT_MAX].strip()
+        if transcript:
+            payload["transcript"] = transcript
         return payload
 
 

@@ -23,6 +23,7 @@ const sample: ReviewDraft = {
   clipCount: 3,
   duration: 45,
   description: "highlights",
+  captionLanguage: "id",
   ranges: [{ start: "", end: "" }],
   reviewFirst: true,
   previewId: "prev-123",
@@ -41,6 +42,8 @@ assert.equal(loadReviewDraft()?.twoSpeakers, false)
 assert.equal(loadReviewDraft()?.facecam, false)
 assert.equal(loadReviewDraft()?.aspectRatio, "9:16")
 assert.equal(loadReviewDraft()?.maxSourceSec, null)
+store.set("clipper-review-draft", JSON.stringify({ ...sample, captionLanguage: "fr" }))
+assert.equal(loadReviewDraft()?.captionLanguage, "auto")
 
 // 2. Clear
 clearReviewDraft()

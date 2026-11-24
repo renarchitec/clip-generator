@@ -26,6 +26,17 @@ export const ASPECT_RATIOS = ['9:16', '1:1', '16:9'] as const;
 export type AspectRatio = (typeof ASPECT_RATIOS)[number];
 export const DEFAULT_ASPECT: AspectRatio = '9:16';
 
+/** Antrean regenerasi caption sosial satu klip (dikonsumsi worker Python yang memegang kredensial LLM). */
+export const CAPTION_QUEUE_NAME = 'captions';
+
+/** Bahasa caption sosial: 'auto' = sama dengan bahasa transkrip (default), 'id' = Bahasa Indonesia, 'en' = English. */
+export const CAPTION_LANGUAGES = ['auto', 'id', 'en'] as const;
+export type CaptionLanguage = (typeof CAPTION_LANGUAGES)[number];
+export const DEFAULT_CAPTION_LANGUAGE: CaptionLanguage = 'auto';
+
+/** Batas panjang cuplikan transkrip per klip yang disimpan. */
+export const CLIP_TRANSCRIPT_MAX = 2000;
+
 /** Batas pemindaian sumber (detik): null/absent = durasi penuh (default). */
 export const MIN_SOURCE_SEC = 60;
 export const MAX_SOURCE_SEC = 36000;
@@ -59,6 +70,8 @@ export interface JobData {
   facecam: boolean;
   /** rasio output klip; default 9:16; 16:9 mengabaikan reframe */
   aspectRatio: AspectRatio;
+  /** bahasa caption sosial; default 'auto' (worker memakai 'auto' bila absent) */
+  captionLanguage: CaptionLanguage;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
   description?: string | null;
   /**
@@ -89,6 +102,30 @@ export interface ClipResult {
   caption?: string;
   /** Dihasilkan LLM worker; tidak ada bila LLM tidak tersedia. */
   hashtags?: string[];
+  /** Cuplikan transkrip klip (≤ 2000 karakter); tidak ada bila kosong. */
+  transcript?: string;
+}
+
+/** Payload job BullMQ antrean `captions` (regenerasi caption satu klip). */
+export interface CaptionJobData {
+  clipId: string;
+  title: string;
+  /** transkrip klip; null untuk klip lama */
+  transcript: string | null;
+  currentCaption: string | null;
+  description: string | null;
+  language: CaptionLanguage;
+}
+
+/** Hasil job antrean `captions`; juga body respons POST /api/clips/:id/caption. */
+export interface CaptionJobResult {
+  caption: string;
+  hashtags: string[];
+}
+
+/** Body POST /api/clips/:id/caption. */
+export interface RegenerateCaptionRequest {
+  language: CaptionLanguage;
 }
 
 export interface JobResult {

@@ -10,11 +10,16 @@ import { Queue } from 'bullmq';
 import { unlink } from 'node:fs/promises';
 import type {
   AspectRatio,
+  CaptionLanguage,
   JobData,
   ManualRange,
   ReframeMode,
 } from '@clipper/shared';
-import { DEFAULT_ASPECT, DEFAULT_REFRAME } from '@clipper/shared';
+import {
+  DEFAULT_ASPECT,
+  DEFAULT_CAPTION_LANGUAGE,
+  DEFAULT_REFRAME,
+} from '@clipper/shared';
 import { resolveClipPath } from '../clips/clip-path';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { latestPerAccount } from '../publish/publish-helpers';
@@ -42,6 +47,7 @@ export class JobsService {
     const reframe = dto.reframe ?? DEFAULT_REFRAME;
     const captions = dto.captions ?? true;
     const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
+    const captionLanguage = dto.captionLanguage ?? DEFAULT_CAPTION_LANGUAGE;
     // twoSpeakers hanya berlaku untuk 9:16; dinormalisasi false untuk 1:1/16:9.
     const twoSpeakers = aspectRatio === '9:16' ? (dto.twoSpeakers ?? false) : false;
     // facecam eksklusif dengan twoSpeakers; hanya berlaku untuk 9:16.
@@ -63,6 +69,7 @@ export class JobsService {
         targetDurationSec: dto.targetDurationSec,
         maxSourceSec,
         facecam,
+        captionLanguage,
         ranges: ranges as unknown as Prisma.InputJsonValue,
         userId,
       },
@@ -78,6 +85,7 @@ export class JobsService {
       facecam,
       aspectRatio,
       description,
+      captionLanguage,
       maxSourceSec,
       params: {
         clipCount: dto.clipCount,
@@ -219,6 +227,7 @@ export class JobsService {
     dto.twoSpeakers = old.twoSpeakers;
     dto.facecam = old.facecam;
     dto.aspectRatio = old.aspectRatio as AspectRatio;
+    dto.captionLanguage = old.captionLanguage as CaptionLanguage;
     dto.description = old.description ?? undefined;
     dto.ranges = (old.ranges as ManualRange[] | null) ?? undefined;
     // maxSourceSec hanya relevan untuk mode auto; null = durasi penuh.
@@ -317,6 +326,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     twoSpeakers: job.twoSpeakers,
     facecam: job.facecam,
     aspectRatio: job.aspectRatio,
+    captionLanguage: job.captionLanguage,
     clipCount: job.clipCount,
     targetDurationSec: job.targetDurationSec,
     maxSourceSec: job.maxSourceSec ?? null,

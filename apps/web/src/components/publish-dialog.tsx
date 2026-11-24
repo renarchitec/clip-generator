@@ -1,7 +1,7 @@
 import { useForm } from "@tanstack/react-form"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Check, CircleAlert, ExternalLink, LoaderCircle, RotateCcw, TriangleAlert, X } from "lucide-react"
+import { Check, CircleAlert, ExternalLink, LoaderCircle, RotateCcw, Sparkles, TriangleAlert, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { YouTubeMark, type SocialAccount, type SocialPlatform } from "@/components/social-accounts"
-import { api } from "@/lib/api"
+import { api, CAPTION_LANGUAGES, isCaptionLanguage, type CaptionLanguage } from "@/lib/api"
 import { relativeAge } from "@/lib/format"
 import { useLanguage, useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
@@ -34,9 +34,15 @@ export const publicationsKey = (clipId: string) => ["clips", clipId, "publicatio
 
 type Values = { accountIds: string[]; title: string; caption: string; privacy: Privacy; madeForKids: boolean }
 
+type CaptionResponse = { caption: string; hashtags: string[] }
+
+function formatCaption(caption: string | null | undefined, hashtags: string[] | undefined) {
+  const tags = (hashtags ?? []).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean).map((tag) => `#${tag}`).join(" ")
+  return [caption?.trim(), tags].filter(Boolean).join("\n\n")
+}
+
 function defaultCaption(clip: PublishableClip) {
-  const tags = (clip.hashtags ?? []).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean).map((tag) => `#${tag}`).join(" ")
-  return [clip.caption?.trim(), tags].filter(Boolean).join("\n\n")
+  return formatCaption(clip.caption, clip.hashtags)
 }
 
 function Counter({ value, max, id }: { value: number; max: number; id: string }) {
@@ -48,7 +54,7 @@ function Counter({ value, max, id }: { value: number; max: number; id: string })
 export function PublishDialog({ clip, open, onOpenChange }: { clip: PublishableClip; open: boolean; onOpenChange: (open: boolean) => void }) {
   const t = useT()
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-w-xl gap-0 p-0 sm:p-0">
+    <DialogContent className="max-w-xl gap-0 p-0 sm:p-0" onInteractOutside={(event) => { if ((event.target as Element | null)?.closest?.("[data-sonner-toaster]")) event.preventDefault() }}>
       <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
         <div className="min-w-0"><DialogTitle className="font-display text-lg font-medium tracking-[-.02em]">{t.publishClip}</DialogTitle><DialogDescription className="mt-1 truncate">{clip.title || t.clip}</DialogDescription></div>
         <DialogClose asChild><Button type="button" variant="ghost" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}><X className="size-4"/></Button></DialogClose>
@@ -104,6 +110,20 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
   const form = useForm({
     defaultValues: { accountIds: [], title: (clip.title ?? "").slice(0, TITLE_MAX), caption: defaultCaption(clip), privacy: "public", madeForKids: false } as Values,
     onSubmit: ({ value }) => { setSubmitError(""); publish.mutate(value) },
+  })
+  const [captionLanguage, setCaptionLanguage] = useState<CaptionLanguage>("auto")
+  const regenerate = useMutation({
+    mutationFn: (language: CaptionLanguage) => api<CaptionResponse>(`/clips/${clip.id}/caption`, { method: "POST", body: JSON.stringify({ language }) }),
+    onSuccess: (result) => {
+      const previous = form.getFieldValue("caption")
+      const next = formatCaption(result.caption, result.hashtags)
+      form.setFieldValue("caption", next)
+      void client.invalidateQueries({ queryKey: ["clips"] })
+      void client.invalidateQueries({ queryKey: ["jobs"] })
+      if (previous === next) return
+      toast.success(t.captionRegenerated, { action: { label: t.captionUndo, onClick: () => form.setFieldValue("caption", previous) } })
+    },
+    onError: (error) => toast.error((error as Error & { status?: number }).status === 503 ? t.captionUnavailable : t.captionFailed),
   })
   const prefilled = useRef(false)
   useEffect(() => {
@@ -168,8 +188,19 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
         <form.Field name="caption" validators={{ onChange: ({ value }) => value.length > CAPTION_MAX ? t.publishCaptionTooLong : undefined }}>
           {(field) => { const invalid = field.state.meta.isTouched && !field.state.meta.isValid; return <Field data-invalid={invalid}>
             <div className="flex items-center gap-2"><FieldLabel htmlFor="publish-caption">{t.publishCaptionLabel}</FieldLabel><Counter id="publish-caption-count" value={field.state.value.length} max={CAPTION_MAX}/></div>
-            <textarea id="publish-caption" name="caption" rows={5} value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} onBlur={field.handleBlur} aria-invalid={invalid} aria-describedby="publish-caption-count" className="field-sizing-content max-h-64 min-h-28 w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-base leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30"/>
+            <textarea id="publish-caption" name="caption" rows={5} value={field.state.value} onChange={(event) => field.handleChange(event.target.value)} onBlur={field.handleBlur} aria-invalid={invalid} aria-busy={regenerate.isPending} aria-describedby="publish-caption-count" readOnly={regenerate.isPending} className="field-sizing-content read-only:opacity-60 max-h-64 min-h-28 w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-base leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30"/>
             {invalid && <FieldDescription className="text-destructive">{field.state.meta.errors[0]}</FieldDescription>}
+            <div role="group" aria-label={t.regenerateCaption} className="flex flex-wrap items-center justify-end gap-2">
+              <span className="mr-auto text-xs text-muted-foreground">{t.regenerateCaption}</span>
+              <Select value={captionLanguage} disabled={regenerate.isPending} onValueChange={(value) => { if (isCaptionLanguage(value)) setCaptionLanguage(value) }}>
+                <SelectTrigger className="h-8 w-auto min-w-28 text-xs" aria-label={t.captionLanguage}><SelectValue/></SelectTrigger>
+                <SelectContent position="popper" align="end">{CAPTION_LANGUAGES.map((option) => <SelectItem key={option} value={option}>{t.captionLanguageShort[option]}</SelectItem>)}</SelectContent>
+              </Select>
+              <Button type="button" variant="outline" size="sm" className="h-8 min-w-28 px-3 text-xs" aria-busy={regenerate.isPending} disabled={regenerate.isPending || publish.isPending} onClick={() => regenerate.mutate(captionLanguage)}>
+                {regenerate.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none"/> : <Sparkles aria-hidden="true" className="size-3.5"/>}
+                <span aria-live="polite">{regenerate.isPending ? t.captionWriting : t.regenerateCaptionAction}</span>
+              </Button>
+            </div>
           </Field> }}
         </form.Field>
 

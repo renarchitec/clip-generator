@@ -11,6 +11,8 @@ export interface JobSnapshot {
   twoSpeakers: boolean;
   facecam: boolean;
   aspectRatio: string;
+  /** Bahasa caption sosial: auto | id | en. */
+  captionLanguage: string;
   clipCount?: number;
   targetDurationSec?: number;
   /** Batas pemindaian sumber (detik); null = durasi penuh. */

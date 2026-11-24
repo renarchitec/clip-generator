@@ -1,20 +1,27 @@
 import {
+  Body,
   Controller,
   Delete,
   Get,
   Headers,
   HttpCode,
   Param,
+  Post,
   Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { ClipCaptionsService } from './clip-captions.service';
 import { ClipsService } from './clips.service';
+import { RegenerateCaptionDto } from './dto/regenerate-caption.dto';
 
 @Controller('clips')
 export class ClipsController {
-  constructor(private readonly clips: ClipsService) {}
+  constructor(
+    private readonly clips: ClipsService,
+    private readonly captions: ClipCaptionsService,
+  ) {}
 
   /** Harus di atas rute :id agar tidak tertangkap sebagai id clip. */
   @Get('recent')
@@ -43,6 +50,17 @@ export class ClipsController {
     @CurrentUser() user: { id: string },
   ) {
     return this.clips.download(id, res, user.id);
+  }
+
+  /** Regenerasi caption sosial dalam bahasa pilihan; 503 caption_unavailable bila LLM gagal. */
+  @Post(':id/caption')
+  @HttpCode(200)
+  regenerateCaption(
+    @Param('id') id: string,
+    @Body() dto: RegenerateCaptionDto,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.captions.regenerate(id, dto.language, user.id);
   }
 
   @Delete(':id')

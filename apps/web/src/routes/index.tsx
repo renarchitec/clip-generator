@@ -10,7 +10,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { api, type Job, type JobPreview, type JobSnapshot, type User } from "@/lib/api"
+import { api, CAPTION_LANGUAGES, isCaptionLanguage, type CaptionLanguage, type Job, type JobPreview, type JobSnapshot, type User } from "@/lib/api"
 import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
@@ -32,7 +32,7 @@ export const Route = createFileRoute("/")({
 
 type ClipRange = { start: string; end: string }
 type RangePayload = { start: number; end: number; title?: string; reason?: string }
-type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[] }
+type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[] }
 
 function formatMomentTime(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
@@ -119,6 +119,7 @@ function Dashboard() {
   const [selectedCueEnd, setSelectedCueEnd] = useState<number | null>(draft?.selectedCueEnd ?? null)
   const [cueRanges, setCueRanges] = useState<{ start: number; end: number }[]>(draft?.cueRanges ?? [])
   const [description, setDescription] = useState(draft?.description ?? "")
+  const [captionLanguage, setCaptionLanguage] = useState<CaptionLanguage>(draft?.captionLanguage ?? "auto")
   const [error, setError] = useState("")
   /** True while a new job must not be started (see `blockingJob` below). Read inside submit handlers. */
   const generationLocked = useRef(false)
@@ -140,7 +141,7 @@ function Dashboard() {
         createPreview.mutate({ url: value.url.trim(), clipCount: value.clipCount, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), ...(description.trim() ? { description: description.trim() } : {}) })
         return
       }
-      const body: JobInput = { url: value.url.trim(), mode, reframe, captions, twoSpeakers, facecam, aspectRatio, targetDurationSec: value.duration, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end }) => ({ start: Number(start), end: Number(end) })) }) }
+      const body: JobInput = { url: value.url.trim(), mode, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, targetDurationSec: value.duration, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end }) => ({ start: Number(start), end: Number(end) })) }) }
       create.mutate(body)
     },
   })
@@ -166,6 +167,7 @@ function Dashboard() {
     if (job.targetDurationSec) form.setFieldValue("duration", job.targetDurationSec)
     else form.setFieldValue("duration", 45)
     setDescription(job.description ?? "")
+    setCaptionLanguage(isCaptionLanguage(job.captionLanguage) ? job.captionLanguage : "auto")
     if (job.ranges?.length) form.setFieldValue("ranges", job.ranges.map(({ start, end }) => ({ start: String(start), end: String(end) })))
   }, [source.data, form])
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: () => api<Job[]>("/jobs"), refetchInterval: 5000 })
@@ -200,6 +202,7 @@ function Dashboard() {
       clipCount: formValues.clipCount,
       duration: formValues.duration,
       description,
+      captionLanguage,
       ranges: formValues.ranges,
       reviewFirst,
       previewId,
@@ -208,7 +211,7 @@ function Dashboard() {
       selectedCueStart,
       selectedCueEnd,
     })
-  }, [formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
+  }, [formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, captionLanguage, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
   const hasTerminalJob = jobs.data?.some((job) => ["done", "failed", "cancelled"].includes(job.status)) ?? false
   const activeJobs = jobs.data?.filter((job) => ["queued", "running"].includes(job.status)) ?? []
   const failedJobs = jobs.data?.filter((job) => job.status === "failed").slice(0, 2) ?? []
@@ -240,7 +243,7 @@ function Dashboard() {
     if (!selectedRanges.length || selectedRanges.length > 10 || selectedRanges.some(({ start, end }) => !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start)) { setError(t.rangesInvalid); return }
     if (!formValues.url.trim()) { setError(t.urlRequired); return }
     if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return }
-    create.mutate({ url: formValues.url.trim(), mode: "manual", ranges: selectedRanges, targetDurationSec: formValues.duration, reframe, captions, twoSpeakers, facecam, aspectRatio, ...(description.trim() ? { description: description.trim() } : {}) })
+    create.mutate({ url: formValues.url.trim(), mode: "manual", ranges: selectedRanges, targetDurationSec: formValues.duration, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, ...(description.trim() ? { description: description.trim() } : {}) })
   }
   useEffect(() => {
     if (preview.data?.status === "done" && initializedPreview.current !== preview.data.id) {
@@ -283,6 +286,7 @@ function Dashboard() {
            <Field className={twoSpeakers || facecam || aspectRatio === "16:9" ? "opacity-50" : undefined}>
                <FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup disabled={twoSpeakers || facecam || aspectRatio === "16:9"} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers && !facecam && aspectRatio !== "16:9") setReframe(value as Job["reframe"]) }} className="mt-2 grid min-w-0 gap-1.5">{([{ value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-2 transition-colors has-[:checked]:bg-accent/15 has-[:checked]:ring-1 has-[:checked]:ring-accent/40 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5 shrink-0"/><span className="min-w-0"><span className="block text-sm font-medium leading-5 text-foreground">{option.label}</span><span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers || facecam ? <FieldDescription>{t.reframeIgnored}</FieldDescription> : aspectRatio === "16:9" ? <FieldDescription>{t.reframeUnavailable}</FieldDescription> : null}</Field>
             <Field><FieldLabel>{t.processingOptions}</FieldLabel><div className="divide-y divide-border border-y border-border">{[{ key: "two-speakers", icon: Users, label: t.twoSpeakers, hint: aspectRatio === "9:16" ? t.twoSpeakersHint : t.twoSpeakersUnavailable, checked: twoSpeakers, unavailable: aspectRatio !== "9:16", toggle: () => { setTwoSpeakers(!twoSpeakers); if (!twoSpeakers) setFacecam(false) } }, { key: "facecam", icon: Video, label: t.facecam, hint: aspectRatio === "9:16" ? t.facecamHint : t.facecamUnavailable, checked: facecam, unavailable: aspectRatio !== "9:16", toggle: () => { setFacecam(!facecam); if (!facecam) setTwoSpeakers(false) } }, { key: "burn-captions", icon: Captions, label: t.burnCaptions, hint: t.burnCaptionsHint, checked: captions, unavailable: false, toggle: () => setCaptions(!captions) }, ...(mode === "auto" ? [{ key: "review-first", icon: ListChecks, label: t.reviewMoments, hint: t.reviewMomentsHint, checked: reviewFirst, unavailable: false, toggle: () => { setReviewFirst(!reviewFirst); if (reviewFirst) { setPreviewId(null); setPreviewExpired(false); initializedPreview.current = null; clearReviewDraft() } } }] : [])].map(({ key, icon: Icon, label, hint, checked, unavailable, toggle }) => <button key={key} type="button" aria-pressed={checked} disabled={unavailable} onClick={toggle} className="flex min-h-12 w-full items-center gap-3 py-2.5 text-left transition-colors hover:bg-secondary/40 disabled:cursor-not-allowed disabled:opacity-50"><Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true"/><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{label}</span><span className="block text-xs leading-relaxed text-muted-foreground">{hint}</span></span><span aria-hidden="true" className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? "bg-accent" : "bg-muted-foreground/40"}`}><span className={`absolute top-0.5 size-4 rounded-full bg-background transition-transform ${checked ? "translate-x-[18px]" : "translate-x-0.5"}`} /></span></button>)}</div></Field>
+           <Field><FieldLabel htmlFor="caption-language-select">{t.captionLanguage}</FieldLabel><Select value={captionLanguage} onValueChange={(value) => { if (isCaptionLanguage(value)) setCaptionLanguage(value) }}><SelectTrigger id="caption-language-select" className="h-11 w-full rounded-md" aria-describedby="caption-language-hint"><SelectValue /></SelectTrigger><SelectContent>{CAPTION_LANGUAGES.map((option) => <SelectItem key={option} value={option}>{t.captionLanguageOptions[option]}</SelectItem>)}</SelectContent></Select><FieldDescription id="caption-language-hint">{t.captionLanguageHint}</FieldDescription></Field>
            {mode === "auto" ? <div className="grid gap-4 sm:grid-cols-2"><Field><FieldLabel htmlFor="clip-count">{t.clipCount}</FieldLabel><Input id="clip-count" type="number" min={1} max={10} step={1} required value={Number.isNaN(formValues.clipCount) ? "" : formValues.clipCount} onChange={(e) => form.setFieldValue("clipCount", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md tabular-nums" /></Field><Field><FieldLabel htmlFor="target-duration">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field><Field className="sm:col-span-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="clip-description">{t.description}</FieldLabel><span className="text-xs tabular-nums text-muted-foreground">{description.length}/500</span></div><textarea id="clip-description" maxLength={500} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t.descriptionHint} className="w-full resize-y rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none transition focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" /></Field></div> : <div className="space-y-3 rounded-lg border border-border/80 bg-secondary/25 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{t.manualRanges}</p><p className="mt-1 text-xs text-muted-foreground">{t.rangeHint}</p></div><Badge variant="secondary" className="rounded-full font-normal">{formValues.ranges.length}/10</Badge></div><div className="space-y-2">{formValues.ranges.map((_, index) => <div key={index} className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 rounded-lg border border-border/70 bg-card p-3 max-[380px]:grid-cols-[auto_minmax(0,1fr)_auto]"><span className="pb-3 text-xs font-medium tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><Field className="max-[380px]:col-start-2"><FieldLabel htmlFor={`range-start-${index}`}>{t.startSec}</FieldLabel><Input id={`range-start-${index}`} type="number" min="0" step="any" required aria-label={`${t.startSec} ${index + 1}`} placeholder="0" value={formValues.ranges[index]?.start ?? ""} onChange={(e) => updateRange(index, "start", e.target.value)} className="h-10 rounded-lg" /></Field><Field className="max-[380px]:col-start-2"><FieldLabel htmlFor={`range-end-${index}`}>{t.endSec}</FieldLabel><Input id={`range-end-${index}`} type="number" min="0" step="any" required aria-label={`${t.endSec} ${index + 1}`} placeholder="30" value={formValues.ranges[index]?.end ?? ""} onChange={(e) => updateRange(index, "end", e.target.value)} className="h-10 rounded-lg" /></Field><Button type="button" variant="ghost" size="icon" aria-label={`${t.removeRange} ${index + 1}`} disabled={formValues.ranges.length === 1} onClick={() => form.setFieldValue("ranges", formValues.ranges.filter((_, i) => i !== index))} className="mb-0.5 text-muted-foreground hover:text-destructive max-[380px]:row-span-2"><X className="size-4" /></Button></div>)}</div><Button type="button" variant="outline" size="sm" disabled={formValues.ranges.length >= 10} onClick={() => form.setFieldValue("ranges", [...formValues.ranges, { start: "", end: "" }])} className="rounded-lg"><Plus className="size-4" />{t.addRange}</Button></div>}
 
           {mode === "manual" && <Field><FieldLabel htmlFor="target-duration-manual">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration-manual" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field>}

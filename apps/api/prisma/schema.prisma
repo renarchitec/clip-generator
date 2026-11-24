@@ -56,6 +56,7 @@ model Job {
   twoSpeakers       Boolean   @default(false)
   facecam           Boolean   @default(false)
   aspectRatio       String    @default("9:16")
+  captionLanguage   String    @default("auto")
   clipCount         Int
   targetDurationSec Int
   maxSourceSec      Int?
@@ -89,6 +90,7 @@ model Clip {
   deletedAt    DateTime?
   caption      String?
   hashtags     String[]   @default([])
+  transcript   String?
   createdAt    DateTime  @default(now())
 
   publications Publication[]

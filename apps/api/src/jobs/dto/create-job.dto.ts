@@ -13,10 +13,12 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import type { AspectRatio, JobMode, ReframeMode } from '@clipper/shared';
+import type { AspectRatio, CaptionLanguage, JobMode, ReframeMode } from '@clipper/shared';
 import {
   ASPECT_RATIOS,
+  CAPTION_LANGUAGES,
   DEFAULT_ASPECT,
+  DEFAULT_CAPTION_LANGUAGE,
   DEFAULT_REFRAME,
   MAX_SOURCE_SEC,
   MIN_SOURCE_SEC,
@@ -100,6 +102,11 @@ export class CreateJobDto {
   @IsOptional()
   @IsIn(ASPECT_RATIOS)
   aspectRatio: AspectRatio = DEFAULT_ASPECT;
+
+  /** Bahasa caption sosial: auto (ikut transkrip), id, en; default auto. */
+  @IsOptional()
+  @IsIn(CAPTION_LANGUAGES)
+  captionLanguage: CaptionLanguage = DEFAULT_CAPTION_LANGUAGE;
 
   /**
    * Batas pemindaian sumber dalam detik (60–36000); null/absent = durasi penuh.

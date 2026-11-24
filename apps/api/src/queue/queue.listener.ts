@@ -12,7 +12,7 @@ import type { JobData, JobProgress, JobResult } from '@clipper/shared';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { PrismaService } from '../prisma/prisma.service';
 import { latestPerAccount } from '../publish/publish-helpers';
-import { sanitizeClipSocialMetadata } from './clip-social';
+import { sanitizeClipSocialMetadata, sanitizeClipTranscript } from './clip-social';
 import { JobEventsService } from './job-events.service';
 import { QUEUE_EVENTS, QUEUE_NAME } from './queue.constants';
 
@@ -133,6 +133,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
         endSec: clip.end,
         filePath,
         ...sanitizeClipSocialMetadata(clip),
+        transcript: sanitizeClipTranscript(clip.transcript),
       }];
     });
 
@@ -277,6 +278,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       twoSpeakers: job.twoSpeakers,
       facecam: job.facecam,
       aspectRatio: job.aspectRatio,
+      captionLanguage: job.captionLanguage,
       maxSourceSec: job.maxSourceSec ?? null,
       status: job.status,
       stage: job.stage,

@@ -844,6 +844,7 @@ async def render(
                 start=round(moment.start, 2),
                 end=round(moment.end, 2),
                 file=filename,
+                transcript=llm.clip_transcript(subs, moment.start, moment.end) or None,
             )
         )
         await _emit(on_progress, "render", index * 100 / total, f"clip {index}/{total} selesai")
@@ -935,6 +936,8 @@ async def run_job(
                 moments,
                 cues,
                 job.description,
+                None,
+                job.caption_language,
             )
             for clip, social_caption in zip(clips, social_captions):
                 if social_caption is not None:
