@@ -547,24 +547,20 @@ def _reframe_filters(
 ) -> List[str]:
     """Bangun filter video sesuai mode reframe dan ukuran output.
 
-    16:9 (landscape): reframe diabaikan — skala pas 1920x1080, pad hitam bila
-    sumber bukan 16:9 (mayoritas sumber YouTube sudah 16:9, jadi efektif skala saja).
+    16:9 (landscape): reframe diabaikan — skala pas 1920x1080 di atas latar buram
+    dari video yang sama bila sumber bukan 16:9 (sumber 16:9 menutup penuh latar).
     Mode centered (black_bars, blurred_fill) lewat tanpa deteksi frame.
     face_tracking memanggil MediaPipe; dep hilang -> raise RuntimeError.
     """
-    if landscape:
+    if reframe == "black_bars" and not landscape:
         return [
             f"scale={width}:{height}:force_original_aspect_ratio=decrease",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
             "setsar=1",
         ]
-    if reframe == "black_bars":
-        return [
-            f"scale={width}:{height}:force_original_aspect_ratio=decrease",
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
-            "setsar=1",
-        ]
-    if reframe == "blurred_fill":
+    # 16:9 selalu blurred fill: sumber bukan 16:9 (vertikal/4:3) tidak dapat
+    # bar hitam, tapi potongan video yang sama diburamkan di belakangnya.
+    if reframe == "blurred_fill" or landscape:
         return [
             (
                 f"split=2[fg][bg];"

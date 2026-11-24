@@ -48,14 +48,18 @@ def test_crop_filters_default_to_portrait_9_16():
 
 
 def test_reframe_filters_landscape_ignores_reframe():
-    # 16:9: skala pas 1920x1080 + pad hitam; face detection tidak dipanggil.
-    filters = pipeline._reframe_filters(
-        "face_tracking", "x.mp4", pipeline.llm.Moment(0.0, 4.0, "t"), 1920, 1080, landscape=True
-    )
+    # 16:9: video pas di tengah di atas latar buram dari video yang sama
+    # (bukan bar hitam); face detection tidak dipanggil.
+    for reframe in ("face_tracking", "black_bars", "blurred_fill"):
+        filters = pipeline._reframe_filters(
+            reframe, "x.mp4", pipeline.llm.Moment(0.0, 4.0, "t"), 1920, 1080, landscape=True
+        )
 
-    assert filters[0].startswith("scale=1920:1080")
-    assert "pad=1920:1080" in filters[1]
-    assert filters[-1] == "setsar=1"
+        assert "pad=" not in "".join(filters)
+        assert "boxblur" in filters[0]
+        assert "crop=1920:1080" in filters[0]
+        assert "force_original_aspect_ratio=decrease" in filters[0]
+        assert filters[-1] == "setsar=1"
 
 
 def test_reframe_filters_1_1_centered_modes_use_square_target():
