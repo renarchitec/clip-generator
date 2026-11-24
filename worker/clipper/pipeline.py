@@ -177,12 +177,14 @@ def _yt_dlp_base(sections: bool = False) -> List[str]:
     if sections:
         # Section wajib format http/mp4 terindeks: fallback HLS/TS memotong video
         # di keyframe berikutnya sehingga video lebih lambat dari audio (A/V offset).
+        # Audio DASH YouTube ber-ext m4a; ba[ext=mp4] hanya cocok audio HLS.
         fmt = (
-            "bv*[ext=mp4][protocol^=http]+ba[ext=mp4][protocol^=http]"
+            "bv*[ext=mp4][protocol^=http]+ba[ext=m4a][protocol^=http]"
+            "/bv*[ext=mp4][protocol^=http]+ba[ext=mp4][protocol^=http]"
             "/b[ext=mp4][protocol^=http]"
         )
     else:
-        fmt = "bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b"
+        fmt = "bv*[ext=mp4]+ba[ext=m4a]/bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b"
     return [
         "yt-dlp",
         "-f",

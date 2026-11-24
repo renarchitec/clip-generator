@@ -69,7 +69,8 @@ def test_download_manual_uses_sections_per_range(tmp_path):
         fmt = cmd[cmd.index("-f") + 1]
         assert "[protocol^=http]" in fmt
         assert fmt == (
-            "bv*[ext=mp4][protocol^=http]+ba[ext=mp4][protocol^=http]"
+            "bv*[ext=mp4][protocol^=http]+ba[ext=m4a][protocol^=http]"
+            "/bv*[ext=mp4][protocol^=http]+ba[ext=mp4][protocol^=http]"
             "/b[ext=mp4][protocol^=http]"
         )
 
