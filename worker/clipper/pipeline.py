@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -384,6 +385,21 @@ def _remove_section_files(workdir: str, index: int) -> None:
                 pass
 
 
+async def _download_preview_section(url: str, at_sec: float, workdir: str) -> tuple[str, float]:
+    """Unduh jendela kecil; offset menghubungkan waktu section dengan sumber asli."""
+    start = max(0.0, at_sec - 1.0)
+    end = at_sec + 3.0
+    cmd = _yt_dlp_base(sections=True) + [
+        "--download-sections", f"*{start:.3f}-{end:.3f}", "--force-keyframes-at-cuts",
+        "-o", os.path.join(workdir, "frame-source.%(ext)s"), url,
+    ]
+    await asyncio.to_thread(_run, cmd, timeout=100)
+    path = _find_media(workdir, "frame-source")
+    if not path or not await asyncio.to_thread(_has_video, path):
+        raise RuntimeError("download_preview_failed")
+    return await asyncio.to_thread(_ensure_opencv_readable, path), start
+
+
 async def _download_one_section(
     job: JobData,
     index: int,
@@ -734,6 +750,83 @@ def resolve_watermark_path(clips_root: str, wm: Optional[Watermark]) -> Optional
         return None
 
 
+def parse_frame_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Validasi ketat payload queue frame sebelum menyentuh filesystem."""
+    try:
+        url = str(payload["url"])
+        at_sec = float(payload["atSec"])
+        out_path = str(payload["outPath"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("invalid_frame_payload") from exc
+    aspect_ratio = payload.get("aspectRatio")
+    if not url or not url.startswith(("http://", "https://")) or not at_sec >= 0:
+        raise RuntimeError("invalid_frame_payload")
+    if aspect_ratio not in OUTPUT_SIZES or not out_path or os.path.isabs(out_path):
+        raise RuntimeError("invalid_frame_payload")
+    normalized = os.path.normpath(out_path)
+    if normalized == ".." or normalized.startswith(".." + os.sep):
+        raise RuntimeError("invalid_frame_path")
+    return {
+        "url": url, "atSec": at_sec, "aspectRatio": aspect_ratio,
+        "reframe": str(payload.get("reframe") or "face_tracking"),
+        "twoSpeakers": bool(payload.get("twoSpeakers", False)),
+        "facecam": bool(payload.get("facecam", False)),
+        "captions": bool(payload.get("captions", False)),
+        "captionSample": str(payload.get("captionSample") or "Sample caption"),
+        "outPath": normalized,
+    }
+
+
+def _cleanup_old_frames(frames_dir: str, max_age: float = 3600) -> None:
+    if not os.path.isdir(frames_dir):
+        return
+    cutoff = time.time() - max_age
+    for root, _, files in os.walk(frames_dir):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+            except OSError:
+                pass
+
+
+async def run_frame(payload: Mapping[str, Any], clips_dir: str, temp_root: Optional[str] = None) -> Dict[str, Any]:
+    """Render satu JPEG melalui jalur render clip normal, tanpa watermark."""
+    data = parse_frame_payload(payload)
+    destination = os.path.realpath(os.path.join(clips_dir, data["outPath"]))
+    root = os.path.realpath(clips_dir)
+    if os.path.commonpath((root, destination)) != root:
+        raise RuntimeError("invalid_frame_path")
+    frames_dir = os.path.join(root, ".frames")
+    await asyncio.to_thread(_cleanup_old_frames, frames_dir)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    workdir = tempfile.mkdtemp(prefix="frame-", dir=temp_root)
+    try:
+        video, offset = await _download_preview_section(data["url"], data["atSec"], workdir)
+        moment = llm.Moment(start=0.0, end=2.0, title="frame")
+        cues = [Cue(offset, offset + 2.0, data["captionSample"])] if data["captions"] else []
+        rendered = os.path.join(workdir, "render.mp4")
+        await asyncio.to_thread(
+            _render_one, video, moment, cues, workdir, "render.mp4", data["reframe"],
+            data["captions"], data["twoSpeakers"], data["facecam"], offset,
+            data["aspectRatio"], None, None, 100.0,
+        )
+        await asyncio.to_thread(_run, [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", "1.000", "-i", rendered, "-frames:v", "1", "-q:v", "3", destination,
+        ], timeout=20)
+        width, height = OUTPUT_SIZES[data["aspectRatio"]]
+        return {"file": data["outPath"], "width": width, "height": height, "atSec": data["atSec"]}
+    except Exception as exc:
+        log.warning("frame render gagal: %s", exc)
+        detail = str(exc).strip().splitlines()
+        message = (detail[0].strip() if detail else "")[:120]
+        raise RuntimeError(message or "frame_render_failed") from None
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def _render_one(
     video: str,
     moment: llm.Moment,
@@ -748,6 +841,7 @@ def _render_one(
     aspect_ratio: str = "9:16",
     watermark: Optional[Watermark] = None,
     watermark_path: Optional[str] = None,
+    run_timeout: Optional[float] = None,
 ) -> None:
     if watermark is None or not watermark_path:
         watermark = None
@@ -874,12 +968,12 @@ def _render_one(
 
     try:
         try:
-            _run(command(True))
+            _run(command(True), timeout=run_timeout)
         except Exception as exc:
             if not watermark:
                 raise
             log.warning("gagal membakar watermark (%s), render ulang tanpa watermark", exc)
-            _run(command(False))
+            _run(command(False), timeout=run_timeout)
     finally:
         if os.path.exists(ass_path):
             os.remove(ass_path)

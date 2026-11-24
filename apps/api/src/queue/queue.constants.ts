@@ -13,6 +13,9 @@ export const QUEUE_NAME = 'clip-jobs';
  */
 export const PREVIEW_QUEUE_NAME = 'previews';
 
+/** Antrean render satu frame untuk pratinjau watermark. */
+export const FRAME_QUEUE_NAME = 'clip-frames';
+
 /**
  * Kunci Redis untuk sinyal pembatalan; worker memeriksanya di batas tahap.
  * Harus sama dengan CANCEL_KEY di worker/clipper/models.py.

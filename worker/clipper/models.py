@@ -16,6 +16,8 @@ QUEUE_NAME = "clip-jobs"
 PREVIEW_QUEUE_NAME = "previews"
 # Antrean regenerasi caption satu klip; harus sama dengan CAPTION_QUEUE_NAME.
 CAPTION_QUEUE_NAME = "captions"
+# Antrean frame tunggal untuk menata watermark pada UI.
+FRAME_QUEUE_NAME = "clip-frames"
 
 # Bahasa caption sosial; harus sama dengan CAPTION_LANGUAGES.
 CAPTION_LANGUAGES = ("auto", "id", "en")

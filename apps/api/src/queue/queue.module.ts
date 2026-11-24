@@ -4,7 +4,7 @@ import { QueueEvents } from 'bullmq';
 import type { JobData } from '@clipper/shared';
 import { AppConfig } from '../config/app-config.service';
 import { JobEventsService } from './job-events.service';
-import { QUEUE_EVENTS, PREVIEW_QUEUE_NAME, QUEUE_NAME } from './queue.constants';
+import { FRAME_QUEUE_NAME, QUEUE_EVENTS, PREVIEW_QUEUE_NAME, QUEUE_NAME } from './queue.constants';
 import { QueueListener } from './queue.listener';
 import { redisConnection } from './redis';
 
@@ -18,6 +18,7 @@ import { redisConnection } from './redis';
     }),
     BullModule.registerQueue({ name: QUEUE_NAME }),
     BullModule.registerQueue({ name: PREVIEW_QUEUE_NAME }),
+    BullModule.registerQueue({ name: FRAME_QUEUE_NAME }),
   ],
   providers: [
     JobEventsService,

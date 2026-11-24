@@ -1,13 +1,14 @@
 import { createFileRoute, Link, redirect, useNavigate, useSearch } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useForm } from "@tanstack/react-form"
-import { ArrowUpRight, Captions, CircleAlert, ListChecks, LoaderCircle, Play, Plus, Sparkles, Users, Video, X } from "lucide-react"
+import { ArrowUpRight, Captions, CircleAlert, Image as ImageIcon, ListChecks, LoaderCircle, Play, Plus, Sparkles, Users, Video, X } from "lucide-react"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -23,6 +24,8 @@ import { JobAssembly } from "@/components/job-assembly"
 import { useWatermarkDefault, WatermarkManager, watermarkKey } from "@/components/watermark-manager"
 import { WatermarkOverlay } from "@/components/watermark-overlay"
 import { clamp, clampWatermark, defaultWatermarkSettings, type Watermark, type WatermarkSettings } from "@/lib/watermark"
+import { formatFrameTime, FRAME_DEFAULT_SEC, useFramePreview, type FrameErrorKind } from "@/lib/frame-preview"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
 export const Route = createFileRoute("/")({
   beforeLoad: async ({ location }) => {
@@ -128,6 +131,7 @@ function Dashboard() {
   const [captionLanguage, setCaptionLanguage] = useState<CaptionLanguage>(draft?.captionLanguage ?? "auto")
   const [watermarkSettings, setWatermarkSettings] = useState<WatermarkSettings | null>(null)
   const [watermarkError, setWatermarkError] = useState("")
+  const [monitorView, setMonitorView] = useState<"video" | "frame">("video")
   const [error, setError] = useState("")
   /** True while a new job must not be started (see `blockingJob` below). Read inside submit handlers. */
   const generationLocked = useRef(false)
@@ -155,6 +159,20 @@ function Dashboard() {
   })
   const formValues = useSyncExternalStore((onChange) => { const subscription = form.store.subscribe(onChange); return () => subscription.unsubscribe() }, () => form.state.values, () => form.state.values)
   const reviewRef = useRef<HTMLDivElement>(null)
+  const preview = useQuery({
+    queryKey: ["previews", previewId],
+    queryFn: () => api<JobPreview>(`/previews/${previewId}`),
+    enabled: !!previewId,
+    refetchInterval: (query) => query.state.error || ["done", "failed"].includes(query.state.data?.status ?? "") ? false : 2000,
+    retry: (failureCount, err) => {
+      if ((err as Error & { status?: number }).status === 404) return false
+      return failureCount < 3
+    },
+  })
+  const firstReviewedStart = (preview.data?.candidates ?? []).reduce<number | null>((first, candidate) => first === null ? candidate.start : Math.min(first, candidate.start), null)
+  const firstManualStart = formValues.ranges.map(({ start }) => Number(start)).find((start) => Number.isFinite(start) && start >= 0)
+  const suggestedFrameSec = firstReviewedStart ?? (mode === "manual" ? firstManualStart : null) ?? FRAME_DEFAULT_SEC
+  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam, captions }, suggestedFrameSec)
   const initializedPreview = useRef<string | null>(draft?.previewId ?? null)
   const { from, job: selectedJobId } = useSearch({ from: "/" })
   const source = useQuery({ queryKey: ["jobs", from], queryFn: () => api<JobSnapshot>(`/jobs/${from}`), enabled: !!from })
@@ -205,16 +223,6 @@ function Dashboard() {
   })
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: () => api<Job[]>("/jobs"), refetchInterval: 5000 })
   const selectedJob = useQuery({ queryKey: ["jobs", selectedJobId], queryFn: () => api<JobSnapshot>(`/jobs/${selectedJobId}`), enabled: !!selectedJobId, refetchInterval: (query) => query.state.data && ["done", "failed", "cancelled"].includes(query.state.data.status) ? false : 3000 })
-  const preview = useQuery({
-    queryKey: ["previews", previewId],
-    queryFn: () => api<JobPreview>(`/previews/${previewId}`),
-    enabled: !!previewId,
-    refetchInterval: (query) => query.state.error || ["done", "failed"].includes(query.state.data?.status ?? "") ? false : 2000,
-    retry: (failureCount, err) => {
-      if ((err as Error & { status?: number }).status === 404) return false
-      return failureCount < 3
-    },
-  })
   useEffect(() => {
     if (preview.error && (preview.error as Error & { status?: number }).status === 404) {
       setPreviewExpired(true)
@@ -306,7 +314,19 @@ function Dashboard() {
   generationLocked.current = locked
   const blockingProgress = Math.max(0, Math.min(100, Math.round(blockingJob?.progress ?? 0)))
   const blockingHint = blockingJob ? blockingJob.status === "queued" ? t.jobQueuedHint : t.jobRunningHint.replace("{stage}", blockingJob.stage ? t.stages[blockingJob.stage] : t.status.running).replace("{progress}", String(blockingProgress)) : ""
+  const frameErrorMessages: Record<FrameErrorKind, string> = {
+    busy: t.frameBusy,
+    invalid: t.frameInvalid,
+    failed: framePreview.errorDetail || t.frameFailed,
+    network: t.frameNetwork,
+    expired: t.frameExpired,
+  }
+  const frameError = framePreview.errorKind ? frameErrorMessages[framePreview.errorKind] : ""
+  const activeFrame = framePreview.frame && watermarkSettings ? framePreview.frame : null
   const embed = getVideoEmbed(formValues.url)
+  useEffect(() => {
+    setMonitorView(activeFrame ? "frame" : "video")
+  }, [activeFrame?.id ?? null])
   const retryJob = useMutation({ mutationFn: () => api<JobSnapshot>(`/jobs/${selectedJobId}/retry`, { method: "POST" }), onSuccess: (next) => { void client.invalidateQueries({ queryKey: ["jobs"] }); void navigate({ to: "/", search: (previous) => ({ ...previous, job: next.id }) }) } })
   const enhanceBrief = useMutation({
     mutationFn: (brief: string) => api<{ brief: string }>("/briefs/expand", { method: "POST", body: JSON.stringify({ brief }) }),
@@ -318,8 +338,29 @@ function Dashboard() {
     <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,400px)] lg:grid-rows-[minmax(560px,calc(100vh-120px))_auto]">
     <form noValidate onSubmit={submit} className="contents">
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:col-start-1 lg:row-start-1 lg:h-full" aria-label={t.sourceMonitor}>
-        <div className="flex min-h-11 items-center border-b border-border px-4 text-sm text-muted-foreground">{formValues.url.trim() ? sourceLabel(formValues.url.trim()) : t.noSource}</div>
-        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted p-4"><div className={`relative aspect-video w-full max-w-full overflow-hidden shadow-xl ${embed ? "bg-black" : "border border-border bg-[radial-gradient(ellipse_at_center,var(--monitor-empty-center),var(--monitor-empty-edge))]"}`}>{embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0"/> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play className="ml-1 size-5"/></span><p className="font-display text-lg text-foreground">{t.sourceStatement}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.pasteToPreview}</p></div></div>}{appliedWatermark && <WatermarkOverlay aspectRatio={aspectRatio} watermark={chosenWatermark} settings={appliedWatermark} onChange={(next) => setWatermarkSettings(clampWatermark(next))}/>}</div></div>
+        <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border px-4 text-sm text-muted-foreground">
+          <span className="min-w-0 truncate">{formValues.url.trim() ? sourceLabel(formValues.url.trim()) : t.noSource}</span>
+          {activeFrame && <ToggleGroup type="single" aria-label={t.frameViewLabel} size="sm" value={monitorView} onValueChange={(value) => { if (value) setMonitorView(value as "video" | "frame") }} className="shrink-0 rounded-md border border-border bg-secondary/40 p-0.5">
+            <ToggleGroupItem value="video" className="gap-1.5 px-2.5 text-xs data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"><Play className="size-3.5"/>{t.frameViewVideo}</ToggleGroupItem>
+            <ToggleGroupItem value="frame" className="gap-1.5 px-2.5 text-xs data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"><ImageIcon className="size-3.5"/>{t.frameViewFrame}</ToggleGroupItem>
+          </ToggleGroup>}
+        </div>
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted p-4">
+          <div className={`relative aspect-video w-full max-w-full overflow-hidden shadow-xl ${embed && monitorView === "video" ? "bg-black" : "border border-border bg-[radial-gradient(ellipse_at_center,var(--monitor-empty-center),var(--monitor-empty-edge))]"}`}>
+            {monitorView === "frame" && activeFrame ? <>
+              <WatermarkOverlay
+                aspectRatio={aspectRatio}
+                watermark={chosenWatermark}
+                settings={appliedWatermark}
+                onChange={(next) => setWatermarkSettings(clampWatermark(next))}
+                frame={{ imageUrl: activeFrame.imageUrl, width: activeFrame.width, height: activeFrame.height, alt: t.frameImageAlt.replace("{time}", formatFrameTime(activeFrame.atSec)), caption: `${activeFrame.width}×${activeFrame.height} · ${formatFrameTime(activeFrame.atSec)}`, busy: framePreview.running, onImageError: () => framePreview.markImageBroken(activeFrame.id) }}
+              />
+            </> : <>
+              {embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0"/> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play className="ml-1 size-5"/></span><p className="font-display text-lg text-foreground">{t.sourceStatement}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.pasteToPreview}</p></div></div>}
+              {appliedWatermark && <WatermarkOverlay aspectRatio={aspectRatio} watermark={chosenWatermark} settings={appliedWatermark} onChange={(next) => setWatermarkSettings(clampWatermark(next))}/>}
+            </>}
+          </div>
+        </div>
         <div className="shrink-0 border-t border-border bg-card p-4"><Field><FieldLabel htmlFor="source-url" className="text-sm font-medium text-foreground">{t.sourceUrl}</FieldLabel><div className="relative mt-2"><Play className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/><form.Field name="url" validators={{ onChange: ({ value }) => value.trim() ? undefined : t.urlRequired }}>{(field) => <><Input id="source-url" name="url" type="url" inputMode="url" autoComplete="url" placeholder={t.sourcePlaceholder} value={field.state.value} aria-invalid={field.state.meta.isTouched && !field.state.meta.isValid} onBlur={field.handleBlur} onChange={(e) => field.handleChange(e.target.value)} required className="h-14 rounded-md pl-10 text-base" />{field.state.meta.isTouched && field.state.meta.errors.length > 0 && <FieldDescription className="text-destructive">{field.state.meta.errors[0]}</FieldDescription>}</>}</form.Field></div><FieldDescription className="mt-2 text-muted-foreground">{t.sourceHint}</FieldDescription></Field></div>
       </section>
       <aside className="min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-start-2 lg:row-start-1 lg:flex lg:h-full lg:max-h-full lg:flex-col"><div className="shrink-0 border-b border-border px-4 py-3"><h3 className="font-display text-lg font-medium">{t.settings}</h3></div><div className="min-h-0 flex-1 overflow-y-auto px-4 py-4"><div className="space-y-4">
@@ -337,6 +378,23 @@ function Dashboard() {
                <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.scale * 100)}%</span></div><input id="watermark-size" type="range" min={0.03} max={0.6} step={0.01} value={watermarkSettings.scale} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, scale: clamp(Number(event.target.value), 0.03, 0.6) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
                <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-opacity" className="text-xs font-normal text-muted-foreground">{t.watermarkOpacity}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.opacity * 100)}%</span></div><input id="watermark-opacity" type="range" min={0.1} max={1} step={0.05} value={watermarkSettings.opacity} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, opacity: clamp(Number(event.target.value), 0.1, 1) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
                <p className="text-xs leading-relaxed text-muted-foreground">{t.watermarkPositionHint}</p>
+               <Field className="space-y-2 rounded-lg border border-border/70 bg-card/60 p-2.5">
+                 <div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="frame-time" className="text-xs font-medium text-foreground">{t.framePreview}</FieldLabel>{framePreview.frame && !framePreview.running && <Badge variant="secondary" className="text-[10px] font-mono tabular-nums">{t.frameViewFrame} · {formatFrameTime(framePreview.frame.atSec)}</Badge>}</div>
+                 <FieldDescription className="text-xs leading-relaxed">{t.framePreviewHint}</FieldDescription>
+                 <div className="flex items-center gap-2">
+                   <Input id="frame-time" type="text" inputMode="numeric" placeholder={t.frameTimeHint} aria-label={t.frameTime} aria-invalid={framePreview.parsedSec === null} value={framePreview.timeText} onChange={(event) => framePreview.setTimeText(event.target.value)} className="h-9 min-w-0 flex-1 rounded-md font-mono text-sm tabular-nums"/>
+                   <Button type="button" variant="outline" size="sm" className="h-9 shrink-0" disabled={!framePreview.hasUrl || framePreview.parsedSec === null || framePreview.running} onClick={() => framePreview.render()}>{framePreview.running ? <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/> : <ImageIcon aria-hidden="true" className="mr-1.5 size-3.5"/>}{t.framePreview}</Button>
+                 </div>
+                 <div className="flex items-center justify-between gap-2">
+                   <span className="text-[11px] text-muted-foreground">{t.frameTimeHint}</span>
+                   {framePreview.lastAtSec !== null && <Button type="button" variant="secondary" size="sm" className="h-7 shrink-0 px-2.5 text-xs" disabled={!framePreview.hasUrl || framePreview.running} onClick={() => framePreview.renderAnother()}>{t.frameAnother}</Button>}
+                 </div>
+                 {framePreview.parsedSec === null && <p className="text-[11px] text-destructive">{t.frameTimeInvalid}</p>}
+                 {!framePreview.hasUrl && <p className="text-[11px] text-muted-foreground">{t.frameNeedUrl}</p>}
+                 {framePreview.running && <div role="status" className="flex items-center gap-2.5 rounded-md border border-border/70 bg-background px-2.5 py-2"><Skeleton className="size-8 shrink-0 rounded-sm"/><div className="min-w-0"><span className="flex items-center gap-1.5 text-xs font-medium"><LoaderCircle aria-hidden="true" className="size-3 animate-spin text-accent motion-reduce:animate-none"/>{framePreview.queued ? t.frameQueued : t.frameRendering}</span><span className="block text-[11px] text-muted-foreground">{t.frameRenderingHint}</span></div></div>}
+                 {framePreview.stale && !framePreview.running && <p role="status" className="text-[11px] text-accent">{t.frameStale}</p>}
+                 {frameError && <Alert variant="destructive" className="px-2.5 py-2"><AlertDescription className="text-xs">{frameError}</AlertDescription></Alert>}
+               </Field>
                <Button type="button" variant="outline" size="sm" className="w-full rounded-md" disabled={saveWatermarkDefault.isPending || !appliedWatermark} onClick={() => saveWatermarkDefault.mutate(appliedWatermark)}>{saveWatermarkDefault.isPending && <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/>}{t.watermarkSaveDefault}</Button>
              </div>}
              {watermarkError && <p role="alert" className="mt-2 text-xs text-destructive">{watermarkError}</p>}

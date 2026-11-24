@@ -6,6 +6,7 @@ import { ClipsModule } from './clips/clips.module';
 import { AppConfigModule } from './config/app-config.module';
 import { validateEnv } from './config/env.validation';
 import { JobsModule } from './jobs/jobs.module';
+import { FramesModule } from './frames/frames.module';
 import { PreviewsModule } from './previews/previews.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PublishModule } from './publish/publish.module';
@@ -22,6 +23,7 @@ import { WatermarksModule } from './watermarks/watermarks.module';
     JobsModule,
     WatermarksModule,
     PreviewsModule,
+    FramesModule,
     ClipsModule,
     BriefsModule,
     SocialModule,

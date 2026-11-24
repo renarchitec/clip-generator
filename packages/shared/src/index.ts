@@ -5,6 +5,9 @@ export const QUEUE_NAME = 'clip-jobs';
 /** Antrean terpisah untuk pratinjau momen (subtitle + LLM saja, tanpa render). */
 export const PREVIEW_QUEUE_NAME = 'previews';
 
+/** Antrean render satu frame untuk pratinjau watermark. */
+export const FRAME_QUEUE_NAME = 'clip-frames';
+
 export const JOB_STAGES = [
   'download',
   'transcribe',
@@ -178,6 +181,22 @@ export interface PreviewJobResult {
   candidates: PreviewCandidate[];
   cues: PreviewCue[];
 }
+
+export interface FrameJobData {
+  url: string;
+  atSec: number;
+  aspectRatio: AspectRatio;
+  reframe: ReframeMode;
+  twoSpeakers: boolean;
+  facecam: boolean;
+  captions: boolean;
+  captionSample: string;
+  outPath: string;
+  userId: string;
+}
+
+export type FrameStatus = 'queued' | 'running' | 'done' | 'failed';
+
 
 export interface PreviewResponse {
   id: string;

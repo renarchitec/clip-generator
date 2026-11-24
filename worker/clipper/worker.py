@@ -27,6 +27,9 @@ PREVIEW_CONCURRENCY = 2
 # Regenerasi caption satu klip (hanya LLM, cepat).
 CAPTION_QUEUE_NAME = models.CAPTION_QUEUE_NAME
 CAPTION_CONCURRENCY = 2
+# Satu frame JPEG untuk posisi watermark di UI.
+FRAME_QUEUE_NAME = models.FRAME_QUEUE_NAME
+FRAME_CONCURRENCY = int(os.getenv("FRAME_CONCURRENCY", "1"))
 
 # Kunci status LLM untuk UI. Harus sama dengan apps/api/src/system/llm-status.constants.ts.
 LLM_STATUS_KEY = "worker:status:llm"
@@ -158,6 +161,27 @@ async def handle_caption_job(job, token: str | None = None, redis_client: redis.
     return result
 
 
+async def handle_frame_job(job, token: str | None = None, redis_client: redis.Redis | None = None):
+    """Satu frame pratinjau untuk penempatan watermark; gagal -> job failed."""
+    job_id = getattr(job, "id", None) or "frame"
+    try:
+        return await asyncio.wait_for(
+            pipeline.run_frame(
+                getattr(job, "data", None) or {}, clips_dir(),
+                temp_root=os.getenv("TEMP_ROOT") or None,
+            ),
+            timeout=120,
+        )
+    except (RuntimeError, asyncio.TimeoutError) as exc:
+        log.warning("frame job %s gagal: %s", job_id, exc)
+        raise RuntimeError(str(exc) or "frame_render_failed") from None
+    except Exception as exc:  # noqa: BLE001 - input tak terduga jangan menjatuhkan worker
+        log.warning("frame job %s error tak terduga: %s", job_id, exc.__class__.__name__)
+        raise RuntimeError("frame_render_failed") from None
+    finally:
+        await write_llm_status(redis_client)
+
+
 async def main() -> None:
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
@@ -235,9 +259,22 @@ async def main() -> None:
             # Windows tidak mendukung add_signal_handler.
             signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
 
-    log.info("worker menunggu job di antrean %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s)",
+    async def _handle_frame(job, token: str | None = None):
+        return await handle_frame_job(job, token, redis_client=redis_client)
+
+    frame_worker = Worker(
+        FRAME_QUEUE_NAME,
+        _handle_frame,
+        {
+            "connection": redis_client,
+            "concurrency": FRAME_CONCURRENCY,
+        },
+    )
+
+    log.info("worker menunggu job di antrean %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s)",
              QUEUE_NAME, CONCURRENCY, PREVIEW_QUEUE_NAME, PREVIEW_CONCURRENCY,
-             CAPTION_QUEUE_NAME, CAPTION_CONCURRENCY)
+             CAPTION_QUEUE_NAME, CAPTION_CONCURRENCY,
+             FRAME_QUEUE_NAME, FRAME_CONCURRENCY)
     try:
         await stop.wait()
     finally:
@@ -251,6 +288,7 @@ async def main() -> None:
             render_worker.close(),
             preview_worker.close(),
             caption_worker.close(),
+            frame_worker.close(),
             return_exceptions=True,
         )
 
