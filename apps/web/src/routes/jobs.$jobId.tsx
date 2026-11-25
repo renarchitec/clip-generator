@@ -178,9 +178,9 @@ function JobDetail() {
             </div>
           </section>
 
-          <aside className="min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-start-2 lg:row-start-1 lg:flex lg:h-full lg:max-h-full lg:flex-col">
+          <aside className="relative min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-start-2 lg:row-start-1 lg:flex lg:h-full lg:max-h-full lg:flex-col">
             <div className="shrink-0 border-b border-border px-4 py-3"><h2 className="font-display text-lg font-medium">{t.settings}</h2></div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4">
               <div className="space-y-4">
                 <Field>
                   <FieldTitle>{t.creationMode}</FieldTitle>

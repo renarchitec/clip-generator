@@ -102,7 +102,7 @@ export function CaptionStyleEditor({ value, onChange, twoSpeakers = false }: { v
       })}
     </div>
 
-    <div className="flex items-center justify-between gap-2 rounded-md border border-border/70 bg-background/40 px-2.5 py-1.5">
+    <div className="relative flex items-center justify-between gap-2 rounded-md border border-border/70 bg-background/40 px-2.5 py-1.5">
       <div className="flex min-w-0 items-center gap-2"><WandSparkles className="size-3.5 shrink-0 text-accent" /><span className="text-xs font-medium">{t.captionCustom}</span>{value.preset === "custom" && <Badge variant="secondary" className="h-5 text-[9px]">{t.captionCustomBadge}</Badge>}</div>
       <div className="flex items-center gap-1.5">
         {value.preset !== "hook" && <Button type="button" variant="ghost" size="sm" aria-label={t.captionReset} className="h-7 px-2 text-[10px]" onClick={() => { onChange({ ...DEFAULT_CAPTION_STYLE }); setExpanded(false) }}><RotateCcw className="mr-1 size-3" />{t.captionReset}</Button>}
