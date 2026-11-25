@@ -105,3 +105,24 @@ def test_task_caption_emits_error_code_on_unavailable(monkeypatch, capsys, tmp_p
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
     err = next(item for item in lines if item["event"] == "error")
     assert err["code"] == "caption_unavailable"
+
+
+def test_task_llm_check_reports_unconfigured_and_success(monkeypatch, capsys, tmp_path):
+    for var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "NINEROUTER_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    code = local_cli.main(["--task", "llm-check", "--clips-dir", str(tmp_path)])
+    assert code == 0
+    events = {item["event"]: item for item in (json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip())}
+    assert events["result"]["data"]["ok"] is False
+    assert events["result"]["data"]["configured"] is False
+
+    monkeypatch.setenv("LLM_BASE_URL", "https://example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "secret-key")
+    monkeypatch.setenv("LLM_MODEL", "tabi-fixer")
+    monkeypatch.setattr(llm, "_complete", lambda *a, **kw: '{"ok": true}')
+    code = local_cli.main(["--task", "llm-check", "--clips-dir", str(tmp_path)])
+    assert code == 0
+    events = {item["event"]: item for item in (json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip())}
+    assert events["result"]["data"]["ok"] is True
+    assert events["result"]["data"]["model"] == "tabi-fixer"
+    assert events["llm_status"]["lastCall"]["ok"] is True

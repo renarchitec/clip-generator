@@ -270,9 +270,65 @@ async def _run_task(args: argparse.Namespace) -> int:
     if task == "llm-check":
         from . import llm
 
-        _emit_llm_status(llm, llm_source)
-        _emit("result", data={"ok": True, "source": llm_source, "model": os.getenv("LLM_MODEL") or None})
-        return 0
+        base_url = os.getenv("LLM_BASE_URL") or ""
+        api_key = os.getenv("LLM_API_KEY") or ""
+        model = os.getenv("LLM_MODEL") or ""
+        if not (base_url and api_key and model):
+            _emit_llm_status(llm, llm_source)
+            _emit(
+                "result",
+                data={
+                    "ok": False,
+                    "configured": False,
+                    "provider": None,
+                    "model": None,
+                    "baseUrl": None,
+                    "error": "No LLM provider configured. Add 9router, Gemini, or OpenAI credentials in Settings.",
+                },
+            )
+            return 0
+        try:
+            await asyncio.to_thread(
+                llm._complete,
+                base_url,
+                api_key,
+                model,
+                'Reply with JSON: {"ok": true}',
+                0.0,
+                False,
+            )
+            llm._record_call(True)
+            _emit_llm_status(llm, llm_source)
+            _emit(
+                "result",
+                data={
+                    "ok": True,
+                    "configured": True,
+                    "provider": llm_source or "custom",
+                    "model": model,
+                    "baseUrl": base_url,
+                    "error": None,
+                },
+            )
+            return 0
+        except Exception as exc:
+            detail = llm._short_error(exc)
+            if api_key:
+                detail = detail.replace(api_key, "***")
+            llm._record_call(False, detail)
+            _emit_llm_status(llm, llm_source)
+            _emit(
+                "result",
+                data={
+                    "ok": False,
+                    "configured": True,
+                    "provider": llm_source or "custom",
+                    "model": model,
+                    "baseUrl": base_url,
+                    "error": detail,
+                },
+            )
+            return 0
 
     try:
         payload = _load_payload(args.payload_file)
