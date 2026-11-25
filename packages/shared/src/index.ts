@@ -44,6 +44,78 @@ export const CLIP_TRANSCRIPT_MAX = 2000;
 export const MIN_SOURCE_SEC = 60;
 export const MAX_SOURCE_SEC = 36000;
 
+
+export const CAPTION_FONTS = [
+  'Anton',
+  'Bebas Neue',
+  'Montserrat',
+  'Plus Jakarta Sans',
+  'Oswald',
+  'Bangers',
+] as const;
+export type CaptionFont = (typeof CAPTION_FONTS)[number];
+
+export const CAPTION_EFFECTS = ['outline', 'shadow', 'box', 'none'] as const;
+export type CaptionEffect = (typeof CAPTION_EFFECTS)[number];
+
+export const CAPTION_POSITIONS = ['bottom', 'center', 'top'] as const;
+export type CaptionPosition = (typeof CAPTION_POSITIONS)[number];
+
+export const CAPTION_PRESETS = ['hook', 'beast', 'boxed', 'neon', 'cinema', 'custom'] as const;
+export type CaptionPreset = (typeof CAPTION_PRESETS)[number];
+
+export const CAPTION_FONT_SIZE_MIN = 44;
+export const CAPTION_FONT_SIZE_MAX = 120;
+export const DEFAULT_CAPTION_FONT_SIZE = 80;
+
+export interface CaptionStyle {
+  preset: CaptionPreset;
+  fontFamily: CaptionFont;
+  /** Ukuran font pada referensi tinggi 1920px (44..120, default 80). */
+  fontSize: number;
+  /** Warna teks utama (#RRGGBB, mis. '#FFFFFF'). */
+  primaryColor: string;
+  /** Warna highlight kata aktif (#RRGGBB, mis. '#FFFF00'). */
+  highlightColor: string;
+  /** Warna outline / latar kotak (#RRGGBB, mis. '#000000'). */
+  outlineColor: string;
+  effect: CaptionEffect;
+  uppercase: boolean;
+  position: CaptionPosition;
+  italic: boolean;
+}
+
+export const CAPTION_PRESET_STYLES: Record<Exclude<CaptionPreset, 'custom'>, CaptionStyle> = {
+  hook: { preset: 'hook', fontFamily: 'Anton', fontSize: 80, primaryColor: '#FFFFFF', highlightColor: '#FFFF00', outlineColor: '#000000', effect: 'outline', uppercase: true, position: 'bottom', italic: false },
+  beast: { preset: 'beast', fontFamily: 'Montserrat', fontSize: 84, primaryColor: '#FFFFFF', highlightColor: '#22C55E', outlineColor: '#000000', effect: 'outline', uppercase: true, position: 'bottom', italic: false },
+  boxed: { preset: 'boxed', fontFamily: 'Plus Jakarta Sans', fontSize: 68, primaryColor: '#FFFFFF', highlightColor: '#FACC15', outlineColor: '#000000', effect: 'box', uppercase: false, position: 'bottom', italic: false },
+  neon: { preset: 'neon', fontFamily: 'Bebas Neue', fontSize: 92, primaryColor: '#FFFFFF', highlightColor: '#5CE1C4', outlineColor: '#09090B', effect: 'shadow', uppercase: true, position: 'bottom', italic: false },
+  cinema: { preset: 'cinema', fontFamily: 'Oswald', fontSize: 68, primaryColor: '#FEF08A', highlightColor: '#FFFFFF', outlineColor: '#000000', effect: 'shadow', uppercase: false, position: 'bottom', italic: false },
+};
+export const DEFAULT_CAPTION_STYLE: CaptionStyle = CAPTION_PRESET_STYLES.hook;
+
+export function normalizeCaptionStyle(raw: unknown): CaptionStyle | null {
+  if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const named = typeof value.preset === 'string' &&
+    CAPTION_PRESETS.slice(0, -1).includes(value.preset as CaptionPreset)
+    ? value.preset as Exclude<CaptionPreset, 'custom'> : undefined;
+  const result: CaptionStyle = { ...(named ? CAPTION_PRESET_STYLES[named] : DEFAULT_CAPTION_STYLE) };
+  if (typeof value.fontFamily === 'string' && (CAPTION_FONTS as readonly string[]).includes(value.fontFamily)) result.fontFamily = value.fontFamily as CaptionFont;
+  if (typeof value.fontSize === 'number' && Number.isFinite(value.fontSize)) result.fontSize = Math.max(CAPTION_FONT_SIZE_MIN, Math.min(CAPTION_FONT_SIZE_MAX, Math.round(value.fontSize)));
+  for (const key of ['primaryColor', 'highlightColor', 'outlineColor'] as const) {
+    const color = value[key];
+    if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) result[key] = color.toUpperCase();
+  }
+  if (typeof value.effect === 'string' && (CAPTION_EFFECTS as readonly string[]).includes(value.effect)) result.effect = value.effect as CaptionEffect;
+  if (typeof value.uppercase === 'boolean') result.uppercase = value.uppercase;
+  if (typeof value.position === 'string' && (CAPTION_POSITIONS as readonly string[]).includes(value.position)) result.position = value.position as CaptionPosition;
+  if (typeof value.italic === 'boolean') result.italic = value.italic;
+  const fields: (keyof Omit<CaptionStyle, 'preset'>)[] = ['fontFamily', 'fontSize', 'primaryColor', 'highlightColor', 'outlineColor', 'effect', 'uppercase', 'position', 'italic'];
+  result.preset = (Object.keys(CAPTION_PRESET_STYLES) as Exclude<CaptionPreset, 'custom'>[]).find((preset) => fields.every((field) => result[field] === CAPTION_PRESET_STYLES[preset][field])) ?? 'custom';
+  return result;
+}
+
 export interface ManualRange {
   /** detik */
   start: number;
@@ -75,6 +147,7 @@ export interface JobData {
   aspectRatio: AspectRatio;
   /** bahasa caption sosial; default 'auto' (worker memakai 'auto' bila absent) */
   captionLanguage: CaptionLanguage;
+  captionStyle?: CaptionStyle | null;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
   description?: string | null;
   /**
@@ -191,6 +264,7 @@ export interface FrameJobData {
   facecam: boolean;
   captions: boolean;
   captionSample: string;
+  captionStyle?: CaptionStyle | null;
   outPath: string;
   userId: string;
 }

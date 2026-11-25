@@ -13,6 +13,8 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { api, CAPTION_LANGUAGES, isCaptionLanguage, type CaptionLanguage, type Job, type JobPreview, type JobSnapshot, type User } from "@/lib/api"
+import { DEFAULT_CAPTION_STYLE, detectCaptionPreset, normalizeCaptionStyle, type CaptionStyle } from "@/lib/caption-style"
+import { CaptionStyleEditor } from "@/components/caption-style-editor"
 import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
@@ -42,7 +44,7 @@ export const Route = createFileRoute("/")({
 
 type ClipRange = { start: string; end: string; title?: string; reason?: string }
 type RangePayload = { start: number; end: number; title?: string; reason?: string }
-type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkSettings | null; outro: { outroId: string } | null }
+type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; captionStyle?: CaptionStyle | null; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkSettings | null; outro: { outroId: string } | null }
 
 function formatMomentTime(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
@@ -132,6 +134,7 @@ function Dashboard() {
   const [previousBrief, setPreviousBrief] = useState<string | null>(null)
   const [enhanceError, setEnhanceError] = useState("")
   const [captionLanguage, setCaptionLanguage] = useState<CaptionLanguage>(draft?.captionLanguage ?? "auto")
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(() => normalizeCaptionStyle(draft?.captionStyle))
   const [watermarkSettings, setWatermarkSettings] = useState<WatermarkSettings | null>(null)
   const [watermarkError, setWatermarkError] = useState("")
   const [outroId, setOutroId] = useState<string | null>(null)
@@ -157,7 +160,7 @@ function Dashboard() {
         createPreview.mutate({ url: value.url.trim(), clipCount: value.clipCount, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), ...(description.trim() ? { description: description.trim() } : {}) })
         return
       }
-      const body: JobInput = { url: value.url.trim(), mode, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end, title, reason }) => ({ start: Number(start), end: Number(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}) })) }) }
+      const body: JobInput = { url: value.url.trim(), mode, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, captionStyle: captions ? captionStyle : null, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end, title, reason }) => ({ start: Number(start), end: Number(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}) })) }) }
       create.mutate(body)
     },
   })
@@ -176,7 +179,7 @@ function Dashboard() {
   const firstReviewedStart = (preview.data?.candidates ?? []).reduce<number | null>((first, candidate) => first === null ? candidate.start : Math.min(first, candidate.start), null)
   const firstManualStart = formValues.ranges.map(({ start }) => Number(start)).find((start) => Number.isFinite(start) && start >= 0)
   const suggestedFrameSec = firstReviewedStart ?? (mode === "manual" ? firstManualStart : null) ?? FRAME_DEFAULT_SEC
-  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam, captions }, suggestedFrameSec)
+  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam, captions, captionStyle: captions ? captionStyle : null }, suggestedFrameSec)
   const initializedPreview = useRef<string | null>(draft?.previewId ?? null)
   const { from, job: selectedJobId } = useSearch({ from: "/" })
   const source = useQuery({ queryKey: ["jobs", from], queryFn: () => api<JobSnapshot>(`/jobs/${from}`), enabled: !!from })
@@ -200,6 +203,7 @@ function Dashboard() {
     setPreviousBrief(null)
     setEnhanceError("")
     setCaptionLanguage(isCaptionLanguage(job.captionLanguage) ? job.captionLanguage : "auto")
+    setCaptionStyle(job.captionStyle ? normalizeCaptionStyle(job.captionStyle) : { ...DEFAULT_CAPTION_STYLE })
     setWatermarkSettings(job.watermark ? clampWatermark({ watermarkId: job.watermark.watermarkId, x: job.watermark.x, y: job.watermark.y, scale: job.watermark.scale, opacity: job.watermark.opacity }) : null)
     outroPrefilled.current = true
     setOutroId(job.outro?.outroId ?? null)
@@ -266,6 +270,7 @@ function Dashboard() {
       duration: formValues.duration,
       description,
       captionLanguage,
+      captionStyle,
       ranges: formValues.ranges,
       reviewFirst,
       previewId,
@@ -274,7 +279,7 @@ function Dashboard() {
       selectedCueStart,
       selectedCueEnd,
     })
-  }, [formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, captionLanguage, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
+  }, [formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, captionLanguage, captionStyle, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
   const hasTerminalJob = jobs.data?.some((job) => ["done", "failed", "cancelled"].includes(job.status)) ?? false
   const activeJobs = jobs.data?.filter((job) => ["queued", "running"].includes(job.status)) ?? []
   const failedJobs = jobs.data?.filter((job) => job.status === "failed").slice(0, 2) ?? []
@@ -307,7 +312,7 @@ function Dashboard() {
     if (!selectedRanges.length || selectedRanges.length > 10 || selectedRanges.some(({ start, end }) => !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start)) { setError(t.rangesInvalid); return }
     if (!formValues.url.trim()) { setError(t.urlRequired); return }
     if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return }
-    create.mutate({ url: formValues.url.trim(), mode: "manual", ranges: selectedRanges, targetDurationSec: formValues.duration, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, watermark: watermarkRef.current, outro: outroRef.current, ...(description.trim() ? { description: description.trim() } : {}) })
+    create.mutate({ url: formValues.url.trim(), mode: "manual", ranges: selectedRanges, targetDurationSec: formValues.duration, reframe, captions, twoSpeakers, facecam, aspectRatio, captionLanguage, captionStyle: captions ? captionStyle : null, watermark: watermarkRef.current, outro: outroRef.current, ...(description.trim() ? { description: description.trim() } : {}) })
   }
   useEffect(() => {
     if (preview.data?.status === "done" && initializedPreview.current !== preview.data.id) {
@@ -393,6 +398,11 @@ function Dashboard() {
            <Field className={twoSpeakers || facecam || aspectRatio === "16:9" ? "opacity-50" : undefined}>
                <FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup disabled={twoSpeakers || facecam || aspectRatio === "16:9"} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers && !facecam && aspectRatio !== "16:9") setReframe(value as Job["reframe"]) }} className="mt-2 grid min-w-0 gap-1.5">{([{ value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-2 transition-colors has-[:checked]:bg-accent/15 has-[:checked]:ring-1 has-[:checked]:ring-accent/40 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5 shrink-0"/><span className="min-w-0"><span className="block text-sm font-medium leading-5 text-foreground">{option.label}</span><span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers || facecam ? <FieldDescription>{t.reframeIgnored}</FieldDescription> : aspectRatio === "16:9" ? <FieldDescription>{t.reframeUnavailable}</FieldDescription> : null}</Field>
             <Field><FieldLabel>{t.processingOptions}</FieldLabel><div className="divide-y divide-border border-y border-border">{[{ key: "two-speakers", icon: Users, label: t.twoSpeakers, hint: aspectRatio === "9:16" ? t.twoSpeakersHint : t.twoSpeakersUnavailable, checked: twoSpeakers, unavailable: aspectRatio !== "9:16", toggle: () => { setTwoSpeakers(!twoSpeakers); if (!twoSpeakers) setFacecam(false) } }, { key: "facecam", icon: Video, label: t.facecam, hint: aspectRatio === "9:16" ? t.facecamHint : t.facecamUnavailable, checked: facecam, unavailable: aspectRatio !== "9:16", toggle: () => { setFacecam(!facecam); if (!facecam) setTwoSpeakers(false) } }, { key: "burn-captions", icon: Captions, label: t.burnCaptions, hint: t.burnCaptionsHint, checked: captions, unavailable: false, toggle: () => setCaptions(!captions) }, ...(mode === "auto" ? [{ key: "review-first", icon: ListChecks, label: t.reviewMoments, hint: t.reviewMomentsHint, checked: reviewFirst, unavailable: false, toggle: () => { setReviewFirst(!reviewFirst); if (reviewFirst) { setPreviewId(null); setPreviewExpired(false); initializedPreview.current = null; clearReviewDraft() } } }] : [])].map(({ key, icon: Icon, label, hint, checked, unavailable, toggle }) => <button key={key} type="button" aria-pressed={checked} disabled={unavailable} onClick={toggle} className="flex min-h-12 w-full items-center gap-3 py-2.5 text-left transition-colors hover:bg-secondary/40 disabled:cursor-not-allowed disabled:opacity-50"><Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true"/><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{label}</span><span className="block text-xs leading-relaxed text-muted-foreground">{hint}</span></span><span aria-hidden="true" className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? "bg-accent" : "bg-muted-foreground/40"}`}><span className={`absolute top-0.5 size-4 rounded-full bg-background transition-transform ${checked ? "translate-x-[18px]" : "translate-x-0.5"}`} /></span></button>)}</div></Field>
+           {captions && <Field className="rounded-lg border border-border/80 bg-secondary/20 p-3">
+             <div className="flex items-center justify-between gap-2"><FieldLabel>{t.captionStyle}</FieldLabel><div className="flex items-center gap-1.5"><Badge variant="secondary" className="text-[10px]">{t.captionPresetNames[detectCaptionPreset(captionStyle)]}</Badge>{detectCaptionPreset(captionStyle) !== "hook" && <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={() => setCaptionStyle({ ...DEFAULT_CAPTION_STYLE })}>{t.captionReset}</Button>}</div></div>
+             <FieldDescription className="mb-3 text-xs">{t.captionStyleHint}</FieldDescription>
+             <CaptionStyleEditor value={captionStyle} onChange={setCaptionStyle} twoSpeakers={twoSpeakers} />
+           </Field>}
            <Field className="rounded-lg border border-border/80 bg-secondary/20 p-3">
              <div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-enabled">{t.watermark}</FieldLabel><Switch id="watermark-enabled" aria-label={t.watermark} checked={!!watermarkSettings} onCheckedChange={(checked) => { setWatermarkError(""); setWatermarkSettings(checked ? clampWatermark(watermarkDefaults.data?.default ?? defaultWatermarkSettings(watermarks.data?.[0]?.id ?? "")) : null) }}/></div>
              <FieldDescription>{t.watermarkHint}</FieldDescription>

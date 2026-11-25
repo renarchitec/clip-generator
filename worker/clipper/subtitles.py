@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
+from .models import CaptionStyle
+
 # 00:00:01.000 / 0:01.000 / 01:02,5
 _TIMESTAMP_RE = re.compile(r"(?:(\d+):)?(\d{1,3}):(\d{1,2})[.,](\d{1,3})")
 _TAG_RE = re.compile(r"<[^>]*>")
@@ -28,6 +30,12 @@ MAX_WORDS_PER_CUE_WIDE = 6
 FONT_NAME = "Anton"
 HIGHLIGHT_COLOUR = "&H0000FFFF"
 TEXT_COLOUR = "&H00FFFFFF"
+
+
+def hex_to_ass_color(hex_color: str, alpha: int = 0) -> str:
+    """Convert #RRGGBB to ASS &HAABBGGRR."""
+    color = hex_color.lstrip("#")
+    return f"&H{max(0, min(255, int(alpha))):02X}{color[4:6].upper()}{color[2:4].upper()}{color[:2].upper()}"
 
 
 @dataclass
@@ -318,6 +326,7 @@ def write_ass(
     two_speakers: bool = False,
     max_words: int = MAX_WORDS_PER_CUE,
     max_chars: int = WRAP_CHARS,
+    style: Optional[CaptionStyle] = None,
 ) -> str:
     """Tulis ASS takarir pendek tebal (Anton, UPPERCASE, kata aktif kuning).
 
@@ -329,16 +338,29 @@ def write_ass(
     - Format teks: tiap jendela kata memancarkan satu Dialogue event non-overlapping
       berisi seluruh kata chunk dengan kata aktif berformat {\\c&H00FFFF&}...{\\c&HFFFFFF&}.
     """
-    alignment = 5 if two_speakers else 2
-    safe_margin_v = 0 if two_speakers else max(int(margin_v), int(height * 0.18))
-    # Style: Default, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour,
-    # Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline,
-    # Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-    # Primary: &H00FFFFFF (putih), Outline: &H00000000 (hitam 6px), Shadow: &H80000000 (semi-transparan 2px)
-    style = (
-        f"Style: Default,{FONT_NAME},{int(font_size)},{TEXT_COLOUR},{HIGHLIGHT_COLOUR},"
-        f"&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,{alignment},80,80,{safe_margin_v},1"
-    )
+    if style is None:
+        alignment = 5 if two_speakers else 2
+        safe_margin_v = 0 if two_speakers else max(int(margin_v), int(height * 0.18))
+        font_name, primary_col, highlight_col, italic_flag = FONT_NAME, TEXT_COLOUR, HIGHLIGHT_COLOUR, 0
+        border_style, outline, shadow, outline_col, back_col, uppercase = 1, 6, 2, "&H00000000", "&H80000000", True
+    else:
+        font_name, primary_col, highlight_col = style.font_family, hex_to_ass_color(style.primary_color), hex_to_ass_color(style.highlight_color)
+        italic_flag, uppercase = (-1 if style.italic else 0), style.uppercase
+        if style.effect == "outline":
+            border_style, outline, shadow, outline_col, back_col = 1, (6 if height == 1920 else max(1, round(6 * height / 1920))), (2 if height == 1920 else max(1, round(2 * height / 1920))), hex_to_ass_color(style.outline_color), "&H80000000"
+        elif style.effect == "shadow":
+            border_style, outline, shadow, outline_col, back_col = 1, max(1, round(2 * height / 1920)), max(1, round(6 * height / 1920)), hex_to_ass_color(style.outline_color), hex_to_ass_color(style.outline_color, 0x60)
+        elif style.effect == "box":
+            border_style, outline, shadow, outline_col, back_col = 3, max(4, round(14 * height / 1920)), 0, hex_to_ass_color(style.outline_color, 0x45), hex_to_ass_color(style.outline_color, 0x45)
+        else:
+            border_style, outline, shadow, outline_col, back_col = 1, 0, max(1, round(height / 1920)), hex_to_ass_color(style.outline_color), "&H80000000"
+        if style.position == "center" or (two_speakers and style.preset != "custom" and style.position == "bottom"):
+            alignment, safe_margin_v = 5, 0
+        elif style.position == "top":
+            alignment, safe_margin_v = 8, max(int(margin_v), int(height * 0.12))
+        else:
+            alignment, safe_margin_v = 2, max(int(margin_v), int(height * 0.18))
+    ass_style = f"Style: Default,{font_name},{int(font_size)},{primary_col},{highlight_col},{outline_col},{back_col},-1,{italic_flag},0,0,100,100,0,0,{border_style},{outline},{shadow},{alignment},80,80,{safe_margin_v},1"
 
     lines = [
         "[Script Info]",
@@ -354,19 +376,19 @@ def write_ass(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        style,
+        ass_style,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
     for part in _render_cue_parts(cues, max_words, max_chars):
-        _write_cue_part(part, lines)
+        _write_cue_part(part, lines, uppercase=uppercase, primary_col=primary_col, highlight_col=highlight_col)
 
     return "\n".join(lines) + "\n"
 
 
-def _write_cue_part(cue: Cue, lines: List[str]) -> None:
+def _write_cue_part(cue: Cue, lines: List[str], uppercase: bool = True, primary_col: str = TEXT_COLOUR, highlight_col: str = HIGHLIGHT_COLOUR) -> None:
     if cue.end <= cue.start:
         return
     words = cue_to_words(cue)
@@ -386,10 +408,10 @@ def _write_cue_part(cue: Cue, lines: List[str]) -> None:
 
         rendered_words: List[str] = []
         for j, w in enumerate(words):
-            word_text = _ass_escape(w.text.upper())
+            word_text = _ass_escape(w.text.upper() if uppercase else w.text)
             if j == i:
                 rendered_words.append(
-                    f"{{\\c{HIGHLIGHT_COLOUR}&}}{word_text}{{\\c{TEXT_COLOUR}&}}"
+                    f"{{\\c{highlight_col}&}}{word_text}{{\\c{primary_col}&}}"
                 )
             else:
                 rendered_words.append(word_text)

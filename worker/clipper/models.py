@@ -27,6 +27,61 @@ CaptionLanguage = Literal["auto", "id", "en"]
 CLIP_TRANSCRIPT_MAX = 2000
 
 
+CAPTION_FONTS = ("Anton", "Bebas Neue", "Montserrat", "Plus Jakarta Sans", "Oswald", "Bangers")
+CAPTION_EFFECTS = ("outline", "shadow", "box", "none")
+CAPTION_POSITIONS = ("bottom", "center", "top")
+CAPTION_PRESETS = ("hook", "beast", "boxed", "neon", "cinema", "custom")
+CAPTION_FONT_SIZE_MIN = 44
+CAPTION_FONT_SIZE_MAX = 120
+DEFAULT_CAPTION_FONT_SIZE = 80
+CAPTION_PRESET_STYLES = {
+    "hook": {"preset": "hook", "fontFamily": "Anton", "fontSize": 80, "primaryColor": "#FFFFFF", "highlightColor": "#FFFF00", "outlineColor": "#000000", "effect": "outline", "uppercase": True, "position": "bottom", "italic": False},
+    "beast": {"preset": "beast", "fontFamily": "Montserrat", "fontSize": 84, "primaryColor": "#FFFFFF", "highlightColor": "#22C55E", "outlineColor": "#000000", "effect": "outline", "uppercase": True, "position": "bottom", "italic": False},
+    "boxed": {"preset": "boxed", "fontFamily": "Plus Jakarta Sans", "fontSize": 68, "primaryColor": "#FFFFFF", "highlightColor": "#FACC15", "outlineColor": "#000000", "effect": "box", "uppercase": False, "position": "bottom", "italic": False},
+    "neon": {"preset": "neon", "fontFamily": "Bebas Neue", "fontSize": 92, "primaryColor": "#FFFFFF", "highlightColor": "#5CE1C4", "outlineColor": "#09090B", "effect": "shadow", "uppercase": True, "position": "bottom", "italic": False},
+    "cinema": {"preset": "cinema", "fontFamily": "Oswald", "fontSize": 68, "primaryColor": "#FEF08A", "highlightColor": "#FFFFFF", "outlineColor": "#000000", "effect": "shadow", "uppercase": False, "position": "bottom", "italic": False},
+}
+_CAPTION_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+@dataclass
+class CaptionStyle:
+    preset: str
+    font_family: str
+    font_size: int
+    primary_color: str
+    highlight_color: str
+    outline_color: str
+    effect: str
+    uppercase: bool
+    position: str
+    italic: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"preset": self.preset, "fontFamily": self.font_family, "fontSize": self.font_size, "primaryColor": self.primary_color, "highlightColor": self.highlight_color, "outlineColor": self.outline_color, "effect": self.effect, "uppercase": self.uppercase, "position": self.position, "italic": self.italic}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["CaptionStyle"]:
+        if not isinstance(data, MappingABC):
+            return None
+        preset = data.get("preset")
+        base = dict(CAPTION_PRESET_STYLES[preset]) if isinstance(preset, str) and preset in CAPTION_PRESET_STYLES else dict(CAPTION_PRESET_STYLES["hook"])
+        if isinstance(data.get("fontFamily"), str) and data["fontFamily"] in CAPTION_FONTS: base["fontFamily"] = data["fontFamily"]
+        size = data.get("fontSize")
+        if isinstance(size, (int, float)) and not isinstance(size, bool) and size == size and size not in (float("inf"), float("-inf")):
+            base["fontSize"] = max(CAPTION_FONT_SIZE_MIN, min(CAPTION_FONT_SIZE_MAX, round(size)))
+        for key in ("primaryColor", "highlightColor", "outlineColor"):
+            value = data.get(key)
+            if isinstance(value, str) and _CAPTION_HEX_RE.match(value): base[key] = value.upper()
+        if data.get("effect") in CAPTION_EFFECTS: base["effect"] = data["effect"]
+        if isinstance(data.get("uppercase"), bool): base["uppercase"] = data["uppercase"]
+        if data.get("position") in CAPTION_POSITIONS: base["position"] = data["position"]
+        if isinstance(data.get("italic"), bool): base["italic"] = data["italic"]
+        fields = ("fontFamily", "fontSize", "primaryColor", "highlightColor", "outlineColor", "effect", "uppercase", "position", "italic")
+        base["preset"] = next((name for name, style in CAPTION_PRESET_STYLES.items() if all(base[field] == style[field] for field in fields)), "custom")
+        return cls(base["preset"], base["fontFamily"], base["fontSize"], base["primaryColor"], base["highlightColor"], base["outlineColor"], base["effect"], base["uppercase"], base["position"], base["italic"])
+
+
 def to_caption_language(value: Any) -> str:
     """Parse toleran: nilai tidak dikenal/hilang -> 'auto'."""
     if not isinstance(value, str):
@@ -274,6 +329,8 @@ class JobData:
     description: Optional[str] = None
     params: JobParams = field(default_factory=JobParams)
     ranges: List[ManualRange] = field(default_factory=list)
+    # Gaya takarir opsional; None mempertahankan gaya hook lama.
+    caption_style: Optional[CaptionStyle] = None
     # Watermark gambar opsional; None = tanpa watermark.
     watermark: Optional[Watermark] = None
     # Outro video opsional; None = tanpa outro.
@@ -281,6 +338,7 @@ class JobData:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "captionStyle": self.caption_style.to_dict() if self.caption_style else None,
             "watermark": self.watermark.to_dict() if self.watermark else None,
             "outro": self.outro.to_dict() if self.outro else None,
             "jobId": self.job_id,
@@ -367,6 +425,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,
+        caption_style=CaptionStyle.from_dict(_first(data, "captionStyle", "caption_style")),
         watermark=Watermark.from_dict(_first(data, "watermark")),
         outro=Outro.from_dict(_first(data, "outro")),
     )

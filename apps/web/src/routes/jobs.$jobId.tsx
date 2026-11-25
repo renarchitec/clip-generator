@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldTitle } from "@/components/ui/field"
 import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, type Job, type JobSnapshot, type User } from "@/lib/api"
+import { DEFAULT_CAPTION_STYLE, detectCaptionPreset, normalizeCaptionStyle } from "@/lib/caption-style"
 import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
@@ -231,6 +232,18 @@ function JobDetail() {
                     ))}
                   </div>
                 </Field>}
+
+                {snapshot.captions && (() => {
+                  const captionStyle = normalizeCaptionStyle(snapshot.captionStyle ?? DEFAULT_CAPTION_STYLE)
+                  return <Field>
+                    <FieldTitle>{t.captionStyle}</FieldTitle>
+                    <div className="mt-2 rounded-md border border-border bg-muted/40 p-3">
+                      <div className="flex items-center justify-between gap-2"><Badge variant="secondary" className="text-[10px]">{t.captionPresetNames[detectCaptionPreset(captionStyle)]}</Badge><span className="font-mono text-xs tabular-nums text-foreground">{captionStyle.fontFamily} · {captionStyle.fontSize}px</span></div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t.captionEffect}: {t.captionEffectNames[captionStyle.effect]}</span><span>{t.captionPosition}: {t.captionPositionNames[captionStyle.position]}</span></div>
+                      <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground"><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.primaryColor }} />{t.captionPrimaryColor}</span><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.highlightColor }} />{t.captionHighlightColor}</span></div>
+                    </div>
+                  </Field>
+                })()}
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field>

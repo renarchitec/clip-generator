@@ -1,5 +1,6 @@
 import { IsBoolean, IsIn, IsNumber, IsOptional, IsUrl, Max, Min } from 'class-validator';
-import type { AspectRatio, ReframeMode } from '@clipper/shared';
+import type { AspectRatio, CaptionStyle, ReframeMode } from '@clipper/shared';
+import { IsCaptionStyle } from '../../jobs/dto/create-job.dto';
 import { ASPECT_RATIOS, DEFAULT_ASPECT, DEFAULT_REFRAME, REFRAME_MODES } from '@clipper/shared';
 
 export class CreateFrameDto {
@@ -30,4 +31,8 @@ export class CreateFrameDto {
   @IsOptional()
   @IsBoolean()
   captions?: boolean;
+
+  @IsOptional()
+  @IsCaptionStyle()
+  captionStyle?: CaptionStyle | null;
 }

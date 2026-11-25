@@ -6,6 +6,7 @@ import { createReadStream } from 'node:fs';
 import type { Response } from 'express';
 import { Queue } from 'bullmq';
 import type { FrameJobData, FrameStatus } from '@clipper/shared';
+import { normalizeCaptionStyle } from '@clipper/shared';
 import { AppConfig } from '../config/app-config.service';
 import { resolveClipPath } from '../clips/clip-path';
 import { assertAllowedUrl } from '../jobs/validation';
@@ -33,7 +34,7 @@ export class FramesService {
     const data: FrameJobData = {
       url: assertAllowedUrl(dto.url), atSec: dto.atSec, aspectRatio,
       reframe: dto.reframe, twoSpeakers, facecam, captions: dto.captions ?? true,
-      captionSample: 'Sample caption', outPath: `.frames/${id}.jpg`, userId,
+      captionSample: 'Sample caption', captionStyle: normalizeCaptionStyle(dto.captionStyle), outPath: `.frames/${id}.jpg`, userId,
     };
     await this.queue.add('frame', data, { jobId: id, attempts: 1,
       removeOnComplete: { age: FRAME_TTL_SECONDS }, removeOnFail: { age: FRAME_TTL_SECONDS } });

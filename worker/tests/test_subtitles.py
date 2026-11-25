@@ -1,9 +1,11 @@
 import pytest
 
+from clipper.models import CaptionStyle
 from clipper.subtitles import (
     Cue,
     Word,
     clip_words,
+    hex_to_ass_color,
     cue_to_words,
     parse_vtt,
     sanitize,
@@ -204,3 +206,30 @@ def test_clip_words_shifts_to_zero_and_drops_out_of_window():
         ("tiga", 0.8, 1.8),
         ("empat", 1.8, 2.0),
     ]
+
+
+def test_caption_style_parses_presets_custom_values_and_clamps():
+    hook = CaptionStyle.from_dict({"preset": "hook"})
+    assert hook and hook.to_dict()["preset"] == "hook"
+    custom = CaptionStyle.from_dict({"preset": "hook", "fontFamily": "Bangers", "fontSize": 999, "primaryColor": "#aabbcc", "highlightColor": "bad"})
+    assert custom and custom.preset == "custom"
+    assert custom.font_family == "Bangers" and custom.font_size == 120
+    assert custom.primary_color == "#AABBCC" and custom.highlight_color == "#FFFF00"
+    assert CaptionStyle.from_dict(["hook"]) is None
+
+
+def test_hex_to_ass_color_uses_ass_bgr_order():
+    assert hex_to_ass_color("#FFFFFF") == "&H00FFFFFF"
+    assert hex_to_ass_color("#FFFF00") == "&H0000FFFF"
+    assert hex_to_ass_color("#123456", 0x60) == "&H60563412"
+
+
+@pytest.mark.parametrize("position,alignment", [("top", 8), ("center", 5), ("bottom", 2)])
+def test_write_ass_custom_style_applies_font_colors_case_effect_and_position(position, alignment):
+    style = CaptionStyle.from_dict({"preset": "hook", "fontFamily": "Bangers", "uppercase": False, "effect": "box", "position": position, "primaryColor": "#112233", "highlightColor": "#445566"})
+    assert style
+    ass = write_ass([Cue(0.0, 1.0, "Halo dunia")], style=style)
+    assert "Style: Default,Bangers,68,&H00332211,&H00665544," in ass
+    assert f",3,14,0,{alignment},80,80," in ass
+    dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
+    assert "{\\c&H00665544&}Halo{\\c&H00332211&} dunia" in dialogue

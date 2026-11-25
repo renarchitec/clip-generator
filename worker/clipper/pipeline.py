@@ -21,6 +21,7 @@ from .models import (
     CLIP_TRANSCRIPT_MAX,
     JOB_ID_RE,
     MAX_DESCRIPTION_CHARS,
+    CaptionStyle,
     ClipResult,
     JobData,
     JobParams,
@@ -938,6 +939,7 @@ def parse_frame_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "facecam": bool(payload.get("facecam", False)),
         "captions": bool(payload.get("captions", False)),
         "captionSample": str(payload.get("captionSample") or "Sample caption"),
+        "captionStyle": CaptionStyle.from_dict(payload.get("captionStyle")),
         "outPath": normalized,
     }
 
@@ -976,6 +978,7 @@ async def run_frame(payload: Mapping[str, Any], clips_dir: str, temp_root: Optio
             _render_one, video, moment, cues, workdir, "render.mp4", data["reframe"],
             data["captions"], data["twoSpeakers"], data["facecam"], offset,
             data["aspectRatio"], None, None, 100.0,
+            **({"caption_style": data["captionStyle"]} if data.get("captionStyle") is not None else {}),
         )
         await asyncio.to_thread(_run, [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
@@ -1007,6 +1010,7 @@ def _render_one(
     watermark: Optional[Watermark] = None,
     watermark_path: Optional[str] = None,
     run_timeout: Optional[float] = None,
+    caption_style: Optional[CaptionStyle] = None,
 ) -> None:
     if watermark is None or not watermark_path:
         watermark = None
@@ -1021,7 +1025,8 @@ def _render_one(
         facecam = False  # dua pembicara menang atas facecam
     # Font/margin diskalakan dari nilai referensi 9:16 relatif tinggi output;
     # 16:9 boleh memuat baris lebih panjang (6 kata / 32 karakter).
-    font_size = max(1, round(FONT_SIZE * height / 1920))
+    ref_font_size = caption_style.font_size if caption_style else FONT_SIZE
+    font_size = max(1, round(ref_font_size * height / 1920))
     margin_v = max(1, round(MARGIN_V * height / 1920))
 
     out_path = os.path.join(outdir, filename)
@@ -1043,7 +1048,8 @@ def _render_one(
                     0 if two_speakers else margin_v,
                     two_speakers=two_speakers,
                     max_words=MAX_WORDS_PER_CUE_WIDE if landscape else MAX_WORDS_PER_CUE,
-                    max_chars=WRAP_CHARS_WIDE if landscape else WRAP_CHARS,
+                    max_chars=(max(10, round((WRAP_CHARS_WIDE if landscape else WRAP_CHARS) * 80 / caption_style.font_size)) if caption_style and caption_style.font_size > 84 else (WRAP_CHARS_WIDE if landscape else WRAP_CHARS)),
+                    style=caption_style,
                 )
             )
 
@@ -1184,6 +1190,8 @@ def _render_clip_sync(
         wm_path = resolve_watermark_path(os.path.dirname(os.path.abspath(outdir)), job.watermark)
         if wm_path:
             extra = {"watermark": job.watermark, "watermark_path": wm_path}
+    if job.caption_style is not None:
+        extra["caption_style"] = job.caption_style
 
     _render_one(
         src_video,

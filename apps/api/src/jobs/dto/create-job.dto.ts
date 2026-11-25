@@ -14,7 +14,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import type { AspectRatio, CaptionLanguage, JobMode, ReframeMode } from '@clipper/shared';
+import type { AspectRatio, CaptionLanguage, CaptionStyle, JobMode, ReframeMode } from '@clipper/shared';
 import {
   ASPECT_RATIOS,
   CAPTION_LANGUAGES,
@@ -24,6 +24,7 @@ import {
   MAX_SOURCE_SEC,
   MIN_SOURCE_SEC,
   REFRAME_MODES,
+  normalizeCaptionStyle,
 } from '@clipper/shared';
 
 export class ManualRangeDto {
@@ -119,6 +120,10 @@ export class CreateJobDto {
   @Max(MAX_SOURCE_SEC)
   maxSourceSec?: number | null;
 
+  @IsOptional()
+  @IsCaptionStyle()
+  captionStyle?: CaptionStyle | null;
+
   /** Watermark dari pustaka pengguna; null = tanpa watermark. Divalidasi lewat zod. */
   @IsOptional()
   @IsWatermarkSettings()
@@ -195,3 +200,13 @@ export function IsWatermarkSettings(validationOptions?: ValidationOptions) {
   };
 }
 
+
+/** Izinkan null atau objek CaptionStyle yang bisa dinormalisasi. */
+export function IsCaptionStyle(validationOptions?: ValidationOptions) {
+  return function (object: object, propertyName: string): void {
+    registerDecorator({ name: 'isCaptionStyle', target: object.constructor, propertyName, options: validationOptions,
+      validator: { validate(value: unknown) { return value === null || normalizeCaptionStyle(value) !== null; },
+        defaultMessage() { return 'captionStyle harus null atau objek gaya subtitle yang valid.'; } },
+    });
+  };
+}

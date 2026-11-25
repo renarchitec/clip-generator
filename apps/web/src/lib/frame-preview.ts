@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 import { api, type AspectRatio, type Reframe } from "@/lib/api"
+import type { CaptionStyle } from "@/lib/caption-style"
 
 export const FRAME_DEFAULT_SEC = 30
 export const FRAME_STEP_SEC = 15
@@ -8,7 +9,7 @@ export const FRAME_MAX_SEC = 36000
 const FRAME_POLL_MS = 1500
 
 /** Everything that changes what the worker would render. A frame is only valid for the settings it was made with. */
-export type FrameParams = { url: string; aspectRatio: AspectRatio; reframe: Reframe; twoSpeakers: boolean; facecam: boolean; captions: boolean }
+export type FrameParams = { url: string; aspectRatio: AspectRatio; reframe: Reframe; twoSpeakers: boolean; facecam: boolean; captions: boolean; captionStyle?: CaptionStyle | null }
 export type FrameResponse = { id: string; status: "queued" | "running" | "done" | "failed"; error?: string; width?: number; height?: number; atSec?: number; imageUrl?: string }
 export type RenderedFrame = { id: string; imageUrl: string; width: number; height: number; atSec: number }
 export type FrameErrorKind = "busy" | "invalid" | "failed" | "network" | "expired"
@@ -31,7 +32,7 @@ export function formatFrameTime(seconds: number): string {
   return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${String(minutes).padStart(2, "0")}:${rest}`
 }
 
-const frameKey = (params: FrameParams) => JSON.stringify([params.url.trim(), params.aspectRatio, params.reframe, params.twoSpeakers, params.facecam, params.captions])
+const frameKey = (params: FrameParams) => JSON.stringify([params.url.trim(), params.aspectRatio, params.reframe, params.twoSpeakers, params.facecam, params.captions, params.captionStyle ?? null])
 const statusOf = (error: unknown) => (error as { status?: number } | null)?.status
 
 /**
@@ -48,7 +49,7 @@ export function useFramePreview(params: FrameParams, suggestedSec: number) {
   const create = useMutation({
     mutationFn: (variables: { atSec: number; params: FrameParams; key: string }) => api<{ id: string }>("/frames", {
       method: "POST",
-      body: JSON.stringify({ url: variables.params.url.trim(), atSec: variables.atSec, aspectRatio: variables.params.aspectRatio, reframe: variables.params.reframe, twoSpeakers: variables.params.twoSpeakers, facecam: variables.params.facecam, captions: variables.params.captions }),
+      body: JSON.stringify({ url: variables.params.url.trim(), atSec: variables.atSec, aspectRatio: variables.params.aspectRatio, reframe: variables.params.reframe, twoSpeakers: variables.params.twoSpeakers, facecam: variables.params.facecam, captions: variables.params.captions, captionStyle: variables.params.captionStyle ?? null }),
     }),
     onSuccess: ({ id }, variables) => setRequest({ id, atSec: variables.atSec, key: variables.key }),
   })

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { StoredWatermark } from '../watermarks/watermark-helpers';
 import type { StoredOutro } from '../outros/outro-helpers';
 import { Observable, Subject } from 'rxjs';
+import type { CaptionStyle } from '@clipper/shared';
 
 export interface JobSnapshot {
   id: string;
@@ -15,6 +16,7 @@ export interface JobSnapshot {
   aspectRatio: string;
   /** Bahasa caption sosial: auto | id | en. */
   captionLanguage: string;
+  captionStyle?: CaptionStyle | null;
   clipCount?: number;
   targetDurationSec?: number;
   /** Batas pemindaian sumber (detik); null = durasi penuh. */
