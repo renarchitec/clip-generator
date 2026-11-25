@@ -261,15 +261,17 @@ def two_speaker_centers_from_frames(
 
     return (min(left, right), max(left, right))
 
-FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 768  # panel atas 45:32 (40% dari 1920)
-FACECAM_GAMEPLAY_H = 1920 - FACECAM_PANEL_H  # panel bawah 1080x1152 (60%, 15:16)
+FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 840  # panel atas 9:7 (43.75% dari 1920)
+FACECAM_GAMEPLAY_H = 1920 - FACECAM_PANEL_H  # panel bawah 1080x1080 (56.25%, 1:1)
 FACECAM_FACE_SCALE = 3.0  # tinggi panel = 3x tinggi wajah
 FACECAM_MIN_PANEL_H = 64  # piksel; di bawah ini upscale terlalu kasar
-FACECAM_MIN_FACE_SCALE = 1.8  # batas zoom-in saat memusatkan wajah di sudut
+FACECAM_MIN_FACE_SCALE = 2.2  # batas zoom-in: cukup ruang di atas rambut
 # Panel facecam ada di paling atas output 9:16, tempat UI TikTok/Reels/Shorts
 # (status bar, tab "Following | For You", ikon search) menutupi ~200px pertama.
-# Wajah diletakkan sedikit di bawah tengah panel supaya tidak tertutup.
-FACECAM_FACE_Y = 0.62  # posisi vertikal pusat wajah, pecahan tinggi panel
+# Kotak BlazeFace hanya dari dagu ke alis (pusat = hidung; dahi+rambut ~0.6x
+# tinggi wajah di atas alis), jadi pusat kotak wajah diletakkan di 72% panel
+# agar puncak rambut turun ~175-280px dari tepi atas.
+FACECAM_FACE_Y = 0.72  # posisi vertikal pusat wajah (hidung), pecahan tinggi panel
 
 
 def facecam_box(

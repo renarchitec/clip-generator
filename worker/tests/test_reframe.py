@@ -178,11 +178,11 @@ def test_facecam_box_empty_or_rare_faces_returns_none():
 
 
 def test_facecam_box_centers_and_stays_in_bounds():
-    # Wajah besar di tengah: kotak full-width (1080), rasio tetap 45:32, di dalam frame.
+    # Wajah besar di tengah: kotak full-width (1080), rasio tetap 9:7, di dalam frame.
     frames = _frames(lambda t, i: [(0.5, 0.5, 0.4, 0.0)])
     x, y, w, h = reframe.facecam_box(frames, 1080, 1920)
 
-    assert w == 1080 and h == 768  # 45:32 dijaga saat clamp ke lebar frame
+    assert w == 1080 and h == 840  # 9:7 dijaga saat clamp ke lebar frame
     assert 0 <= x <= 1080 - w and 0 <= y <= 1920 - h
 
 
@@ -206,9 +206,9 @@ def test_facecam_graph_vstacks_face_panel_over_gameplay():
     joined = ";".join(graph)
     assert "split=2" in joined
     assert "crop=546:388:12:34" in joined
-    assert "scale=1080:768" in joined
-    assert "min(ih*1080/1152,in_w)" in joined
-    assert "scale=1080:1152" in joined
+    assert "scale=1080:840" in joined
+    assert "min(ih*1080/1080,in_w)" in joined
+    assert "scale=1080:1080" in joined
     assert "boxblur" not in joined
     assert "vstack" in joined
     assert label == "[v]"
@@ -217,7 +217,7 @@ def test_facecam_graph_vstacks_face_panel_over_gameplay():
 def test_facecam_graph_burns_subtitles_with_vout_label():
     from clipper import pipeline
 
-    graph, label = pipeline._facecam_graph((0, 0, 1080, 768), "/tmp/sub.ass")
+    graph, label = pipeline._facecam_graph((0, 0, 1080, 840), "/tmp/sub.ass")
 
     assert label == "[vout]"
     assert any("subtitles=" in line for line in graph)
@@ -348,21 +348,27 @@ def test_facecam_box_centers_corner_face_by_zooming_in():
 
 
 @pytest.mark.parametrize(
-    "cx,cy,fh",
-    [(0.87, 0.82, 0.14), (0.87, 0.50, 0.14), (0.12, 0.47, 0.114), (0.5, 0.35, 0.15)],
+    "W,H,cx,cy,fh",
+    [
+        (2560, 1440, 2334 / 2560, 988 / 1440, 178.9 / 1440),  # regresi wJVeWiqMJ-M 40:30
+        (2560, 1440, 0.12, 0.47, 0.114),
+        (1920, 1080, 0.88, 0.80, 0.13),
+        (1920, 1080, 0.50, 0.35, 0.15),
+    ],
 )
-def test_facecam_face_centered_in_bounds_and_below_tiktok_top_ui(cx, cy, fh):
+def test_facecam_face_centered_in_bounds_and_below_tiktok_top_ui(W, H, cx, cy, fh):
     # Wajah tetap di tengah horizontal, kotak sepenuhnya di dalam frame (tanpa
-    # overflow/blur), dan atas wajah di bawah UI atas TikTok (~0-220px dari 1920).
-    x, y, w, h = reframe.facecam_box([(t, [(cx, cy, fh, 0.0)]) for t in range(10)], 1920, 1080)
-    assert 0 <= x and x + w <= 1920 and 0 <= y and y + h <= 1080
-    assert (cx * 1920 - x) / w == pytest.approx(0.5, abs=0.02)
+    # overflow/blur), dan puncak rambut (~0.62x tinggi kotak wajah di atas alis)
+    # berada >=170px dari tepi atas (di bawah badge/search bar TikTok).
+    x, y, w, h = reframe.facecam_box([(t, [(cx, cy, fh, 0.0)]) for t in range(10)], W, H)
+    assert 0 <= x and x + w <= W and 0 <= y and y + h <= H
+    assert (cx * W - x) / w == pytest.approx(0.5, abs=0.06)
     s = reframe.FACECAM_PANEL_H / h
-    face_px = fh * 1080 * s
-    face_top = (cy * 1080 - y) * s - face_px / 2
-    hair_top = face_top - 0.30 * face_px
-    assert face_top >= 280
-    assert hair_top >= 200
+    face_px = fh * H * s
+    eyebrows_top = (cy * H - y) * s - face_px / 2
+    hair_top = eyebrows_top - 0.62 * face_px
+    assert eyebrows_top >= 380
+    assert hair_top >= 170
 
 
 # --- shot-cut aware speaker selection -------------------------------------------
