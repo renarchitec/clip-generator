@@ -264,7 +264,11 @@ def two_speaker_centers_from_frames(
 FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 640  # panel atas 27:16
 FACECAM_FACE_SCALE = 3.0  # tinggi panel = 3x tinggi wajah
 FACECAM_MIN_PANEL_H = 64  # piksel; di bawah ini upscale terlalu kasar
-FACECAM_MIN_FACE_SCALE = 1.8  # batas zoom-in saat memusatkan wajah di sudut
+FACECAM_MIN_FACE_SCALE = 2.2  # batas zoom-in saat memusatkan wajah di sudut
+# Panel facecam ada di paling atas output 9:16, tempat UI TikTok/Reels/Shorts
+# (status bar, tab "Following | For You", ikon search) menutupi ~200px pertama.
+# Wajah diletakkan di bawah tengah panel supaya tidak tertutup.
+FACECAM_FACE_Y = 0.62  # posisi vertikal pusat wajah, pecahan tinggi panel
 
 
 def facecam_box(
@@ -276,7 +280,8 @@ def facecam_box(
 
     Wajah per frame: pilih yang paling kecil (paling statis/jauh). Butuh wajah di
     >=50% sampel, kalau tidak -> None (pipeline pakai reframe biasa). Kotak
-    27:16 (1080x640), tinggi ~3x wajah, di tengah wajah, dijepit ke dalam frame,
+    27:16 (1080x640), tinggi ~3x wajah, wajah di tengah horizontal dan di
+    FACECAM_FACE_Y vertikal (aman dari UI atas TikTok), dijepit ke dalam frame,
     dimensi genap.
     """
     if not frames or src_w <= 0 or src_h <= 0:
@@ -300,11 +305,12 @@ def facecam_box(
         h = src_h
     # Facecam di sudut: kotak yang dijepit ke tepi frame membuat wajah tidak
     # di tengah panel. Perkecil kotak (zoom in) sampai muat dengan wajah di
-    # tengah, tapi wajah maksimal ~1/FACECAM_MIN_FACE_SCALE tinggi panel.
+    # tengah (vertikal: di FACECAM_FACE_Y), tapi wajah maksimal
+    # ~1/FACECAM_MIN_FACE_SCALE tinggi panel.
     fit = min(
         1.0,
         2 * min(cx, 1 - cx) * src_w / w,
-        2 * min(cy, 1 - cy) * src_h / h,
+        min(cy / FACECAM_FACE_Y, (1 - cy) / (1 - FACECAM_FACE_Y)) * src_h / h,
     )
     floor = min(1.0, FACECAM_MIN_FACE_SCALE * face_h * src_h / h)
     scale = max(fit, floor)
@@ -313,7 +319,7 @@ def facecam_box(
     w, h = max(2, w - w % 2), max(2, h - h % 2)  # dimensi genap untuk x264
 
     x = int(round(cx * src_w - w / 2))
-    y = int(round(cy * src_h - h / 2))
+    y = int(round(cy * src_h - h * FACECAM_FACE_Y))
     x = min(max(0, x), max(0, src_w - w))
     y = min(max(0, y), max(0, src_h - h))
     return (x, y, w, h)

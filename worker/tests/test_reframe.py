@@ -339,7 +339,7 @@ def test_facecam_box_centers_corner_face_by_zooming_in():
     face_x = 0.12 * 2560
     face_y = 0.47 * 1440
     assert (face_x - x) / w == pytest.approx(0.5, abs=0.02)
-    assert (face_y - y) / h == pytest.approx(0.5, abs=0.02)
+    assert (face_y - y) / h == pytest.approx(reframe.FACECAM_FACE_Y, abs=0.02)
     assert w * 640 == pytest.approx(h * 1080, rel=0.01)  # rasio 27:16 tetap
     assert 0 <= x and x + w <= 2560 and 0 <= y and y + h <= 1440
 
