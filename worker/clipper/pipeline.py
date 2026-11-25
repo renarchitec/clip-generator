@@ -1310,9 +1310,25 @@ async def render_manual(
                 f"mengunduh clip {index}/{total}",
             )
             try:
-                section, offset = await _download_one_section(
-                    job, index, moment, workdir
-                )
+                for attempt in (1, 2):
+                    try:
+                        section, offset = await _download_one_section(
+                            job, index, moment, workdir
+                        )
+                        break
+                    except Exception as exc:
+                        # 403 sesekali terjadi pada URL section; buang sisa file
+                        # dan coba sekali lagi sebelum jatuh ke video penuh.
+                        if attempt == 1 and "403" in str(exc):
+                            _remove_section_files(workdir, index)
+                            log.warning(
+                                "job %s: section %s kena 403 (%s), coba ulang sekali",
+                                job.job_id,
+                                index,
+                                exc,
+                            )
+                            continue
+                        raise
             except Exception as exc:
                 log.warning(
                     "job %s: section %s gagal (%s), fallback unduh video penuh",
@@ -1335,6 +1351,15 @@ async def render_manual(
             src_video = section
         else:  # pragma: no cover - tidak mungkin: section atau full video ada
             raise RuntimeError("sumber video tidak tersedia untuk render")
+
+        if src_video not in _FACECAM_BOX_CACHE:
+            # Facecam panel statis: pakai ulang kotak dari section/video lain
+            # pada job ini agar tidak memindai video lagi (termasuk fallback).
+            cached_box = next(
+                (b for b in _FACECAM_BOX_CACHE.values() if b is not None), None
+            )
+            if cached_box is not None:
+                _FACECAM_BOX_CACHE[src_video] = cached_box
 
         try:
             clip = await asyncio.to_thread(

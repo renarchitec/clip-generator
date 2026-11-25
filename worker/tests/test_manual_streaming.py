@@ -152,6 +152,95 @@ def test_manual_streaming_falls_back_to_full_video_mid_job(tmp_path):
     assert list((tmp_path / "clip-01.mp4", tmp_path / "clip-02.mp4", tmp_path / "clip-03.mp4"))
 
 
+def test_manual_streaming_retries_section_once_on_403_before_succeeding(tmp_path):
+    """403 sekali harus diunduh ulang section-nya, bukan langsung video penuh."""
+    attempts = {"sections": [], "full": 0, "renders": []}
+
+    async def fake_section(job_arg, index, moment, workdir):
+        attempts["sections"].append(index)
+        if len(attempts["sections"]) == 1:
+            (tmp_path / "section-01.mp4").write_text("partial")
+            raise RuntimeError("HTTP Error 403: Forbidden")
+        path = tmp_path / f"section-{index:02d}.mp4"
+        path.write_text("sec")
+        return str(path), moment.start
+
+    async def fake_full(job_arg, workdir, on_progress=None):
+        attempts["full"] += 1
+        raise AssertionError("403 sekali seharusnya tidak memicu video penuh")
+
+    def fake_render_one(video, moment, subs, outdir, filename, *args, **kwargs):
+        attempts["renders"].append(filename)
+        (tmp_path / filename).write_text("clip")
+
+    with patch.object(pipeline, "_download_one_section", side_effect=fake_section), \
+         patch.object(pipeline, "_download_full", side_effect=fake_full), \
+         patch.object(pipeline, "_render_one", side_effect=fake_render_one):
+        clips = asyncio.run(
+            pipeline.render_manual(
+                _job([ManualRange(10, 20)]),
+                _moments(1),
+                [],
+                str(tmp_path),
+                str(tmp_path),
+            )
+        )
+
+    assert attempts["sections"] == [1, 1]
+    assert attempts["full"] == 0
+    assert attempts["renders"] == ["clip-01.mp4"]
+    assert [clip.file for clip in clips] == ["clip-01.mp4"]
+
+
+@pytest.mark.parametrize("fallback_full", [False, True])
+def test_manual_streaming_reuses_cached_facecam_box_across_sections_and_full_fallback(
+    tmp_path, fallback_full
+):
+    box = (10, 20, 300, 200)
+    seen = {"boxes": {}, "sources": []}
+
+    async def fake_section(job_arg, index, moment, workdir):
+        path = tmp_path / f"section-{index:02d}.mp4"
+        path.write_text("sec")
+        if index == 1:
+            pipeline._FACECAM_BOX_CACHE[str(path)] = box
+        if fallback_full and index == 2:
+            raise RuntimeError("yt-dlp gagal")
+        return str(path), moment.start
+
+    async def fake_full(job_arg, workdir, on_progress=None):
+        path = tmp_path / "source.mp4"
+        path.write_text("full")
+        return str(path)
+
+    def fake_render_one(video, moment, subs, outdir, filename, *args, **kwargs):
+        seen["sources"].append(os.path.basename(video))
+        seen["boxes"][os.path.basename(video)] = pipeline._FACECAM_BOX_CACHE.get(video)
+        (tmp_path / filename).write_text("clip")
+
+    try:
+        with patch.object(pipeline, "_download_one_section", side_effect=fake_section), \
+             patch.object(pipeline, "_download_full", side_effect=fake_full), \
+             patch.object(pipeline, "_render_one", side_effect=fake_render_one):
+            asyncio.run(
+                pipeline.render_manual(
+                    _job([ManualRange(10, 20), ManualRange(40, 50)]),
+                    _moments(2),
+                    [],
+                    str(tmp_path),
+                    str(tmp_path),
+                )
+            )
+    finally:
+        pipeline._FACECAM_BOX_CACHE.clear()
+
+    assert seen["sources"] == ["section-01.mp4", "section-02.mp4" if not fallback_full else "source.mp4"]
+    assert seen["boxes"] == {
+        "section-01.mp4": box,
+        "section-02.mp4" if not fallback_full else "source.mp4": box,
+    }
+
+
 def test_manual_streaming_honours_cancel_between_clips(tmp_path):
     calls = {"cancel_checks": 0, "sections": [], "renders": []}
 

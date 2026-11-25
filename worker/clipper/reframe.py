@@ -341,6 +341,7 @@ FACECAM_TILE_UP = 3.0
 FACECAM_MIN_FACE_HEIGHT = 0.03  # relatif tinggi frame utuh
 FACECAM_SAMPLE_FPS = 1.0  # panel facecam statis: 1 sampel/detik cukup
 FACECAM_MAX_SAMPLES = 240
+SEEK_STEP_THRESHOLD = 30  # di atas ini, seek langsung lebih murah daripada grab per frame
 FACECAM_KEYFRAMES = 6  # jumlah frame fase pencarian kandidat
 
 
@@ -480,13 +481,22 @@ def _iter_samples(capture, cv2, start: float, end: float, sample_fps: float, lim
         count += 1
         if count >= limit_n:
             break
-        grabbed = True
-        for _ in range(step - 1):
-            if not capture.grab():
-                grabbed = False
-                break
-        if not grabbed:
+        next_t = start + count * dt
+        if next_t > stop:
             break
+        if step > SEEK_STEP_THRESHOLD:
+            # Video panjang (mis. AV1 6 jam) pun step ribuan frame: seek langsung
+            # menghindari jutaan grab yang memperlambat deteksi facecam.
+            if not capture.set(cv2.CAP_PROP_POS_MSEC, next_t * 1000.0):
+                break
+        else:
+            grabbed = True
+            for _ in range(step - 1):
+                if not capture.grab():
+                    grabbed = False
+                    break
+            if not grabbed:
+                break
         if capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 > stop:
             break
 
@@ -521,7 +531,7 @@ def facecam_face_frames(
             min_detection_confidence=0.5,
         ) as detection:
             duration = max(0.5, end - start)
-            key_fps = max(0.05, FACECAM_KEYFRAMES / duration)
+            key_fps = max(1e-6, FACECAM_KEYFRAMES / duration)
             candidates: List[Face] = []
             frame_ids: List[int] = []
             proxy_w = proxy_h = 0

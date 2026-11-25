@@ -281,6 +281,53 @@ def test_facecam_candidate_needs_two_similar_occurrences():
     assert reframe._facecam_candidate([]) is None
 
 
+def test_iter_samples_seeks_instead_of_grabbing_when_step_is_large():
+    # Video AV1 6,5 jam @60fps dengan sampling 240 sampel: step ~5840 frame.
+    # Grab per frame akan membongkar ~1,4 juta frame; seek langsung tidak.
+    class FakeCapture:
+        def __init__(self):
+            self.t = 0.0
+            self.seeks = []
+            self.grabs = 0
+
+        def set(self, prop, value):
+            assert prop == cv2.CAP_PROP_POS_MSEC
+            self.t = value / 1000.0
+            self.seeks.append(self.t)
+            return True
+
+        def get(self, prop):
+            if prop == cv2.CAP_PROP_FPS:
+                return 60.0
+            assert prop == cv2.CAP_PROP_POS_MSEC
+            return self.t * 1000.0
+
+        def read(self):
+            self.t += 1 / 60.0
+            return True, "frame"
+
+        def grab(self):
+            self.grabs += 1
+            return True
+
+    cv2 = types.SimpleNamespace(CAP_PROP_POS_MSEC=0, CAP_PROP_FPS=5)
+    sample_fps = 240 / 23366.0
+    capture = FakeCapture()
+
+    samples = list(
+        reframe._iter_samples(capture, cv2, 0.0, 23366.0, sample_fps, 5)
+    )
+
+    assert len(samples) == 5
+    assert capture.grabs == 0
+    # Seek awal + satu seek untuk tiap langkah setelahnya.
+    assert len(capture.seeks) == 5
+    step = max(1, round(60 / sample_fps))
+    assert capture.seeks[1:] == pytest.approx(
+        [count * step / 60 for count in range(1, 5)]
+    )
+
+
 def test_facecam_box_from_corner_facecam_sizes_returns_panel_not_none():
     # Regresi video nyata: wajah facecam kecil (tinggi ~0.059 dari frame) yang
     # muncul di hampir semua sampel harus menghasilkan kotak panel di sudut,
