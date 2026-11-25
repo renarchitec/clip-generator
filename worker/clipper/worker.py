@@ -30,6 +30,10 @@ CAPTION_CONCURRENCY = 2
 # Satu frame JPEG untuk posisi watermark di UI.
 FRAME_QUEUE_NAME = models.FRAME_QUEUE_NAME
 FRAME_CONCURRENCY = int(os.getenv("FRAME_CONCURRENCY", "1"))
+def clips_dir() -> str:
+    return os.getenv("CLIPS_DIR", "/data/clips")
+
+
 # Reference Edit: antrean dan konkurensi worker tersendiri.
 REFERENCE_QUEUE_NAME = models.REFERENCE_QUEUE_NAME
 REFERENCE_CONCURRENCY = 1
@@ -40,10 +44,6 @@ DEFAULT_TEMP_ROOT = os.getenv("TEMP_ROOT") or None
 LLM_STATUS_KEY = "worker:status:llm"
 LLM_STATUS_TTL = 90
 LLM_STATUS_INTERVAL = 30
-
-
-def clips_dir() -> str:
-    return os.getenv("CLIPS_DIR", "/data/clips")
 
 
 def build_llm_status_payload() -> dict:

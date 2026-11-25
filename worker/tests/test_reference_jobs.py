@@ -46,11 +46,26 @@ def _raw_job(**overrides):
     return payload
 
 
-def test_reference_constants_match_shared_contract():
+def test_reference_constants_match_shared_contract(monkeypatch):
     assert models.REFERENCE_QUEUE_NAME == "reference-jobs"
     assert models.REFERENCE_STAGES == (
         "analyze_reference", "analyze_footage", "plan_edit", "render", "save"
     )
+    if "redis" not in sys.modules:
+        fake_redis_mod = types.ModuleType("redis")
+        fake_redis_async = types.ModuleType("redis.asyncio")
+        fake_redis_async.Redis = object
+        fake_redis_mod.asyncio = fake_redis_async
+        monkeypatch.setitem(sys.modules, "redis", fake_redis_mod)
+        monkeypatch.setitem(sys.modules, "redis.asyncio", fake_redis_async)
+    if "bullmq" not in sys.modules:
+        fake_bullmq = types.ModuleType("bullmq")
+        fake_bullmq.Worker = object
+        monkeypatch.setitem(sys.modules, "bullmq", fake_bullmq)
+    import importlib
+    worker_mod = importlib.import_module("clipper.worker")
+    assert worker_mod.REFERENCE_QUEUE_NAME == "reference-jobs"
+    assert worker_mod.DEFAULT_CLIPS_DIR == worker_mod.clips_dir()
 
 
 def test_reference_job_data_from_dict_parses_tolerant_payload():
