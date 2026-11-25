@@ -8,7 +8,9 @@ from unittest.mock import patch
 import pytest
 
 from clipper import pipeline
-from clipper.models import JobData, Watermark, WatermarkChromaKey, job_data_from_dict
+from clipper.models import (
+    WATERMARK_MAX_PER_JOB, JobData, Watermark, WatermarkChromaKey, job_data_from_dict,
+)
 
 BASE = {"jobId": "abc", "url": "https://youtu.be/x"}
 MOMENT = pipeline.llm.Moment(0.0, 4.0, "t")
@@ -46,6 +48,48 @@ def test_watermark_parses_camel_case():
         "scale": 0.3,
         "opacity": 0.5,
     }
+
+
+@pytest.mark.parametrize("count", [2, 3, 4, 5])
+def test_watermarks_array_takes_precedence_and_round_trips(count):
+    expected = [Watermark(f"{idx}.png") for idx in range(count)]
+    job = job_data_from_dict({
+        **BASE,
+        "watermark": {"filePath": "legacy.png"},
+        "watermarks": [wm.to_dict() for wm in expected],
+    })
+    assert job.watermarks == expected
+    assert job.watermark is job.watermarks[0]
+    payload = job.to_dict()
+    assert payload["watermarks"] == [wm.to_dict() for wm in expected]
+    assert payload["watermark"] == payload["watermarks"][0]
+    assert job_data_from_dict(payload) == job
+
+
+@pytest.mark.parametrize("key", ["watermarks", "watermark"])
+@pytest.mark.parametrize("container", [list, tuple])
+def test_watermark_lists_drop_invalid_items_and_cap_at_five(key, container):
+    items = [None, {"x": 0.2}, {"filePath": " "}, "not an object"]
+    items.extend({"filePath": f"{idx}.png"} for idx in range(7))
+    job = job_data_from_dict({**BASE, key: container(items)})
+    assert WATERMARK_MAX_PER_JOB == 5
+    assert job.watermarks == [Watermark(f"{idx}.png") for idx in range(5)]
+    assert job.watermark is job.watermarks[0]
+
+
+@pytest.mark.parametrize("raw", [None, [], [None], {"filePath": "not-an-array.png"}])
+def test_watermarks_falls_back_to_single_legacy_dict(raw):
+    job = job_data_from_dict({**BASE, "watermarks": raw, "watermark": {"filePath": "legacy.png"}})
+    assert job.watermarks == [Watermark("legacy.png")]
+    assert job.watermark is job.watermarks[0]
+
+
+def test_job_constructor_syncs_watermark_fields_and_caps_layers():
+    layers = [Watermark(f"{idx}.png") for idx in range(7)]
+    assert JobData("abc", BASE["url"], watermark=layers[0]).watermarks == [layers[0]]
+    job = JobData("abc", BASE["url"], watermarks=layers)
+    assert job.watermarks == layers[:5]
+    assert job.watermark is layers[0]
 
 
 def test_watermark_clamps_and_defaults():
@@ -137,6 +181,33 @@ def test_watermark_chain_and_overlay_expressions():
     assert "min(main_w-overlay_w" in overlay and "max(0," in overlay
     assert "shortest=1" in overlay
     assert overlay.endswith("[wmout]")
+
+
+def test_with_watermarks_one_layer_keeps_legacy_labels():
+    graph = ["[0:v]null[base]"]
+    wm = Watermark("a.png")
+    chain, label = pipeline._with_watermarks(graph, "[base]", 1080, 1920, [wm])
+    assert (chain, label) == pipeline._with_watermark(graph, "[base]", 1080, 1920, wm)
+    assert chain[1].startswith("[1:v]") and chain[1].endswith("[wm]")
+    assert chain[2].startswith("[base][wm]overlay=") and chain[2].endswith("[wmout]")
+    assert label == "[wmout]"
+
+
+def test_with_watermarks_three_layers_chain_in_list_order():
+    graph = ["[0:v]null[base]"]
+    layers = [Watermark(f"{idx}.png", x=x) for idx, x in enumerate((0.2, 0.5, 0.8))]
+    chain, label = pipeline._with_watermarks(graph, "[base]", 1080, 1920, layers)
+    assert graph == ["[0:v]null[base]"]
+    assert chain[:1] == graph and len(chain) == 7
+    for idx, (cur, out) in enumerate((
+        ("[base]", "[wmout0]"), ("[wmout0]", "[wmout1]"), ("[wmout1]", "[wmout]"),
+    )):
+        assert chain[2 * idx + 1].startswith(f"[{idx + 1}:v]")
+        assert chain[2 * idx + 1].endswith(f"[wm{idx}]")
+        overlay = chain[2 * idx + 2]
+        assert overlay.startswith(f"{cur}[wm{idx}]overlay=") and overlay.endswith(out)
+        assert f"main_w*{layers[idx].x:.4f}-overlay_w/2" in overlay
+    assert label == "[wmout]"
 
 
 def test_watermark_chain_uses_output_width_per_ratio():
@@ -377,6 +448,22 @@ def test_render_clip_sync_missing_watermark_renders_without(tmp_path, caplog):
     assert "watermark" in caplog.text.lower()
 
 
+def test_render_clip_sync_skips_missing_layer_and_renders_valid_layer(tmp_path):
+    clips = tmp_path / "clips"
+    outdir = clips / "jobwm"
+    outdir.mkdir(parents=True)
+    valid = Watermark("valid.png")
+    png = clips / valid.file_path
+    png.write_bytes(b"x")
+    job = JobData("jobwm", BASE["url"], watermarks=[Watermark("missing.png"), valid])
+
+    with patch.object(pipeline, "_render_one") as render:
+        pipeline._render_clip_sync(job, MOMENT, [], "src.mp4", "clip-01.mp4", str(outdir), 0.0)
+
+    render.assert_called_once()
+    assert render.call_args.kwargs == {"watermark": valid, "watermark_path": os.path.realpath(png)}
+
+
 def test_render_clip_sync_no_watermark_adds_no_kwargs(tmp_path):
     seen = {}
     with patch.object(pipeline, "_render_one", side_effect=lambda *a, **k: seen.update(k)):
@@ -550,3 +637,63 @@ def test_ffmpeg_smoke_video_watermark_loops_with_chroma_or_alpha(tmp_path, monke
             # Both samples are inside the watermark's bounds, so source blue
             # must come from chroma keying or the preserved alpha channel.
             assert tuple(frame[90, blue_x]) == pytest.approx((0, 0, 255), abs=25), (ext, at)
+
+
+@needs_ffmpeg
+def test_ffmpeg_smoke_stacks_png_and_looping_chroma_key_video(tmp_path, monkeypatch):
+    _require_ffmpeg_encoders("libx264", "png")
+    clips = tmp_path / "clips"
+    outdir = clips / "jobwm"
+    outdir.mkdir(parents=True)
+    src = tmp_path / "blue.mp4"
+    png = clips / "red.png"
+    overlay = clips / "green.mp4"
+    options = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+    subprocess.run(
+        [*options, "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=20:d=3",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)],
+        check=True, timeout=30,
+    )
+    subprocess.run(
+        [*options, "-f", "lavfi", "-i", "color=c=red:s=80x40,format=rgba",
+         "-frames:v", "1", str(png)],
+        check=True, timeout=30,
+    )
+    # The box is visible only in the first half of each loop, so late frame
+    # samples distinguish a looping input from a frozen or truncated one.
+    pattern = (
+        "color=c=lime:s=96x54:r=20:d=1,"
+        "drawbox=x=32:y=11:w=32:h=32:color=yellow:t=fill:enable='lt(t,0.5)'"
+    )
+    subprocess.run(
+        [*options, "-f", "lavfi", "-i", pattern,
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(overlay)],
+        check=True, timeout=30,
+    )
+
+    monkeypatch.setitem(pipeline.OUTPUT_SIZES, "16:9", (320, 180))
+    job = JobData(
+        "jobwm", BASE["url"], reframe="black_bars", captions=False, aspect_ratio="16:9",
+        watermarks=[
+            Watermark(png.name, x=0.2, y=0.2, scale=0.25),
+            Watermark(
+                overlay.name, x=0.8, y=0.8, scale=0.3,
+                chroma_key=WatermarkChromaKey(enabled=True, color="#00FF00"),
+            ),
+        ],
+    )
+    out = outdir / "out.mp4"
+    pipeline._render_clip_sync(
+        job, pipeline.llm.Moment(0.0, 3.0, "t"), [], str(src), out.name, str(outdir), 0.0,
+    )
+    assert _probe_duration(str(out)) == pytest.approx(3.0, abs=0.05)
+    for at in (0.2, 1.2, 2.2):
+        frame, _, _ = _frame_rgb(str(out), at=at)
+        assert tuple(frame[36, 64]) == pytest.approx((255, 0, 0), abs=25), at
+        # The existing green despill filter lowers the green channel of yellow.
+        assert tuple(frame[144, 256]) == pytest.approx((255, 128, 0), abs=25), at
+        # This sample is inside the video overlay but beside the yellow box.
+        assert tuple(frame[144, 288]) == pytest.approx((0, 0, 255), abs=25), at
+        assert tuple(frame[90, 160]) == pytest.approx((0, 0, 255), abs=25), at
+    hidden, _, _ = _frame_rgb(str(out), at=2.7)
+    assert tuple(hidden[144, 256]) == pytest.approx((0, 0, 255), abs=25)

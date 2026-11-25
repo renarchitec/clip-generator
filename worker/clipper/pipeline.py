@@ -745,7 +745,9 @@ def _chroma_key_filters(ck: WatermarkChromaKey) -> list[str]:
     return filters
 
 
-def _watermark_chain(width: int, height: int, wm: Watermark, input_label: str = "[1:v]") -> str:
+def _watermark_chain(
+    width: int, height: int, wm: Watermark, input_label: str = "[1:v]", out_label: str = "[wm]"
+) -> str:
     """Rantai filter watermark: key opsional, skala (lebar genap), RGBA, opacity."""
     wm_w = max(2, round(width * wm.scale / 2) * 2)
     steps = []
@@ -754,15 +756,17 @@ def _watermark_chain(width: int, height: int, wm: Watermark, input_label: str = 
     if wm.chroma_key and wm.chroma_key.enabled:
         steps.extend(_chroma_key_filters(wm.chroma_key))
     steps.extend((f"scale=w={wm_w}:h=-2", "format=rgba", f"colorchannelmixer=aa={wm.opacity:.3f}"))
-    return f"{input_label}{','.join(steps)}[wm]"
+    return f"{input_label}{','.join(steps)}{out_label}"
 
 
-def _watermark_overlay(label: str, wm: Watermark, out_label: str = "[wmout]") -> str:
+def _watermark_overlay(
+    label: str, wm: Watermark, wm_label: str = "[wm]", out_label: str = "[wmout]"
+) -> str:
     """Overlay dengan PUSAT di (x,y) pecahan frame, dijepit agar tetap di dalam frame."""
     x_expr = f"max(0,min(main_w-overlay_w,main_w*{wm.x:.4f}-overlay_w/2))"
     y_expr = f"max(0,min(main_h-overlay_h,main_h*{wm.y:.4f}-overlay_h/2))"
     return (
-        f"{label}[wm]overlay=x='{x_expr}':y='{y_expr}':shortest=1:format=auto{out_label}"
+        f"{label}{wm_label}overlay=x='{x_expr}':y='{y_expr}':shortest=1:format=auto{out_label}"
     )
 
 
@@ -775,6 +779,27 @@ def _with_watermark(
         + [_watermark_chain(width, height, wm), _watermark_overlay(label, wm)],
         "[wmout]",
     )
+
+
+def _with_watermarks(
+    graph: List[str], label: str, width: int, height: int, watermarks: Sequence[Watermark]
+) -> tuple[List[str], str]:
+    """Tambahkan watermark dari bawah ke atas sesuai urutan daftar."""
+    if not watermarks:
+        return list(graph), label
+    if len(watermarks) == 1:
+        return _with_watermark(graph, label, width, height, watermarks[0])
+
+    chain = list(graph)
+    cur = label
+    for idx, wm in enumerate(watermarks):
+        in_label = f"[{idx + 1}:v]"
+        wm_label = f"[wm{idx}]"
+        out_label = "[wmout]" if idx == len(watermarks) - 1 else f"[wmout{idx}]"
+        chain.append(_watermark_chain(width, height, wm, input_label=in_label, out_label=wm_label))
+        chain.append(_watermark_overlay(cur, wm, wm_label=wm_label, out_label=out_label))
+        cur = out_label
+    return chain, cur
 
 
 def _resolve_media_path(clips_root: str, file_path: str, label: str) -> Optional[str]:
@@ -1058,10 +1083,13 @@ def _render_one(
     watermark_path: Optional[str] = None,
     run_timeout: Optional[float] = None,
     caption_style: Optional[CaptionStyle] = None,
+    watermarks: Sequence[tuple[Watermark, str]] = (),
 ) -> None:
-    if watermark is None or not watermark_path:
-        watermark = None
-        watermark_path = None
+    resolved_wms: list[tuple[Watermark, str]] = []
+    if watermarks:
+        resolved_wms = [(wm, path) for wm, path in watermarks if wm is not None and path]
+    elif watermark is not None and watermark_path:
+        resolved_wms = [(watermark, watermark_path)]
     width, height = OUTPUT_SIZES.get(str(aspect_ratio), OUTPUT_SIZES["9:16"])
     landscape = aspect_ratio == "16:9"
     if aspect_ratio != "9:16":
@@ -1132,11 +1160,9 @@ def _render_one(
         "-sn",
         out_path,
     ]
-    wm_input = (
-        _watermark_input_args(watermark_path, duration, watermark)
-        if watermark_path and watermark
-        else []
-    )
+    wm_input: list[str] = []
+    for wm, path in resolved_wms:
+        wm_input.extend(_watermark_input_args(path, duration, wm))
 
     # Graph dasar dibangun sekali; dipakai ulang bila render dengan watermark
     # gagal dan harus diulang tanpa watermark (file rusak tetap tak menggagalkan job).
@@ -1167,8 +1193,10 @@ def _render_one(
             base_graph, base_label = [f"[0:v]{vf}[base]"], "[base]"
 
     def command(use_watermark: bool) -> List[str]:
-        if use_watermark and watermark:
-            chain, label = _with_watermark(base_graph, base_label, width, height, watermark)
+        if use_watermark and resolved_wms:
+            chain, label = _with_watermarks(
+                base_graph, base_label, width, height, [wm for wm, _ in resolved_wms]
+            )
             return (
                 head + wm_input + [
                     "-filter_complex", ";".join(chain), "-map", label, "-map", "0:a:0?"
@@ -1188,7 +1216,7 @@ def _render_one(
         try:
             _run(command(True), timeout=run_timeout)
         except Exception as exc:
-            if not watermark:
+            if not resolved_wms:
                 raise
             log.warning("gagal membakar watermark (%s), render ulang tanpa watermark", exc)
             _run(command(False), timeout=run_timeout)
@@ -1232,11 +1260,17 @@ def _render_clip_sync(
         else moment
     )
     extra: Dict[str, Any] = {}
-    if job.watermark:
-        # outdir = <clips_dir>/<job_id>; watermark relatif terhadap clips_dir.
-        wm_path = resolve_watermark_path(os.path.dirname(os.path.abspath(outdir)), job.watermark)
+    # outdir = <clips_dir>/<job_id>; watermark relatif terhadap clips_dir.
+    clips_root = os.path.dirname(os.path.abspath(outdir))
+    resolved_wms: list[tuple[Watermark, str]] = []
+    for wm in job.watermarks:
+        wm_path = resolve_watermark_path(clips_root, wm)
         if wm_path:
-            extra = {"watermark": job.watermark, "watermark_path": wm_path}
+            resolved_wms.append((wm, wm_path))
+    if len(resolved_wms) == 1:
+        extra["watermark"], extra["watermark_path"] = resolved_wms[0]
+    elif resolved_wms:
+        extra["watermarks"] = resolved_wms
     if job.caption_style is not None:
         extra["caption_style"] = job.caption_style
 

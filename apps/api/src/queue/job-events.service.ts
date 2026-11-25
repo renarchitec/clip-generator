@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { StoredWatermark } from '../watermarks/watermark-helpers';
+import type { StoredWatermarkValue } from '../watermarks/watermark-helpers';
 import type { StoredOutro } from '../outros/outro-helpers';
 import { Observable, Subject } from 'rxjs';
 import type { CaptionStyle } from '@clipper/shared';
@@ -24,8 +24,8 @@ export interface JobSnapshot {
   /** Batas pemindaian sumber (detik); null = durasi penuh. */
   maxSourceSec?: number | null;
   ranges?: unknown;
-  /** Snapshot watermark job: { watermarkId, filePath, x, y, scale, opacity } | null */
-  watermark?: StoredWatermark | null;
+  /** Snapshot watermark job: satu objek, array layer, atau null. */
+  watermark?: StoredWatermarkValue | null;
   /** Snapshot outro job: { outroId, filePath, durationSec } | null */
   outro?: StoredOutro | null;
   status: string;

@@ -58,7 +58,7 @@ export class WatermarksController {
 
   @Put('default')
   setDefault(@Body() body: unknown, @CurrentUser() user: { id: string }) {
-    // Body bisa settings atau null; validasi lewat zod di service.
+    // Body bisa satu objek settings, array layer, atau null; validasi lewat zod di service.
     return this.watermarks.setDefault(body ?? null, user.id);
   }
 

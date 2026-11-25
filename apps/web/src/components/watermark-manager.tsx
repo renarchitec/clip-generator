@@ -11,16 +11,47 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { videoFormatBadge, WatermarkMedia } from "@/components/watermark-media"
 import { api } from "@/lib/api"
 import { useT } from "@/lib/i18n"
-import { isVideoWatermark, uploadWatermark, type Watermark, type WatermarkSettings } from "@/lib/watermark"
+import {
+  isVideoWatermark,
+  normalizeWatermarkSettingsList,
+  uploadWatermark,
+  type Watermark,
+  type WatermarkDefaultValue,
+  type WatermarkSettings,
+} from "@/lib/watermark"
 
 export const watermarkKey = ["watermarks"] as const
+
+export type WatermarkDefaultResponse = { default: WatermarkDefaultValue; defaults?: WatermarkSettings[] }
+export type NormalizedWatermarkDefaultResponse = { default: WatermarkDefaultValue; defaults: WatermarkSettings[] }
 
 export function useWatermarkLibrary() {
   return useQuery({ queryKey: watermarkKey, queryFn: () => api<Watermark[]>("/watermarks") })
 }
 
 export function useWatermarkDefault() {
-  return useQuery({ queryKey: [...watermarkKey, "default"], queryFn: () => api<{ default: WatermarkSettings | null }>("/watermarks/default") })
+  return useQuery({
+    queryKey: [...watermarkKey, "default"],
+    queryFn: async (): Promise<NormalizedWatermarkDefaultResponse> => {
+      const data = await api<WatermarkDefaultResponse>("/watermarks/default")
+      const defaults = normalizeWatermarkSettingsList(data.defaults ?? data.default)
+      return { default: data.default, defaults }
+    },
+  })
+}
+
+export function useSaveWatermarkDefault() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (settings: WatermarkDefaultValue) =>
+      api<WatermarkDefaultResponse>("/watermarks/default", {
+        method: "PUT",
+        body: JSON.stringify(settings),
+      }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: [...watermarkKey, "default"] })
+    },
+  })
 }
 
 export function useWatermarkUpload() {
@@ -34,6 +65,7 @@ export function useWatermarkUpload() {
 type Props = {
   selectedId: string | null
   onSelect: (watermark: Watermark) => void
+  onDeleted?: (deletedId: string) => void
   compact?: boolean
 }
 
@@ -47,7 +79,7 @@ function formatVideoPill(watermark: Watermark): string {
 }
 
 /** Library grid + upload. Used in the workspace settings and standalone on /settings. */
-export function WatermarkManager({ selectedId, onSelect, compact = false }: Props) {
+export function WatermarkManager({ selectedId, onSelect, onDeleted, compact = false }: Props) {
   const t = useT()
   const client = useQueryClient()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -58,7 +90,11 @@ export function WatermarkManager({ selectedId, onSelect, compact = false }: Prop
   const remove = useMutation({
     mutationFn: (id: string) => api<void>(`/watermarks/${id}`, { method: "DELETE" }),
     onSuccess: async (_, id) => {
-      if (selectedId === id) onSelect({ id: "", name: "", width: 1, height: 1, mimeType: "", createdAt: "", url: "" })
+      if (onDeleted) {
+        onDeleted(id)
+      } else if (selectedId === id) {
+        onSelect({ id: "", name: "", width: 1, height: 1, mimeType: "", createdAt: "", url: "" })
+      }
       await client.invalidateQueries({ queryKey: watermarkKey })
       await client.invalidateQueries({ queryKey: [...watermarkKey, "default"] })
       toast.success(t.watermarkDeleted)

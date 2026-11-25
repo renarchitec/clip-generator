@@ -10,11 +10,25 @@ export const WATERMARK_CHROMA_BLEND_MAX = 0.5
 
 export type Watermark = { id: string; name: string; width: number; height: number; mimeType: string; kind?: WatermarkKind; durationSec?: number | null; createdAt: string; url: string }
 export type WatermarkSettings = { watermarkId: string; x: number; y: number; scale: number; opacity: number; chromaKey?: WatermarkChromaKey | null }
+export type WatermarkLayer = WatermarkSettings & { layerId: string }
 export type JobWatermark = WatermarkSettings & { filePath: string | null; mimeType?: string }
+export type WatermarkDefaultValue = WatermarkSettings | WatermarkSettings[] | null
+export type JobWatermarkValue = JobWatermark | JobWatermark[] | null
 
+export const WATERMARK_MAX_PER_JOB = 5
 export const WATERMARK_SCALE_MIN = 0.03
 export const WATERMARK_SCALE_MAX = 1
 export const WATERMARK_OPACITY_MIN = 0.1
+
+export const WATERMARK_STAGGER_POSITIONS: ReadonlyArray<{ x: number; y: number }> = [
+  { x: 0.5, y: 0.5 },
+  { x: 0.5, y: 0.22 },
+  { x: 0.5, y: 0.78 },
+  { x: 0.24, y: 0.24 },
+  { x: 0.76, y: 0.76 },
+]
+
+let fallbackLayerCounter = 0
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
 const VIDEO_EXT_RE = /\.(mp4|webm|mov)$/i
@@ -39,7 +53,7 @@ export function clampChromaKey(chromaKey: WatermarkChromaKey): WatermarkChromaKe
 
 export function clampWatermark(settings: WatermarkSettings): WatermarkSettings {
   const clamped: WatermarkSettings = {
-    ...settings,
+    watermarkId: settings.watermarkId,
     x: clamp(settings.x, 0, 1),
     y: clamp(settings.y, 0, 1),
     scale: clamp(settings.scale, WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX),
@@ -53,8 +67,53 @@ export function clampWatermark(settings: WatermarkSettings): WatermarkSettings {
   return clamped
 }
 
-export function defaultWatermarkSettings(id: string): WatermarkSettings {
-  return { watermarkId: id, x: 0.5, y: 0.5, scale: 0.18, opacity: 0.8 }
+export function staggerWatermarkPosition(index: number): { x: number; y: number } {
+  const safeIndex = Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0
+  return WATERMARK_STAGGER_POSITIONS[safeIndex % WATERMARK_STAGGER_POSITIONS.length]
+}
+
+export function defaultWatermarkSettings(id: string, index = 0): WatermarkSettings {
+  const pos = staggerWatermarkPosition(index)
+  return { watermarkId: id, x: pos.x, y: pos.y, scale: 0.18, opacity: 0.8 }
+}
+
+export function toWatermarkLayer(settings: WatermarkSettings, layerId?: string): WatermarkLayer {
+  const id =
+    layerId ??
+    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `wm-${Date.now()}-${++fallbackLayerCounter}`)
+  return { ...clampWatermark(settings), layerId: id }
+}
+
+export function stripLayerId({ layerId: _id, ...settings }: WatermarkLayer): WatermarkSettings {
+  return settings
+}
+
+export function normalizeWatermarkSettingsList(raw: WatermarkDefaultValue | undefined): WatermarkSettings[] {
+  if (!raw) return []
+  const items = Array.isArray(raw) ? raw : [raw]
+  return items
+    .filter((item): item is WatermarkSettings => Boolean(item && typeof item === "object" && typeof item.watermarkId === "string"))
+    .slice(0, WATERMARK_MAX_PER_JOB)
+    .map(clampWatermark)
+}
+
+export function normalizeJobWatermarks(raw: JobWatermarkValue | undefined): JobWatermark[] {
+  if (!raw) return []
+  const items = Array.isArray(raw) ? raw : [raw]
+  return items
+    .filter((item): item is JobWatermark => Boolean(item && typeof item === "object" && typeof item.watermarkId === "string"))
+    .slice(0, WATERMARK_MAX_PER_JOB)
+}
+
+export function serializeWatermarkList(layers: Array<WatermarkSettings | WatermarkLayer>): WatermarkDefaultValue {
+  const cleaned = layers
+    .slice(0, WATERMARK_MAX_PER_JOB)
+    .map((layer) => clampWatermark("layerId" in layer ? stripLayerId(layer) : layer))
+  if (cleaned.length === 0) return null
+  if (cleaned.length === 1) return cleaned[0]
+  return cleaned
 }
 
 /**

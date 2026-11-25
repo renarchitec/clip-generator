@@ -7,19 +7,30 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import {
+import { createRequire } from 'node:module';
+import { runInThisContext } from 'node:vm';
+import 'reflect-metadata';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import ts from 'typescript';
+import * as watermarkHelpers from './watermark-helpers.ts';
+const {
+  normalizeStoredWatermarks,
+  parseWatermarkList,
   parseWatermarkSettings,
   readImageSize,
   readWatermarkMediaInfo,
+  serializeWatermarkValue,
   sniffImageMime,
   sniffWatermarkMime,
   WATERMARK_IMAGE_MAX_BYTES,
   WATERMARK_MAX_BYTES,
+  WATERMARK_MAX_PER_JOB,
   WATERMARK_VIDEO_MAX_BYTES,
   WATERMARK_VIDEO_MAX_DURATION_SEC,
   WATERMARK_VIDEO_MIN_DURATION_SEC,
   watermarkKind,
-} from './watermark-helpers.ts';
+} = watermarkHelpers;
 
 const root = join(process.cwd(), '../..');
 const read = (path: string) => readFile(join(root, path), 'utf8');
@@ -73,6 +84,145 @@ test('hapus watermark mengosongkan default bila sama, tapi tidak menyentuh job',
   assert.match(body, /Prisma\.DbNull/);
   assert.match(body, /unlink/);
   assert.doesNotMatch(body, /job\.update|job\.delete/);
+});
+
+const logo = { watermarkId: 'logo', x: 0.25, y: 1, scale: 0.3, opacity: 0.8 };
+const video = {
+  ...logo, watermarkId: 'video', x: 0.75,
+  chromaKey: { enabled: true, color: '#00FF00', similarity: 0.1, blend: 0.2 },
+};
+
+test('parseWatermarkList accepts single settings and 0–5 layers, reporting limit or element path', () => {
+  assert.deepEqual(parseWatermarkList(logo), { ok: true, value: [logo] });
+  for (let count = 0; count <= WATERMARK_MAX_PER_JOB; count++) {
+    const value = Array.from({ length: count }, (_, index) => ({ ...logo, watermarkId: `${index}` }));
+    assert.deepEqual(parseWatermarkList(value), { ok: true, value });
+  }
+  const overLimit = parseWatermarkList(Array(6).fill(logo));
+  assert.equal(overLimit.ok, false);
+  if (!overLimit.ok) assert.match(overLimit.message, /maksimal 5/i);
+  const invalid = parseWatermarkList([logo, { ...video, chromaKey: { ...video.chromaKey, color: 'green' } }]);
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.match(invalid.message, /watermark\[1\]\.chromaKey\.color/);
+});
+
+test('serialization preserves legacy objects; stored layer normalization filters and caps in order', () => {
+  assert.equal(serializeWatermarkValue([]), null);
+  assert.equal(serializeWatermarkValue([logo]), logo);
+  const settings = [logo, video];
+  assert.equal(serializeWatermarkValue(settings), settings);
+
+  const stored = { ...logo, filePath: 'watermarks/logo.png' };
+  assert.deepEqual(normalizeStoredWatermarks(stored), [stored]);
+  for (const invalid of [null, undefined, '', 5, logo, { ...stored, watermarkId: 5 }]) {
+    assert.deepEqual(normalizeStoredWatermarks(invalid), []);
+  }
+  const layers = Array.from({ length: 6 }, (_, index) => ({ ...stored, watermarkId: `${index}` }));
+  assert.deepEqual(normalizeStoredWatermarks([null, logo, ...layers]), layers.slice(0, 5));
+});
+
+type WatermarksServiceConstructor = new (prisma: object, config: { clipsDir: string }) => {
+  remove(id: string, userId: string): Promise<void>;
+  getDefault(userId: string): Promise<unknown>;
+  setDefault(value: unknown, userId: string): Promise<unknown>;
+  resolveSettings(value: unknown, userId: string): Promise<unknown>;
+};
+
+async function loadWatermarksService(): Promise<WatermarksServiceConstructor> {
+  const file = join(root, 'apps/api/src/watermarks/watermarks.service.ts');
+  // Node's strip-types runner cannot load decorators; transpile without loading Nest DI dependencies.
+  const { outputText } = ts.transpileModule(await readFile(file, 'utf8'), {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, experimentalDecorators: true, esModuleInterop: true,
+    },
+  });
+  const exports: Record<string, unknown> = {};
+  const require = createRequire(file);
+  const load = runInThisContext(`(function (exports, require) { ${outputText}\n})`, { filename: file });
+  load(exports, (id: string) => id === './watermark-helpers' ? watermarkHelpers : require(id));
+  return exports.WatermarksService as WatermarksServiceConstructor;
+}
+
+test('remove deletes only matching default layers and uses DbNull when none remain', async () => {
+  const WatermarksService = await loadWatermarksService();
+  const secondVideo = { ...video, x: 0.5 };
+  let watermarkDefault: unknown = [logo, video, { ...logo, x: 0 }, secondVideo];
+  const deleted: string[] = [];
+  const tx = {
+    watermark: { delete: async ({ where }: { where: { id: string } }) => { deleted.push(where.id); } },
+    user: {
+      findUnique: async () => ({ watermarkDefault }),
+      update: async ({ data }: { data: { watermarkDefault: unknown } }) => { watermarkDefault = data.watermarkDefault; },
+    },
+  };
+  const service = new WatermarksService({
+    watermark: { findFirst: async ({ where }: { where: { id: string; userId: string } }) => {
+      assert.equal(where.userId, 'owner');
+      // An out-of-root path prevents filesystem access in this test.
+      return { id: where.id, filePath: '../ignored.png' };
+    } },
+    $transaction: async (callback: (client: typeof tx) => Promise<void>) => callback(tx),
+  }, { clipsDir: '/clips' });
+  await service.remove('logo', 'owner');
+  assert.deepEqual(watermarkDefault, [video, secondVideo]);
+  watermarkDefault = [logo, video];
+  await service.remove('logo', 'owner');
+  assert.deepEqual(watermarkDefault, video);
+  await service.remove('video', 'owner');
+  assert.equal(watermarkDefault, Prisma.DbNull);
+  assert.deepEqual(deleted, ['logo', 'logo', 'video']);
+});
+
+test('resolveSettings preserves order, checks each unique ID once and rejects unowned layers', async () => {
+  const WatermarksService = await loadWatermarksService();
+  const lookups: string[] = [];
+  const logoMedia = { filePath: 'watermarks/logo.png', mimeType: 'image/png' };
+  const videoMedia = { filePath: 'watermarks/video.mp4', mimeType: 'video/mp4' };
+  const service = new WatermarksService({
+    watermark: { findFirst: async ({ where }: { where: { id: string; userId: string } }) => {
+      assert.equal(where.userId, 'owner');
+      lookups.push(where.id);
+      return where.id === 'logo' ? logoMedia : where.id === 'video' ? videoMedia : null;
+    } },
+  }, { clipsDir: '/clips' });
+  for (const value of [undefined, null, []]) assert.deepEqual(await service.resolveSettings(value, 'owner'), []);
+  assert.deepEqual(lookups, []);
+  const duplicate = { ...logo, x: 0.5 };
+  assert.deepEqual(await service.resolveSettings([logo, video, duplicate], 'owner'), [
+    { ...logo, ...logoMedia }, { ...video, ...videoMedia }, { ...duplicate, ...logoMedia },
+  ]);
+  assert.deepEqual(lookups, ['logo', 'video']);
+  await assert.rejects(service.resolveSettings([logo, { ...video, watermarkId: 'missing' }], 'owner'), NotFoundException);
+  await assert.rejects(service.resolveSettings([logo, { ...video, watermarkId: undefined }], 'owner'), BadRequestException);
+});
+
+test('defaults read legacy objects, save arrays and refuse to save unowned layers', async () => {
+  const WatermarksService = await loadWatermarksService();
+  let watermarkDefault: unknown = logo;
+  const lookups: string[] = [];
+  const service = new WatermarksService({
+    watermark: { findFirst: async ({ where }: { where: { id: string; userId: string } }) => {
+      assert.equal(where.userId, 'owner');
+      lookups.push(where.id);
+      return where.id === 'missing' ? null : { filePath: where.id, mimeType: 'image/png' };
+    } },
+    user: {
+      findUnique: async () => ({ watermarkDefault }),
+      update: async ({ data }: { data: { watermarkDefault: unknown } }) => { watermarkDefault = data.watermarkDefault; },
+    },
+  }, { clipsDir: '/clips' });
+  assert.deepEqual(await service.getDefault('owner'), { default: logo, defaults: [logo] });
+  const layers = [logo, video, { ...logo, x: 0.5 }];
+  const response = { default: layers, defaults: layers };
+  assert.deepEqual(await service.setDefault(layers, 'owner'), response);
+  assert.deepEqual(lookups, ['logo', 'video']);
+  assert.deepEqual(await service.getDefault('owner'), response);
+  await assert.rejects(service.setDefault([logo, { ...video, watermarkId: 'missing' }], 'owner'), NotFoundException);
+  assert.deepEqual(watermarkDefault, layers);
+  for (const value of [[], null]) {
+    assert.deepEqual(await service.setDefault(value, 'owner'), { default: null, defaults: [] });
+    assert.equal(watermarkDefault, Prisma.DbNull);
+  }
 });
 
 test('magic bytes menolak file bukan png/jpeg/webp', () => {

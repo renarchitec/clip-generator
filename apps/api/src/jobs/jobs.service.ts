@@ -37,14 +37,18 @@ import { assertAllowedUrl, normalizeDescription } from './validation';
 import { WatermarksService } from '../watermarks/watermarks.service';
 import { OutrosService } from '../outros/outros.service';
 import type { OutroJobPayload, StoredOutro } from '../outros/outro-helpers';
-import type {
-  StoredWatermark,
-  WatermarkJobPayload,
+import {
+  normalizeStoredWatermarks,
+  serializeWatermarkValue,
+  type StoredWatermark,
+  type StoredWatermarkValue,
+  type WatermarkJobPayload,
 } from '../watermarks/watermark-helpers';
 
-/** JobData shared belum memuat watermark; payload worker memakai filePath + posisi. */
-type JobDataWithWatermark = JobData & {
+/** Payload worker memakai filePath + posisi, tanpa ID pustaka. */
+type QueuedJobData = JobData & {
   watermark: WatermarkJobPayload | null;
+  watermarks: WatermarkJobPayload[];
   outro: OutroJobPayload | null;
 };
 
@@ -80,8 +84,9 @@ export class JobsService {
       aspectRatio === '9:16' && !twoSpeakers ? (dto.facecam ?? false) : false;
     // Batas pemindaian sumber: null = durasi penuh; hanya dipakai mode auto.
     const maxSourceSec = dto.mode === 'auto' ? (dto.maxSourceSec ?? null) : null;
-    // Cek kepemilikan + ambil snapshot path; null bila tidak memakai watermark.
-    const storedWatermark = await this.watermarks.resolveSettings(dto.watermark, userId);
+    // Cek kepemilikan dan simpan snapshot path dalam urutan layer.
+    const storedWatermarks = await this.watermarks.resolveSettings(dto.watermark, userId);
+    const persistedWatermark = serializeWatermarkValue(storedWatermarks);
 
     const storedOutro = await this.outros.resolveSettings(dto.outro, userId);
 
@@ -102,8 +107,8 @@ export class JobsService {
         customHashtags,
         captionStyle: captionStyle ? (captionStyle as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         ranges: ranges as unknown as Prisma.InputJsonValue,
-        watermark: storedWatermark
-          ? (storedWatermark as unknown as Prisma.InputJsonValue)
+        watermark: persistedWatermark
+          ? (persistedWatermark as unknown as Prisma.InputJsonValue)
           : Prisma.DbNull,
         outro: storedOutro
           ? (storedOutro as unknown as Prisma.InputJsonValue)
@@ -123,17 +128,17 @@ export class JobsService {
       }
     }
 
-    const watermark: WatermarkJobPayload | null = storedWatermark
-      ? {
-          filePath: storedWatermark.filePath,
-          x: storedWatermark.x,
-          y: storedWatermark.y,
-          scale: storedWatermark.scale,
-          opacity: storedWatermark.opacity,
-          ...(storedWatermark.mimeType !== undefined ? { mimeType: storedWatermark.mimeType } : {}),
-          ...(storedWatermark.chromaKey !== undefined ? { chromaKey: storedWatermark.chromaKey } : {}),
-        }
-      : null;
+    const toPayload = (wm: StoredWatermark): WatermarkJobPayload => ({
+      filePath: wm.filePath,
+      ...(wm.mimeType ? { mimeType: wm.mimeType } : {}),
+      x: wm.x,
+      y: wm.y,
+      scale: wm.scale,
+      opacity: wm.opacity,
+      ...(wm.chromaKey ? { chromaKey: wm.chromaKey } : {}),
+    });
+    const watermarks = storedWatermarks.map(toPayload);
+    const watermark = watermarks[0] ?? null;
 
     const outro: OutroJobPayload | null = storedOutro
       ? {
@@ -142,7 +147,7 @@ export class JobsService {
         }
       : null;
 
-    const data: JobDataWithWatermark = {
+    const data: QueuedJobData = {
       jobId: job.id,
       url,
       mode: dto.mode,
@@ -162,6 +167,7 @@ export class JobsService {
       },
       ranges,
       watermark,
+      watermarks,
       outro,
     };
 
@@ -306,17 +312,11 @@ export class JobsService {
     // maxSourceSec hanya relevan untuk mode auto; null = durasi penuh.
     dto.maxSourceSec = old.mode === 'auto' ? old.maxSourceSec : null;
     // Strip snapshot-only fields; create rechecks ownership and resolves the current path/MIME.
-    const oldWatermark = old.watermark as StoredWatermark | null;
-    dto.watermark = oldWatermark
-      ? {
-          watermarkId: oldWatermark.watermarkId,
-          x: oldWatermark.x,
-          y: oldWatermark.y,
-          scale: oldWatermark.scale,
-          opacity: oldWatermark.opacity,
-          ...(oldWatermark.chromaKey !== undefined ? { chromaKey: oldWatermark.chromaKey } : {}),
-        }
-      : null;
+    const oldWatermarks = normalizeStoredWatermarks(old.watermark);
+    dto.watermark = serializeWatermarkValue(oldWatermarks.map(({ watermarkId, x, y, scale, opacity, chromaKey }) => ({
+      watermarkId, x, y, scale, opacity,
+      ...(chromaKey !== undefined ? { chromaKey } : {}),
+    })));
     dto.outro = (old.outro as StoredOutro | null) ?? null;
 
     return this.create(dto, userId);
@@ -418,7 +418,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     targetDurationSec: job.targetDurationSec,
     maxSourceSec: job.maxSourceSec ?? null,
     ranges: job.ranges ?? null,
-    watermark: (job.watermark as StoredWatermark | null) ?? null,
+    watermark: (job.watermark as StoredWatermarkValue | null) ?? null,
     outro: (job.outro as StoredOutro | null) ?? null,
     status: job.status,
     stage: job.stage,

@@ -7,9 +7,10 @@ import type { Response } from 'express';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
-  parseWatermarkSettings,
+  parseWatermarkList,
   readWatermarkMediaInfo,
   sanitizeWatermarkName,
+  serializeWatermarkValue,
   sniffWatermarkMime,
   WATERMARK_EXT,
   WATERMARK_IMAGE_MAX_BYTES,
@@ -20,8 +21,11 @@ import {
   watermarkKind,
   watermarkUrl,
   type StoredWatermark,
+  type WatermarkDefaultValue,
   type WatermarkSettings,
 } from './watermark-helpers';
+
+type WatermarkDefaultsResponse = { default: WatermarkDefaultValue | null; defaults: WatermarkSettings[] };
 
 @Injectable()
 export class WatermarksService {
@@ -119,38 +123,52 @@ export class WatermarksService {
     await this.prisma.$transaction(async (tx) => {
       await tx.watermark.delete({ where: { id: watermark.id } });
       const user = await tx.user.findUnique({ where: { id: userId }, select: { watermarkDefault: true } });
-      const settings = parseWatermarkSettings(user?.watermarkDefault);
-      if (settings.ok && settings.value.watermarkId === watermark.id) {
-        await tx.user.update({ where: { id: userId }, data: { watermarkDefault: Prisma.DbNull } });
+      const settings = parseWatermarkList(user?.watermarkDefault);
+      if (settings.ok && settings.value.some((item) => item.watermarkId === watermark.id)) {
+        const remaining = settings.value.filter((item) => item.watermarkId !== watermark.id);
+        await tx.user.update({
+          where: { id: userId },
+          data: { watermarkDefault: serializeWatermarkValue(remaining) ?? Prisma.DbNull },
+        });
       }
     });
     if (absolutePath) await unlink(absolutePath).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; });
   }
 
-  async getDefault(userId: string): Promise<{ default: WatermarkSettings | null }> {
+  async getDefault(userId: string): Promise<WatermarkDefaultsResponse> {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { watermarkDefault: true } });
-    const parsed = parseWatermarkSettings(user?.watermarkDefault);
-    return { default: parsed.ok ? parsed.value : null };
+    const parsed = parseWatermarkList(user?.watermarkDefault);
+    const defaults = parsed.ok ? parsed.value : [];
+    return { default: serializeWatermarkValue(defaults), defaults };
   }
 
-  async setDefault(raw: unknown, userId: string): Promise<{ default: WatermarkSettings | null }> {
-    if (raw === null) {
+  async setDefault(raw: unknown, userId: string): Promise<WatermarkDefaultsResponse> {
+    if (raw === null || (Array.isArray(raw) && raw.length === 0)) {
       await this.prisma.user.update({ where: { id: userId }, data: { watermarkDefault: Prisma.DbNull } });
-      return { default: null };
+      return { default: null, defaults: [] };
     }
-    const parsed = parseWatermarkSettings(raw);
+    const parsed = parseWatermarkList(raw);
     if (!parsed.ok) throw new BadRequestException(parsed.message);
-    await this.findOwned(parsed.value.watermarkId, userId);
-    await this.prisma.user.update({ where: { id: userId }, data: { watermarkDefault: parsed.value as Prisma.InputJsonValue } });
-    return { default: parsed.value };
+    await this.findOwnedLayers(parsed.value, userId);
+    const value = serializeWatermarkValue(parsed.value);
+    await this.prisma.user.update({ where: { id: userId }, data: { watermarkDefault: value ?? Prisma.DbNull } });
+    return { default: value, defaults: parsed.value };
   }
 
-  async resolveSettings(raw: unknown, userId: string): Promise<StoredWatermark | null> {
-    if (raw === undefined || raw === null) return null;
-    const parsed = parseWatermarkSettings(raw);
+  async resolveSettings(raw: unknown, userId: string): Promise<StoredWatermark[]> {
+    if (raw === undefined || raw === null) return [];
+    const parsed = parseWatermarkList(raw);
     if (!parsed.ok) throw new BadRequestException(parsed.message);
-    const watermark = await this.findOwned(parsed.value.watermarkId, userId);
-    return { ...parsed.value, filePath: watermark.filePath, mimeType: watermark.mimeType };
+    const owned = await this.findOwnedLayers(parsed.value, userId);
+    return parsed.value.map((item) => ({ ...item, ...owned.get(item.watermarkId)! }));
+  }
+
+  private async findOwnedLayers(items: WatermarkSettings[], userId: string) {
+    const ids = new Set(items.map((item) => item.watermarkId));
+    return new Map(await Promise.all([...ids].map(async (id) => {
+      const { filePath, mimeType } = await this.findOwned(id, userId);
+      return [id, { filePath, mimeType }] as const;
+    })));
   }
 
   private async findOwned(id: string, userId: string) {

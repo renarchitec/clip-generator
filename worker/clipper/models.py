@@ -233,6 +233,7 @@ def to_max_source_sec(value: Any) -> Optional[int]:
 
 WATERMARK_DEFAULTS = {"x": 0.5, "y": 0.5, "scale": 0.25, "opacity": 1.0}
 WATERMARK_MAX_PATH_CHARS = 512
+WATERMARK_MAX_PER_JOB = 5
 WATERMARK_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov")
 WATERMARK_CHROMA_SIMILARITY_MIN = 0.01
 WATERMARK_CHROMA_SIMILARITY_MAX = 0.5
@@ -436,15 +437,26 @@ class JobData:
     ranges: List[ManualRange] = field(default_factory=list)
     # Gaya takarir opsional; None mempertahankan gaya hook lama.
     caption_style: Optional[CaptionStyle] = None
-    # Watermark gambar opsional; None = tanpa watermark.
+    # Watermark pertama untuk kompatibilitas payload lama.
     watermark: Optional[Watermark] = None
     # Outro video opsional; None = tanpa outro.
     outro: Optional[Outro] = None
+    # Watermark ditumpuk dari bawah ke atas sesuai urutan daftar.
+    watermarks: List[Watermark] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.watermarks:
+            self.watermarks = list(self.watermarks)[:WATERMARK_MAX_PER_JOB]
+            if self.watermark is None:
+                self.watermark = self.watermarks[0]
+        elif self.watermark is not None:
+            self.watermarks = [self.watermark]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "captionStyle": self.caption_style.to_dict() if self.caption_style else None,
             "watermark": self.watermark.to_dict() if self.watermark else None,
+            "watermarks": [w.to_dict() for w in self.watermarks],
             "outro": self.outro.to_dict() if self.outro else None,
             "jobId": self.job_id,
             "url": self.url,
@@ -515,6 +527,27 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         _first(data, "maxSourceSec", "max_source_sec")
     )
 
+    def parse_watermarks(items: Any) -> List[Watermark]:
+        watermarks: List[Watermark] = []
+        if isinstance(items, (list, tuple)):
+            for item in items:
+                wm = Watermark.from_dict(item)
+                if wm is not None:
+                    watermarks.append(wm)
+                    if len(watermarks) == WATERMARK_MAX_PER_JOB:
+                        break
+        return watermarks
+
+    watermarks = parse_watermarks(data.get("watermarks"))
+    if not watermarks:
+        legacy_watermark = data.get("watermark")
+        if isinstance(legacy_watermark, (list, tuple)):
+            watermarks = parse_watermarks(legacy_watermark)
+        else:
+            wm = Watermark.from_dict(legacy_watermark)
+            if wm is not None:
+                watermarks = [wm]
+
     return JobData(
         job_id=job_id,
         url=url,
@@ -533,7 +566,8 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),
         ranges=ranges,
         caption_style=CaptionStyle.from_dict(_first(data, "captionStyle", "caption_style")),
-        watermark=Watermark.from_dict(_first(data, "watermark")),
+        watermark=watermarks[0] if watermarks else None,
+        watermarks=watermarks,
         outro=Outro.from_dict(_first(data, "outro")),
     )
 

@@ -1,5 +1,6 @@
 import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ApiExtraModels, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
   IsBoolean,
@@ -28,7 +29,7 @@ import {
   REFRAME_MODES,
   normalizeCaptionStyle,
 } from '@clipper/shared';
-import { parseWatermarkSettings } from '../../watermarks/watermark-helpers';
+import { parseWatermarkList } from '../../watermarks/watermark-helpers';
 
 export class ManualRangeDto {
   @IsNumber()
@@ -52,6 +53,43 @@ export class ManualRangeDto {
   reason?: string;
 }
 
+/** Pengaturan chroma key (greenscreen) untuk video watermark. */
+export class WatermarkChromaKeyDto {
+  @IsOptional()
+  enabled?: boolean;
+
+  @IsOptional()
+  color?: string;
+
+  @IsOptional()
+  similarity?: number;
+
+  @IsOptional()
+  blend?: number;
+}
+
+/** Objek pengaturan watermark; prop didefinisikan agar tidak dihapus ValidationPipe(whitelist). */
+export class WatermarkSettingsDto {
+  @IsOptional()
+  watermarkId?: string;
+
+  @IsOptional()
+  x?: number;
+
+  @IsOptional()
+  y?: number;
+
+  @IsOptional()
+  scale?: number;
+
+  @IsOptional()
+  opacity?: number;
+
+  @IsOptional()
+  chromaKey?: WatermarkChromaKeyDto | null;
+}
+
+@ApiExtraModels(WatermarkSettingsDto, WatermarkChromaKeyDto)
 export class CreateJobDto {
   @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
   url: string;
@@ -135,7 +173,8 @@ export class CreateJobDto {
   /** Watermark dari pustaka pengguna; null = tanpa watermark. Divalidasi lewat zod. */
   @IsOptional()
   @IsWatermarkSettings()
-  watermark?: WatermarkSettingsDto | null;
+  @ApiPropertyOptional({ type: Object, nullable: true, description: 'Single watermark settings object or array of up to 5 layers; null for none.' })
+  watermark?: WatermarkSettingsDto | WatermarkSettingsDto[] | null;
 
   /** Outro dari pustaka pengguna; null = tanpa outro. Divalidasi lewat zod di service. */
   @IsOptional()
@@ -170,42 +209,6 @@ export function IsOutroSettings(validationOptions?: ValidationOptions) {
   };
 }
 
-/** Pengaturan chroma key (greenscreen) untuk video watermark. */
-export class WatermarkChromaKeyDto {
-  @IsOptional()
-  enabled?: boolean;
-
-  @IsOptional()
-  color?: string;
-
-  @IsOptional()
-  similarity?: number;
-
-  @IsOptional()
-  blend?: number;
-}
-
-/** Objek pengaturan watermark; prop didefinisikan agar tidak dihapus ValidationPipe(whitelist). */
-export class WatermarkSettingsDto {
-  @IsOptional()
-  watermarkId?: string;
-
-  @IsOptional()
-  x?: number;
-
-  @IsOptional()
-  y?: number;
-
-  @IsOptional()
-  scale?: number;
-
-  @IsOptional()
-  opacity?: number;
-
-  @IsOptional()
-  chromaKey?: WatermarkChromaKeyDto | null;
-}
-
 /** Izinkan null atau pengaturan watermark yang lolos skema zod. */
 export function IsWatermarkSettings(validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string): void {
@@ -216,10 +219,10 @@ export function IsWatermarkSettings(validationOptions?: ValidationOptions) {
       options: validationOptions,
       validator: {
         validate(value: unknown) {
-          return value === null || parseWatermarkSettings(value).ok;
+          return value === null || parseWatermarkList(value).ok;
         },
         defaultMessage({ value }: ValidationArguments) {
-          const parsed = parseWatermarkSettings(value);
+          const parsed = parseWatermarkList(value);
           return parsed.ok ? 'Pengaturan watermark tidak valid.' : parsed.message;
         },
       },

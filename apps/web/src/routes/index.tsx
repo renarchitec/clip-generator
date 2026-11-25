@@ -1,8 +1,8 @@
 import { createFileRoute, Link, redirect, useNavigate, useSearch } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useForm } from "@tanstack/react-form"
-import { ArrowUpRight, Captions, CircleAlert, Image as ImageIcon, ListChecks, LoaderCircle, Play, Plus, Sparkles, Users, Video, X } from "lucide-react"
-import { useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { ArrowDown, ArrowUp, ArrowUpRight, Captions, CircleAlert, Image as ImageIcon, ListChecks, LoaderCircle, Play, Plus, Sparkles, Users, Video, X } from "lucide-react"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -23,7 +23,8 @@ import { LlmStatus } from "@/components/llm-status"
 import { sourceLabel } from "@/lib/format"
 import { getVideoEmbed } from "@/lib/embed"
 import { JobAssembly } from "@/components/job-assembly"
-import { useWatermarkDefault, WatermarkManager, watermarkKey } from "@/components/watermark-manager"
+import { useSaveWatermarkDefault, useWatermarkDefault, WatermarkManager, watermarkKey } from "@/components/watermark-manager"
+import { WatermarkMedia } from "@/components/watermark-media"
 import { WatermarkOverlay } from "@/components/watermark-overlay"
 import { BriefHistoryMenu, briefHistoryKey } from "@/components/brief-history-menu"
 import { OutroPreview, useOutroDefault, useOutroLibrary } from "@/components/outro-manager"
@@ -35,14 +36,23 @@ import {
   DEFAULT_CHROMA_KEY,
   defaultWatermarkSettings,
   isVideoWatermark,
+  normalizeJobWatermarks,
+  serializeWatermarkList,
+  staggerWatermarkPosition,
+  stripLayerId,
+  toWatermarkLayer,
   WATERMARK_CHROMA_BLEND_MAX,
   WATERMARK_CHROMA_BLEND_MIN,
   WATERMARK_CHROMA_SIMILARITY_MAX,
   WATERMARK_CHROMA_SIMILARITY_MIN,
+  WATERMARK_MAX_PER_JOB,
   WATERMARK_SCALE_MAX,
   WATERMARK_SCALE_MIN,
+  WATERMARK_STAGGER_POSITIONS,
   type Watermark,
   type WatermarkChromaKey,
+  type WatermarkDefaultValue,
+  type WatermarkLayer,
   type WatermarkSettings,
 } from "@/lib/watermark"
 import { formatFrameTime, FRAME_DEFAULT_SEC, useFramePreview, type FrameErrorKind } from "@/lib/frame-preview"
@@ -60,7 +70,7 @@ export const Route = createFileRoute("/")({
 
 type ClipRange = { start: string; end: string; title?: string; reason?: string }
 type RangePayload = { start: number; end: number; title?: string; reason?: string }
-type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkSettings | null; outro: { outroId: string } | null }
+type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkDefaultValue; outro: { outroId: string } | null }
 
 function formatMomentTime(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
@@ -153,7 +163,8 @@ function Dashboard() {
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(() => normalizeCaptionStyle(draft?.captionStyle))
   const [customHashtagsInput, setCustomHashtagsInput] = useState(() => draft?.customHashtags ?? "")
   const parsedCustomHashtags = parseCustomHashtags(customHashtagsInput)
-  const [watermarkSettings, setWatermarkSettings] = useState<WatermarkSettings | null>(null)
+  const [watermarkLayers, setWatermarkLayers] = useState<WatermarkLayer[]>([])
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null)
   const [watermarkError, setWatermarkError] = useState("")
   const [outroId, setOutroId] = useState<string | null>(null)
   const [monitorView, setMonitorView] = useState<"video" | "frame">("video")
@@ -223,7 +234,19 @@ function Dashboard() {
     setCaptionLanguage(isCaptionLanguage(job.captionLanguage) ? job.captionLanguage : "auto")
     setCaptionStyle(job.captionStyle ? normalizeCaptionStyle(job.captionStyle) : { ...DEFAULT_CAPTION_STYLE })
     setCustomHashtagsInput(formatCustomHashtagsInput(job.customHashtags))
-    setWatermarkSettings(job.watermark ? clampWatermark({ watermarkId: job.watermark.watermarkId, x: job.watermark.x, y: job.watermark.y, scale: job.watermark.scale, opacity: job.watermark.opacity, ...(job.watermark.chromaKey ? { chromaKey: job.watermark.chromaKey } : {}) }) : null)
+    watermarkPrefilled.current = true
+    const restoredWatermarks = normalizeJobWatermarks(job.watermark).map((wm) =>
+      toWatermarkLayer({
+        watermarkId: wm.watermarkId,
+        x: wm.x,
+        y: wm.y,
+        scale: wm.scale,
+        opacity: wm.opacity,
+        ...(wm.chromaKey ? { chromaKey: wm.chromaKey } : {}),
+      }),
+    )
+    setWatermarkLayers(restoredWatermarks)
+    setSelectedLayerId(restoredWatermarks[0]?.layerId ?? null)
     outroPrefilled.current = true
     setOutroId(job.outro?.outroId ?? null)
     if (job.ranges?.length) form.setFieldValue("ranges", job.ranges.map(({ start, end, title, reason }) => ({ start: String(start), end: String(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}) })))
@@ -246,39 +269,180 @@ function Dashboard() {
   }, [outroId, outros.isSuccess, outros.data])
   const watermarkDefaults = useWatermarkDefault()
   const watermarks = useQuery({ queryKey: watermarkKey, queryFn: () => api<Watermark[]>("/watermarks") })
-  const chosenWatermark = watermarks.data?.find((item) => item.id === watermarkSettings?.watermarkId)
-  const chosenWatermarkIsVideo = isVideoWatermark(chosenWatermark)
-  const appliedWatermark = watermarkSettings && chosenWatermark
-    ? clampWatermark(chosenWatermarkIsVideo
-      ? watermarkSettings
-      : { watermarkId: watermarkSettings.watermarkId, x: watermarkSettings.x, y: watermarkSettings.y, scale: watermarkSettings.scale, opacity: watermarkSettings.opacity })
-    : null
-  const activeChromaKey: WatermarkChromaKey = watermarkSettings?.chromaKey ? clampChromaKey(watermarkSettings.chromaKey) : DEFAULT_CHROMA_KEY
+  const watermarkMap = useMemo(() => new Map((watermarks.data ?? []).map((item) => [item.id, item])), [watermarks.data])
+  const watermarkEnabled = watermarkLayers.length > 0
+  const activeSelectedLayer = watermarkLayers.find((layer) => layer.layerId === selectedLayerId) ?? watermarkLayers[0] ?? null
+  const activeSelectedLayerIndex = activeSelectedLayer ? watermarkLayers.findIndex((layer) => layer.layerId === activeSelectedLayer.layerId) : -1
+  const selectedWatermark = activeSelectedLayer ? watermarkMap.get(activeSelectedLayer.watermarkId) : undefined
+  const selectedWatermarkIsVideo = isVideoWatermark(selectedWatermark)
+  const appliedWatermarkLayers = useMemo(
+    () =>
+      watermarkLayers.flatMap((layer) => {
+        const watermark = watermarkMap.get(layer.watermarkId)
+        if (!watermark) return []
+        const normalized = isVideoWatermark(watermark)
+          ? clampWatermark(layer)
+          : clampWatermark({
+              watermarkId: layer.watermarkId,
+              x: layer.x,
+              y: layer.y,
+              scale: layer.scale,
+              opacity: layer.opacity,
+            })
+        return [{ layer: { ...normalized, layerId: layer.layerId }, watermark }]
+      }),
+    [watermarkLayers, watermarkMap],
+  )
+  const serializedWatermark = useMemo(
+    () => serializeWatermarkList(appliedWatermarkLayers.map(({ layer }) => stripLayerId(layer))),
+    [appliedWatermarkLayers],
+  )
+  const hasSavedWatermarkDefault = (watermarkDefaults.data?.defaults.length ?? 0) > 0
+  const activeChromaKey: WatermarkChromaKey = activeSelectedLayer?.chromaKey ? clampChromaKey(activeSelectedLayer.chromaKey) : DEFAULT_CHROMA_KEY
+  const updateWatermarkLayer = (layerId: string, updater: (layer: WatermarkLayer) => WatermarkSettings) => {
+    setWatermarkLayers((current) =>
+      current.map((layer) => (layer.layerId === layerId ? { ...clampWatermark(updater(layer)), layerId: layer.layerId } : layer)),
+    )
+  }
   const updateChromaKey = (patch: Partial<WatermarkChromaKey>) => {
-    setWatermarkSettings((current) => {
-      if (!current) return current
-      const base = current.chromaKey ? clampChromaKey(current.chromaKey) : DEFAULT_CHROMA_KEY
-      return clampWatermark({ ...current, chromaKey: clampChromaKey({ ...base, ...patch }) })
+    if (!activeSelectedLayer) return
+    updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => {
+      const base = layer.chromaKey ? clampChromaKey(layer.chromaKey) : DEFAULT_CHROMA_KEY
+      return { ...stripLayerId(layer), chromaKey: clampChromaKey({ ...base, ...patch }) }
     })
   }
-  const watermarkRef = useRef<WatermarkSettings | null>(appliedWatermark)
-  watermarkRef.current = appliedWatermark
+  const toggleWatermarkEnabled = (checked: boolean) => {
+    setWatermarkError("")
+    if (!checked) {
+      setWatermarkLayers([])
+      setSelectedLayerId(null)
+      return
+    }
+    const validDefaults = (watermarkDefaults.data?.defaults ?? []).filter((settings) => watermarkMap.has(settings.watermarkId))
+    if (validDefaults.length > 0) {
+      const restored = validDefaults.map((settings) => toWatermarkLayer(settings))
+      setWatermarkLayers(restored)
+      setSelectedLayerId(restored[0]?.layerId ?? null)
+      return
+    }
+    const initial = toWatermarkLayer(defaultWatermarkSettings(watermarks.data?.[0]?.id ?? "", 0))
+    setWatermarkLayers([initial])
+    setSelectedLayerId(initial.layerId)
+  }
+  const addWatermarkLayer = () => {
+    const library = watermarks.data ?? []
+    if (watermarkLayers.length >= WATERMARK_MAX_PER_JOB || library.length === 0) return
+    const usedIds = new Set(watermarkLayers.map((layer) => layer.watermarkId))
+    const nextAsset = library.find((item) => !usedIds.has(item.id)) ?? library[0]
+    const nextPos =
+      WATERMARK_STAGGER_POSITIONS.find(
+        (pos) => !watermarkLayers.some((layer) => Math.hypot(layer.x - pos.x, layer.y - pos.y) < 0.08),
+      ) ?? staggerWatermarkPosition(watermarkLayers.length)
+    const created = toWatermarkLayer({ ...defaultWatermarkSettings(nextAsset.id), x: nextPos.x, y: nextPos.y })
+    setWatermarkLayers((current) => (current.length >= WATERMARK_MAX_PER_JOB ? current : [...current, created]))
+    setSelectedLayerId(created.layerId)
+  }
+  const moveWatermarkLayer = (layerId: string, direction: -1 | 1) => {
+    setWatermarkLayers((current) => {
+      const index = current.findIndex((layer) => layer.layerId === layerId)
+      const target = index + direction
+      if (index < 0 || target < 0 || target >= current.length) return current
+      const next = [...current]
+      const [moved] = next.splice(index, 1)
+      next.splice(target, 0, moved)
+      return next
+    })
+  }
+  const removeWatermarkLayer = (layerId: string) => {
+    setWatermarkLayers((current) => {
+      const index = current.findIndex((layer) => layer.layerId === layerId)
+      if (index < 0) return current
+      const next = current.filter((layer) => layer.layerId !== layerId)
+      setSelectedLayerId((prev) => {
+        if (prev && prev !== layerId && next.some((layer) => layer.layerId === prev)) return prev
+        return next[Math.min(index, next.length - 1)]?.layerId ?? null
+      })
+      return next
+    })
+  }
+  const handleWatermarkAssetDeleted = (deletedId: string) => {
+    const fallbackAsset = watermarks.data?.find((item) => item.id !== deletedId)
+    setWatermarkLayers((current) => {
+      if (current.length === 1 && current[0].watermarkId === deletedId && fallbackAsset) {
+        const only = current[0]
+        const swapped: WatermarkLayer = {
+          ...clampWatermark({
+            ...stripLayerId(only),
+            watermarkId: fallbackAsset.id,
+            ...(isVideoWatermark(fallbackAsset) ? {} : { chromaKey: undefined }),
+          }),
+          layerId: only.layerId,
+        }
+        return [swapped]
+      }
+      const next = current.filter((layer) => layer.watermarkId !== deletedId)
+      if (next.length !== current.length) {
+        setSelectedLayerId((prev) => (prev && next.some((layer) => layer.layerId === prev) ? prev : (next[0]?.layerId ?? null)))
+      }
+      return next
+    })
+  }
+  const watermarkRef = useRef<WatermarkDefaultValue>(serializedWatermark)
+  watermarkRef.current = serializedWatermark
   const watermarkPrefilled = useRef(false)
   useEffect(() => {
     if (watermarkPrefilled.current || !watermarkDefaults.isSuccess || !watermarks.isSuccess) return
     watermarkPrefilled.current = true
-    const settings = watermarkDefaults.data.default
-    if (!settings || !watermarks.data.some((item) => item.id === settings.watermarkId)) return
-    setWatermarkSettings((current) => current ?? clampWatermark(settings))
+    const validDefaults = watermarkDefaults.data.defaults.filter((settings) =>
+      watermarks.data.some((item) => item.id === settings.watermarkId),
+    )
+    if (validDefaults.length === 0) return
+    setWatermarkLayers((current) => {
+      if (current.length > 0) return current
+      const restored = validDefaults.map((settings) => toWatermarkLayer(settings))
+      setSelectedLayerId(restored[0]?.layerId ?? null)
+      return restored
+    })
   }, [watermarkDefaults.isSuccess, watermarkDefaults.data, watermarks.isSuccess, watermarks.data])
   useEffect(() => {
-    if (watermarkSettings && !watermarks.data?.some((item) => item.id === watermarkSettings.watermarkId) && watermarks.data?.[0]) setWatermarkSettings({ ...watermarkSettings, watermarkId: watermarks.data[0].id })
-  }, [watermarks.data, watermarkSettings])
-  const saveWatermarkDefault = useMutation({
-    mutationFn: (settings: WatermarkSettings | null) => api<{ default: WatermarkSettings | null }>("/watermarks/default", { method: "PUT", body: JSON.stringify(settings) }),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: [...watermarkKey, "default"] }); setWatermarkError("") },
-    onError: () => setWatermarkError(t.watermarkSaveFailed),
-  })
+    if (!watermarks.isSuccess) return
+    const library = watermarks.data
+    const libraryIds = new Set(library.map((item) => item.id))
+    const fallbackAsset = library[0]
+    setWatermarkLayers((current) => {
+      if (current.length === 0) return current
+      // Bind empty placeholder layer once an asset is available in the library.
+      if (current.length === 1 && current[0].watermarkId === "") {
+        if (!fallbackAsset) return current
+        return [{ ...current[0], watermarkId: fallbackAsset.id }]
+      }
+      const hasMissing = current.some((layer) => layer.watermarkId !== "" && !libraryIds.has(layer.watermarkId))
+      if (!hasMissing) return current
+      if (current.length === 1 && fallbackAsset) {
+        const only = current[0]
+        return [
+          {
+            ...clampWatermark({
+              ...stripLayerId(only),
+              watermarkId: fallbackAsset.id,
+              ...(isVideoWatermark(fallbackAsset) ? {} : { chromaKey: undefined }),
+            }),
+            layerId: only.layerId,
+          },
+        ]
+      }
+      const next = current.filter((layer) => layer.watermarkId === "" || libraryIds.has(layer.watermarkId))
+      setSelectedLayerId((prev) => (prev && next.some((layer) => layer.layerId === prev) ? prev : (next[0]?.layerId ?? null)))
+      return next
+    })
+  }, [watermarks.isSuccess, watermarks.data])
+  const saveWatermarkDefault = useSaveWatermarkDefault()
+  const persistWatermarkDefault = (payload: WatermarkDefaultValue) => {
+    saveWatermarkDefault.mutate(payload, {
+      onSuccess: () => setWatermarkError(""),
+      onError: () => setWatermarkError(t.watermarkSaveFailed),
+    })
+  }
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: () => api<Job[]>("/jobs"), refetchInterval: 5000 })
   const selectedJob = useQuery({ queryKey: ["jobs", selectedJobId], queryFn: () => api<JobSnapshot>(`/jobs/${selectedJobId}`), enabled: !!selectedJobId, refetchInterval: (query) => query.state.data && ["done", "failed", "cancelled"].includes(query.state.data.status) ? false : 3000 })
   useEffect(() => {
@@ -484,9 +648,10 @@ function Dashboard() {
             {monitorView === "frame" && activeFrame ? <>
               <WatermarkOverlay
                 aspectRatio={aspectRatio}
-                watermark={chosenWatermark}
-                settings={appliedWatermark}
-                onChange={(next) => setWatermarkSettings(clampWatermark(next))}
+                layers={appliedWatermarkLayers}
+                selectedLayerId={activeSelectedLayer?.layerId ?? null}
+                onSelectLayer={setSelectedLayerId}
+                onChangeLayer={(layerId, next) => updateWatermarkLayer(layerId, () => next)}
                 captions={captions}
                 captionStyle={captionStyle}
                 twoSpeakers={twoSpeakers}
@@ -495,12 +660,13 @@ function Dashboard() {
               />
             </> : <>
               {embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0"/> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play className="ml-1 size-5"/></span><p className="font-display text-lg text-foreground">{t.sourceStatement}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.pasteToPreview}</p></div></div>}
-              {(appliedWatermark || (captions && embed)) && (
+              {(appliedWatermarkLayers.length > 0 || (captions && embed)) && (
                 <WatermarkOverlay
                   aspectRatio={aspectRatio}
-                  watermark={chosenWatermark}
-                  settings={appliedWatermark}
-                  onChange={(next) => setWatermarkSettings(clampWatermark(next))}
+                  layers={appliedWatermarkLayers}
+                  selectedLayerId={activeSelectedLayer?.layerId ?? null}
+                  onSelectLayer={setSelectedLayerId}
+                  onChangeLayer={(layerId, next) => updateWatermarkLayer(layerId, () => next)}
                   captions={captions}
                   captionStyle={captionStyle}
                   twoSpeakers={twoSpeakers}
@@ -524,15 +690,155 @@ function Dashboard() {
              <FieldDescription className="mb-3 text-xs">{t.captionStyleHint}</FieldDescription>
              <CaptionStyleEditor value={captionStyle} onChange={setCaptionStyle} twoSpeakers={twoSpeakers} />
            </Field>}
-           <Field className="rounded-lg border border-border/80 bg-secondary/20 p-3">
-             <div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-enabled">{t.watermark}</FieldLabel><Switch id="watermark-enabled" aria-label={t.watermark} checked={!!watermarkSettings} onCheckedChange={(checked) => { setWatermarkError(""); setWatermarkSettings(checked ? clampWatermark(watermarkDefaults.data?.default ?? defaultWatermarkSettings(watermarks.data?.[0]?.id ?? "")) : null) }}/></div>
+           <Field className="relative rounded-lg border border-border/80 bg-secondary/20 p-3">
+             <div className="relative flex items-center justify-between gap-2">
+               <div className="flex min-w-0 items-center gap-2">
+                 <FieldLabel htmlFor="watermark-enabled">{t.watermark}</FieldLabel>
+                 {watermarkEnabled && (
+                   <Badge variant="secondary" className="h-5 px-1.5 font-mono text-[10px] tabular-nums">
+                     {watermarkLayers.length} / {WATERMARK_MAX_PER_JOB}
+                   </Badge>
+                 )}
+               </div>
+               <Switch id="watermark-enabled" aria-label={t.watermark} checked={watermarkEnabled} onCheckedChange={toggleWatermarkEnabled}/>
+             </div>
              <FieldDescription>{t.watermarkHint}</FieldDescription>
-             {watermarkSettings && <div className="mt-3 space-y-3">
-               <WatermarkManager compact selectedId={watermarkSettings.watermarkId} onSelect={(watermark) => setWatermarkSettings((current) => ({ ...(current ?? defaultWatermarkSettings(watermark.id)), watermarkId: watermark.id }))}/>
-               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.scale * 100)}%</span></div><input id="watermark-size" type="range" min={WATERMARK_SCALE_MIN} max={WATERMARK_SCALE_MAX} step={0.01} value={watermarkSettings.scale} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, scale: clamp(Number(event.target.value), WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
-               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-opacity" className="text-xs font-normal text-muted-foreground">{t.watermarkOpacity}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.opacity * 100)}%</span></div><input id="watermark-opacity" type="range" min={0.1} max={1} step={0.05} value={watermarkSettings.opacity} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, opacity: clamp(Number(event.target.value), 0.1, 1) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
+             {watermarkEnabled && activeSelectedLayer && <div className="mt-3 space-y-3">
+               <div className="space-y-1.5">
+                 <div className="space-y-1" role="list" aria-label={t.watermark}>
+                   {watermarkLayers.map((layer, index) => {
+                     const wm = watermarkMap.get(layer.watermarkId)
+                     const isSelected = layer.layerId === activeSelectedLayer.layerId
+                     const isVideo = isVideoWatermark(wm)
+                     const hasCk = isVideo && Boolean(layer.chromaKey?.enabled)
+                     const layerNum = index + 1
+                     return (
+                       <div
+                         key={layer.layerId}
+                         role="listitem"
+                         className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 transition-colors ${
+                           isSelected
+                             ? "border-accent bg-accent/10 shadow-2xs"
+                             : "border-border/70 bg-card/70 hover:border-accent/40 hover:bg-card"
+                         }`}
+                       >
+                         <button
+                           type="button"
+                           aria-current={isSelected ? "true" : undefined}
+                           onClick={() => setSelectedLayerId(layer.layerId)}
+                           className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                         >
+                           <span className="grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border border-border/80 bg-[linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%),linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%)] bg-[length:8px_8px] bg-[position:0_0,4px_4px] text-[10px] text-muted-foreground">
+                             {wm ? <WatermarkMedia watermark={wm} chromaKey={layer.chromaKey} compact className="size-full"/> : "—"}
+                           </span>
+                           <span className="min-w-0 flex-1">
+                             <span className="flex items-center gap-1.5">
+                               <span className={`shrink-0 font-mono text-[10px] font-semibold tabular-nums ${isSelected ? "text-accent" : "text-muted-foreground"}`}>#{layerNum}</span>
+                               <span className="min-w-0 truncate text-xs font-medium text-foreground">{wm?.name ?? t.watermarkSelectAsset}</span>
+                             </span>
+                             {(isVideo || hasCk) && (
+                               <span className="mt-0.5 flex items-center gap-1">
+                                 {isVideo && <Badge variant="secondary" className="h-3.5 rounded-sm px-1 text-[9px] leading-none">{t.watermarkVideoBadge}</Badge>}
+                                 {hasCk && (
+                                   <Badge variant="secondary" className="h-3.5 gap-0.5 rounded-sm px-1 font-mono text-[9px] leading-none">
+                                     <span aria-hidden="true" className="size-1.5 rounded-full border border-black/20" style={{ backgroundColor: layer.chromaKey?.color ?? DEFAULT_CHROMA_KEY.color }}/>
+                                     {t.watermarkChromaKeyShort}
+                                   </Badge>
+                                 )}
+                               </span>
+                             )}
+                           </span>
+                         </button>
+                         <div className="flex shrink-0 items-center gap-0.5">
+                           {watermarkLayers.length > 1 && (
+                             <>
+                               <Button
+                                 type="button"
+                                 variant="ghost"
+                                 size="icon-xs"
+                                 disabled={index === 0}
+                                 aria-label={t.watermarkMoveUp.replace("{index}", String(layerNum))}
+                                 title={t.watermarkMoveUp.replace("{index}", String(layerNum))}
+                                 onClick={() => moveWatermarkLayer(layer.layerId, -1)}
+                               >
+                                 <ArrowUp aria-hidden="true"/>
+                               </Button>
+                               <Button
+                                 type="button"
+                                 variant="ghost"
+                                 size="icon-xs"
+                                 disabled={index === watermarkLayers.length - 1}
+                                 aria-label={t.watermarkMoveDown.replace("{index}", String(layerNum))}
+                                 title={t.watermarkMoveDown.replace("{index}", String(layerNum))}
+                                 onClick={() => moveWatermarkLayer(layer.layerId, 1)}
+                               >
+                                 <ArrowDown aria-hidden="true"/>
+                               </Button>
+                             </>
+                           )}
+                           <Button
+                             type="button"
+                             variant="ghost"
+                             size="icon-xs"
+                             aria-label={t.watermarkRemoveLayer.replace("{index}", String(layerNum))}
+                             title={t.watermarkRemoveLayer.replace("{index}", String(layerNum))}
+                             className="text-muted-foreground hover:text-destructive"
+                             onClick={() => removeWatermarkLayer(layer.layerId)}
+                           >
+                             <X aria-hidden="true"/>
+                           </Button>
+                         </div>
+                       </div>
+                     )
+                   })}
+                 </div>
+                 {watermarkLayers.length > 1 && (
+                   <p className="text-[11px] text-muted-foreground">
+                     {t.watermarkStackHint.replace("{count}", String(watermarkLayers.length))}
+                   </p>
+                 )}
+                 <Button
+                   type="button"
+                   variant="outline"
+                   size="sm"
+                   className="h-8 w-full justify-center gap-1.5 rounded-md border-dashed text-xs"
+                   disabled={watermarkLayers.length >= WATERMARK_MAX_PER_JOB || !(watermarks.data?.length)}
+                   onClick={addWatermarkLayer}
+                 >
+                   <Plus aria-hidden="true" className="size-3.5"/>
+                   {watermarkLayers.length >= WATERMARK_MAX_PER_JOB ? t.watermarkLimitReached : t.watermarkAddLayer}
+                 </Button>
+               </div>
+
+               {watermarkLayers.length > 1 && (
+                 <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2.5">
+                   <span className="min-w-0 truncate text-xs font-medium text-foreground">
+                     {t.watermarkLayerLabel.replace("{index}", String(activeSelectedLayerIndex + 1))}
+                     {selectedWatermark ? ` · ${selectedWatermark.name}` : ""}
+                   </span>
+                   <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                     {Math.round(activeSelectedLayer.x * 100)}%, {Math.round(activeSelectedLayer.y * 100)}%
+                   </span>
+                 </div>
+               )}
+
+               <WatermarkManager
+                 compact
+                 selectedId={activeSelectedLayer.watermarkId}
+                 onDeleted={handleWatermarkAssetDeleted}
+                 onSelect={(watermark) => {
+                   if (!watermark.id) return
+                   updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => ({
+                     ...stripLayerId(layer),
+                     watermarkId: watermark.id,
+                     ...(isVideoWatermark(watermark) ? {} : { chromaKey: undefined }),
+                   }))
+                 }}
+               />
+               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeSelectedLayer.scale * 100)}%</span></div><input id="watermark-size" type="range" min={WATERMARK_SCALE_MIN} max={WATERMARK_SCALE_MAX} step={0.01} value={activeSelectedLayer.scale} onChange={(event) => updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => ({ ...stripLayerId(layer), scale: clamp(Number(event.target.value), WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX) }))} className="h-5 w-full cursor-pointer accent-accent"/></div>
+               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-opacity" className="text-xs font-normal text-muted-foreground">{t.watermarkOpacity}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeSelectedLayer.opacity * 100)}%</span></div><input id="watermark-opacity" type="range" min={0.1} max={1} step={0.05} value={activeSelectedLayer.opacity} onChange={(event) => updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => ({ ...stripLayerId(layer), opacity: clamp(Number(event.target.value), 0.1, 1) }))} className="h-5 w-full cursor-pointer accent-accent"/></div>
                <p className="text-xs leading-relaxed text-muted-foreground">{t.watermarkPositionHint}</p>
-               {chosenWatermarkIsVideo && (
+               {selectedWatermarkIsVideo && (
                  <Field className="relative space-y-2.5 rounded-lg border border-border/70 bg-card/60 p-2.5">
                    <div className="relative flex items-center justify-between gap-2">
                      <FieldLabel htmlFor="watermark-chroma-enabled" className="text-xs font-medium text-foreground">{t.watermarkChromaKey}</FieldLabel>
@@ -612,8 +918,46 @@ function Dashboard() {
                    <p className="text-[11px] leading-relaxed text-muted-foreground">{t.watermarkVideoLoopNote}</p>
                  </Field>
                )}
-               <Button type="button" variant="outline" size="sm" className="w-full rounded-md" disabled={saveWatermarkDefault.isPending || !appliedWatermark} onClick={() => saveWatermarkDefault.mutate(appliedWatermark)}>{saveWatermarkDefault.isPending && <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/>}{t.watermarkSaveDefault}</Button>
+               <div className="flex items-center gap-2">
+                 <Button
+                   type="button"
+                   variant="outline"
+                   size="sm"
+                   className="flex-1 rounded-md"
+                   disabled={saveWatermarkDefault.isPending || !serializedWatermark}
+                   onClick={() => persistWatermarkDefault(serializedWatermark)}
+                 >
+                   {saveWatermarkDefault.isPending && <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/>}
+                   {t.watermarkSaveDefault}
+                 </Button>
+                 {hasSavedWatermarkDefault && (
+                   <Button
+                     type="button"
+                     variant="ghost"
+                     size="sm"
+                     className="shrink-0 rounded-md text-xs text-muted-foreground hover:text-foreground"
+                     disabled={saveWatermarkDefault.isPending}
+                     onClick={() => persistWatermarkDefault(null)}
+                   >
+                     {t.watermarkClearDefault}
+                   </Button>
+                 )}
+               </div>
              </div>}
+             {!watermarkEnabled && hasSavedWatermarkDefault && (
+               <div className="mt-2 flex justify-end">
+                 <Button
+                   type="button"
+                   variant="ghost"
+                   size="sm"
+                   className="h-7 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
+                   disabled={saveWatermarkDefault.isPending}
+                   onClick={() => persistWatermarkDefault(null)}
+                 >
+                   {t.watermarkClearDefault}
+                 </Button>
+               </div>
+             )}
              {watermarkError && <p role="alert" className="mt-2 text-xs text-destructive">{watermarkError}</p>}
            </Field>
            <Field className="rounded-lg border border-border/80 bg-secondary/20 p-3">

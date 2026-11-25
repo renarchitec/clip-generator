@@ -23,7 +23,7 @@ import { useWatermarkLibrary } from "@/components/watermark-manager"
 import { WatermarkMedia } from "@/components/watermark-media"
 import { useOutroLibrary } from "@/components/outro-manager"
 import { formatOutroDuration } from "@/lib/outro"
-import { isVideoWatermark } from "@/lib/watermark"
+import { isVideoWatermark, normalizeJobWatermarks } from "@/lib/watermark"
 
 export const Route = createFileRoute("/jobs/$jobId")({
   beforeLoad: async ({ location }) => {
@@ -274,32 +274,46 @@ function JobDetail() {
                   <FieldDescription>{t.customHashtagsHint}</FieldDescription>
                 </Field>}
 
-                {snapshot.watermark && (() => {
-                  const matchedWatermark = watermarks.data?.find((item) => item.id === snapshot.watermark?.watermarkId)
-                  const isVideo = isVideoWatermark(matchedWatermark) || !!snapshot.watermark.mimeType?.startsWith("video/")
-                  const hasChromaKey = Boolean(snapshot.watermark.chromaKey?.enabled)
+                {(() => {
+                  const jobWatermarks = normalizeJobWatermarks(snapshot.watermark)
+                  if (jobWatermarks.length === 0) return null
+                  const multiple = jobWatermarks.length > 1
                   return <Field>
-                    <FieldTitle>{t.watermark}</FieldTitle>
-                    <div className="mt-2 flex items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
-                      <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border bg-background text-xs text-muted-foreground">
-                        {matchedWatermark ? <WatermarkMedia watermark={matchedWatermark} chromaKey={snapshot.watermark.chromaKey} compact className="size-full"/> : "—"}
-                      </span>
-                      <div className="min-w-0 flex-1 font-mono text-xs tabular-nums text-foreground">
-                        {(isVideo || hasChromaKey) && (
-                          <div className="mb-1 flex flex-wrap items-center gap-1.5 font-sans">
-                            {isVideo && <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">{t.watermarkVideoBadge}</Badge>}
-                            {hasChromaKey && snapshot.watermark.chromaKey && (
-                              <Badge variant="secondary" className="h-4 gap-1 px-1.5 text-[10px]">
-                                <span aria-hidden="true" className="size-2 rounded-full border border-black/20" style={{ backgroundColor: snapshot.watermark.chromaKey.color }} />
-                                {t.watermarkChromaKeyBadge}
-                              </Badge>
-                            )}
+                    <div className="flex items-center justify-between gap-2">
+                      <FieldTitle>{t.watermark}</FieldTitle>
+                      {multiple && <Badge variant="secondary" className="h-5 px-1.5 font-mono text-[10px] tabular-nums">{jobWatermarks.length}</Badge>}
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {jobWatermarks.map((wm, index) => {
+                        const matchedWatermark = watermarks.data?.find((item) => item.id === wm.watermarkId)
+                        const isVideo = isVideoWatermark(matchedWatermark) || !!wm.mimeType?.startsWith("video/")
+                        const hasChromaKey = Boolean(wm.chromaKey?.enabled)
+                        return (
+                          <div key={`${wm.watermarkId}-${index}`} className="flex items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
+                            <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border bg-[linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%),linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%)] bg-[length:10px_10px] bg-[position:0_0,5px_5px] text-xs text-muted-foreground">
+                              {matchedWatermark ? <WatermarkMedia watermark={matchedWatermark} chromaKey={wm.chromaKey} compact className="size-full"/> : "—"}
+                            </span>
+                            <div className="min-w-0 flex-1 font-mono text-xs tabular-nums text-foreground">
+                              {(multiple || isVideo || hasChromaKey) && (
+                                <div className="mb-1 flex flex-wrap items-center gap-1.5 font-sans">
+                                  {multiple && <Badge variant="outline" className="h-4 px-1.5 font-mono text-[10px] tabular-nums">#{index + 1}</Badge>}
+                                  {multiple && matchedWatermark && <span className="truncate text-xs font-medium text-foreground">{matchedWatermark.name}</span>}
+                                  {isVideo && <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">{t.watermarkVideoBadge}</Badge>}
+                                  {hasChromaKey && wm.chromaKey && (
+                                    <Badge variant="secondary" className="h-4 gap-1 px-1.5 text-[10px]">
+                                      <span aria-hidden="true" className="size-2 rounded-full border border-black/20" style={{ backgroundColor: wm.chromaKey.color }} />
+                                      {t.watermarkChromaKeyBadge}
+                                    </Badge>
+                                  )}
+                                </div>
+                              )}
+                              <p>{t.watermarkPosition}: {Math.round(wm.x * 100)}%, {Math.round(wm.y * 100)}%</p>
+                              <p>{t.watermarkSize}: {Math.round(wm.scale * 100)}% · {t.watermarkOpacity}: {Math.round(wm.opacity * 100)}%</p>
+                              {wm.filePath && <p className="mt-0.5 truncate text-muted-foreground" title={wm.filePath}>{wm.filePath}</p>}
+                            </div>
                           </div>
-                        )}
-                        <p>{t.watermarkPosition}: {Math.round(snapshot.watermark.x * 100)}%, {Math.round(snapshot.watermark.y * 100)}%</p>
-                        <p>{t.watermarkSize}: {Math.round(snapshot.watermark.scale * 100)}% · {t.watermarkOpacity}: {Math.round(snapshot.watermark.opacity * 100)}%</p>
-                        {snapshot.watermark.filePath && <p className="mt-0.5 truncate text-muted-foreground" title={snapshot.watermark.filePath}>{snapshot.watermark.filePath}</p>}
-                      </div>
+                        )
+                      })}
                     </div>
                   </Field>
                 })()}

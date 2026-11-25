@@ -15,6 +15,7 @@ export const WATERMARK_CHROMA_SIMILARITY_MAX = 0.5;
 export const WATERMARK_CHROMA_BLEND_MIN = 0;
 export const WATERMARK_CHROMA_BLEND_MAX = 0.5;
 export const WATERMARK_MAX_PER_USER = 20;
+export const WATERMARK_MAX_PER_JOB = 5;
 export const WATERMARK_NAME_MAX = 80;
 
 export const WATERMARK_SCALE_MIN = 0.03;
@@ -50,9 +51,12 @@ export const watermarkSettingsSchema = z
   .strict();
 
 export type WatermarkSettings = z.infer<typeof watermarkSettingsSchema>;
+export type WatermarkDefaultValue = WatermarkSettings | WatermarkSettings[];
+export const watermarkListSchema = z.array(watermarkSettingsSchema).max(WATERMARK_MAX_PER_JOB);
 
 /** Pengaturan + snapshot path relatif (disimpan di Job.watermark). */
 export type StoredWatermark = WatermarkSettings & { filePath: string; mimeType?: string };
+export type StoredWatermarkValue = StoredWatermark | StoredWatermark[];
 
 /** Payload ke worker. */
 export interface WatermarkJobPayload {
@@ -77,6 +81,45 @@ export function parseWatermarkSettings(
     ok: false,
     message: `Pengaturan watermark tidak valid (${field}): ${issue?.message ?? 'format salah'}.`,
   };
+}
+
+/** Validasi satu objek lama atau beberapa layer dalam urutan yang diberikan. */
+export function parseWatermarkList(
+  raw: unknown,
+): { ok: true; value: WatermarkSettings[] } | { ok: false; message: string } {
+  if (!Array.isArray(raw)) {
+    const parsed = parseWatermarkSettings(raw);
+    return parsed.ok ? { ok: true, value: [parsed.value] } : parsed;
+  }
+  const parsed = watermarkListSchema.safeParse(raw);
+  if (parsed.success) return { ok: true, value: parsed.data };
+  const issue = parsed.error.issues[0];
+  if (issue?.code === 'too_big' && issue.path.length === 0) {
+    return { ok: false, message: `Maksimal ${WATERMARK_MAX_PER_JOB} layer watermark.` };
+  }
+  const [index, ...path] = issue?.path ?? [];
+  const field = [...path, ...(issue?.code === 'unrecognized_keys' ? [issue.keys[0]] : [])].join('.');
+  const location = `watermark${index === undefined ? '' : `[${index}]`}${field ? `.${field}` : ''}`;
+  return {
+    ok: false,
+    message: `Pengaturan watermark tidak valid (${location}): ${issue?.message ?? 'format salah'}.`,
+  };
+}
+
+export function serializeWatermarkValue<T>(items: T[]): T | T[] | null {
+  if (items.length === 0) return null;
+  return items.length === 1 ? items[0] : items;
+}
+
+export function normalizeStoredWatermarks(raw: unknown): StoredWatermark[] {
+  const isStoredWatermark = (item: unknown): item is StoredWatermark =>
+    !!item && typeof item === 'object' && !Array.isArray(item) &&
+    'watermarkId' in item && typeof item.watermarkId === 'string' &&
+    'filePath' in item && typeof item.filePath === 'string';
+
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter(isStoredWatermark).slice(0, WATERMARK_MAX_PER_JOB);
+  return isStoredWatermark(raw) ? [raw] : [];
 }
 
 export type WatermarkImageMime = 'image/png' | 'image/jpeg' | 'image/webp';

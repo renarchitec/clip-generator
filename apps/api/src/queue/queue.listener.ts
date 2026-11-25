@@ -15,7 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { latestPerAccount } from '../publish/publish-helpers';
 import { sanitizeClipSocialMetadata, sanitizeClipTranscript } from './clip-social';
 import { JobEventsService } from './job-events.service';
-import type { StoredWatermark } from '../watermarks/watermark-helpers';
+import type { StoredWatermarkValue } from '../watermarks/watermark-helpers';
 import type { StoredOutro } from '../outros/outro-helpers';
 import { QUEUE_EVENTS, QUEUE_NAME } from './queue.constants';
 
@@ -356,7 +356,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       targetDurationSec: job.targetDurationSec,
       maxSourceSec: job.maxSourceSec ?? null,
       ranges: job.ranges ?? null,
-      watermark: (job.watermark as StoredWatermark | null) ?? null,
+      watermark: (job.watermark as StoredWatermarkValue | null) ?? null,
       outro: (job.outro as StoredOutro | null) ?? null,
       status: job.status,
       stage: job.stage,
