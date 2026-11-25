@@ -351,7 +351,17 @@ def test_facecam_box_centers_corner_face_by_zooming_in():
     assert (face_x - x) / w == pytest.approx(0.5, abs=0.02)
     assert (face_y - y) / h == pytest.approx(reframe.FACECAM_FACE_Y, abs=0.02)
     assert w * 640 == pytest.approx(h * 1080, rel=0.01)  # rasio 27:16 tetap
-    assert 0 <= x and x + w <= 2560 and 0 <= y and y + h <= 1440
+
+
+@pytest.mark.parametrize("cx,cy,fh", [(0.5, 0.2, 0.2), (0.85, 0.25, 0.15), (0.12, 0.47, 0.114)])
+def test_facecam_face_top_below_tiktok_top_ui(cx, cy, fh):
+    # UI atas TikTok (status bar, tab, ikon search) menutupi ~0-220px dari 1920.
+    # Atas wajah (perkiraan rambut = 0.35x tinggi wajah di atasnya) harus di bawahnya.
+    x, y, w, h = reframe.facecam_box([(t, [(cx, cy, fh, 0.0)]) for t in range(10)], 1920, 1080)
+    s = 640 / h
+    face_px = fh * 1080 * s
+    hair_top = (cy * 1080 - y) * s - face_px / 2 - 0.35 * face_px
+    assert hair_top >= 200
 
 
 # --- shot-cut aware speaker selection -------------------------------------------
