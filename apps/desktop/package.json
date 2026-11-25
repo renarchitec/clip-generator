@@ -1,0 +1,14 @@
+{
+  "name": "desktop",
+  "private": true,
+  "version": "0.0.0",
+  "description": "DartClip desktop spike (macOS Apple Silicon, pemakaian pribadi)",
+  "main": "main.js",
+  "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^39.0.0"
+  }
+}

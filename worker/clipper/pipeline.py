@@ -120,6 +120,37 @@ def _run(cmd: Sequence[str], cwd: Optional[str] = None, timeout: Optional[float]
     return proc.stdout or ""
 
 
+_ENCODER_CACHE: Dict[str, bool] = {}
+
+
+def _video_encoder() -> str:
+    """VIDEO_ENCODER=h264_videotoolbox untuk Mac; default/server tetap libx264.
+
+    Encoder yang tidak ada di build ffmpeg ini jatuh ke libx264 (dicek sekali).
+    """
+    wanted = (os.getenv("VIDEO_ENCODER") or "libx264").strip()
+    if wanted == "libx264":
+        return wanted
+    if wanted not in _ENCODER_CACHE:
+        try:
+            out = _run(["ffmpeg", "-hide_banner", "-encoders"], timeout=20)
+            _ENCODER_CACHE[wanted] = f" {wanted} " in out
+        except Exception:
+            _ENCODER_CACHE[wanted] = False
+        if not _ENCODER_CACHE[wanted]:
+            log.warning("encoder %s tidak tersedia, pakai libx264", wanted)
+    return wanted if _ENCODER_CACHE[wanted] else "libx264"
+
+
+def _video_codec_args(crf: int = 23) -> List[str]:
+    """Argumen -c:v; kualitas VideoToolbox lewat -q:v (VT_QUALITY, 1-100)."""
+    encoder = _video_encoder()
+    if encoder == "h264_videotoolbox":
+        quality = os.getenv("VT_QUALITY") or ("75" if crf <= 18 else "65")
+        return ["-c:v", encoder, "-q:v", quality, "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", str(crf)]
+
+
 @dataclass
 class Downloaded:
     video: Optional[str] = None
@@ -292,8 +323,7 @@ def _ensure_opencv_readable(path: str) -> str:
         return path
     fixed = os.path.splitext(path)[0] + "-h264.mp4"
     _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", path,
-          "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast",
-          "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", fixed])
+          "-map", "0:v:0", "-map", "0:a:0?", *_video_codec_args(18), "-c:a", "aac", fixed])
     os.remove(path)
     return fixed
 
@@ -536,6 +566,15 @@ def _ffmpeg_filter_path(path: str) -> str:
     return path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
 
+def _subtitles_filter(ass_path: str) -> str:
+    """Filter subtitles; FONTS_DIR (opsional, desktop) = folder font bundel (Anton)."""
+    value = "subtitles=" + _ffmpeg_filter_path(ass_path)
+    fonts_dir = (os.getenv("FONTS_DIR") or "").strip()
+    if fonts_dir:
+        value += ":fontsdir=" + _ffmpeg_filter_path(fonts_dir)
+    return value
+
+
 def _clip_cues(cues: Sequence[Cue], start: float, end: float) -> List[Cue]:
     """Ambil cue di dalam jendela clip (absolut), geser waktunya ke 0 (termasuk kata)."""
     limit = max(0.0, end - start)
@@ -621,7 +660,7 @@ def _two_speaker_graph(
     ]
     label = "[vstacked]"
     if ass_path:
-        graph.append(f"[vstacked]subtitles={_ffmpeg_filter_path(ass_path)}[vout]")
+        graph.append(f"[vstacked]{_subtitles_filter(ass_path)}[vout]")
         label = "[vout]"
     return graph, label
 
@@ -696,7 +735,7 @@ def _facecam_graph(
     ]
     label = "[v]"
     if ass_path:
-        graph.append(f"[v]subtitles={_ffmpeg_filter_path(ass_path)}[vout]")
+        graph.append(f"[v]{_subtitles_filter(ass_path)}[vout]")
         label = "[vout]"
     return graph, label
 
@@ -870,7 +909,7 @@ def _outro_command(
     return cmd + [
         "-filter_complex", ";".join(graph),
         "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23",
+        *_video_codec_args(23),
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart", "-sn",
         "-f", "mp4", out_path,
@@ -1068,14 +1107,7 @@ def _render_one(
         video,
     ]
     tail = [
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "23",
+        *_video_codec_args(23),
         "-c:a",
         "aac",
         "-b:a",
@@ -1115,7 +1147,7 @@ def _render_one(
         else:
             filters = _reframe_filters(reframe, video, moment, width, height, landscape)
             if burn_captions:
-                filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
+                filters.append(_subtitles_filter(ass_path))
             vf = ",".join(filters)
             base_graph, base_label = [f"[0:v]{vf}[base]"], "[base]"
 

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>DartClip (spike)</title>
+  <style>
+    body { font: 14px -apple-system, system-ui, sans-serif; margin: 20px; color: #1a1a1a; }
+    label { display: block; margin: 10px 0 4px; font-weight: 600; }
+    input, select { width: 100%; padding: 6px 8px; font: inherit; box-sizing: border-box; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    button { margin-top: 14px; padding: 8px 18px; font: inherit; }
+    progress { width: 100%; margin-top: 14px; }
+    #status { margin-top: 6px; }
+    #files a { display: block; margin-top: 4px; word-break: break-all; }
+    pre { background: #f4f4f4; height: 200px; overflow: auto; padding: 8px; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <form id="form">
+    <label for="url">URL YouTube</label>
+    <input id="url" required placeholder="https://www.youtube.com/watch?v=..." />
+    <div class="row">
+      <div>
+        <label for="ranges">Rentang (detik, pisah koma)</label>
+        <input id="ranges" placeholder="120-170, 300-345" />
+      </div>
+      <div>
+        <label for="encoder">Encoder</label>
+        <select id="encoder">
+          <option value="libx264">libx264 (CPU)</option>
+          <option value="h264_videotoolbox">VideoToolbox (hardware)</option>
+        </select>
+      </div>
+    </div>
+    <button id="go" type="submit">Render</button>
+  </form>
+  <progress id="bar" max="100" value="0"></progress>
+  <div id="status">Siap.</div>
+  <div id="files"></div>
+  <pre id="log"></pre>
+  <script src="renderer.js"></script>
+</body>
+</html>

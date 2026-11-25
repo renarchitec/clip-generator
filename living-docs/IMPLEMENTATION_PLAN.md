@@ -21,6 +21,7 @@ Platform dibangun dalam monorepo yang memisahkan aplikasi API, web front-end, pa
 ```text
 clipper/
 ├─ apps/
+│  ├─ desktop/                # Spike Electron (macOS arm64, pribadi): jalankan worker bundel sebagai child process
 │  ├─ api/                    # NestJS API
 │  │  ├─ prisma/
 │  │  │  ├─ schema.prisma     # Skema database
@@ -53,8 +54,11 @@ clipper/
 │  │  ├─ snap.py              # Snap deterministik batas momen ke cue/kalimat terdekat (murni)
 │  │  ├─ reframe.py           # face_tracking / active speaker (FaceMesh), dua pembicara (2-means), crop filters
 │  │  ├─ subtitles.py         # Parser VTT, deduplikasi rolling, takarir hook ASS per kata
+│  │  ├─ local_cli.py         # Entrypoint lokal tanpa Redis (desktop spike), event JSON per baris di stdout
 │  │  └─ models.py            # Definisi dataclass & konversi data job
 │  ├─ tests/                  # Pytest unit & integration tests
+│  ├─ desktop/                # PyInstaller spec + build-mac.sh (bundel worker + ffmpeg statis arm64)
+│  ├─ scripts/bench_render.py # Benchmark render satu klip per encoder
 │  ├─ fonts/                  # Anton-Regular.ttf + OFL.txt (font caption hook)
 │  ├─ requirements.in        # dependency runtime (sumber)
 │  ├─ requirements.txt       # lock ber-hash, hasil uv pip compile
@@ -134,7 +138,7 @@ Masing-masing momen diproses secara berurutan. Di antara pemrosesan tiap klip, w
   - Jika opsi `captions: true` dan terdapat teks subtitle pada durasi klip, dibuat file temporary `.ass` bergaya "hook": font Anton (OFL, di-vendor di `worker/fonts/`, terpasang ke `/usr/share/fonts/truetype/anton` + `fc-cache` di image; DejaVu tetap fallback fontconfig), UPPERCASE, putih, outline hitam 6px, bayangan semi-transparan. `PlayResX`/`PlayResY` mengikuti ukuran output nyata (1080x1920 / 1080x1080 / 1920x1080); ukuran font dan margin bawah diskalakan relatif tinggi output (referensi 9:16: font 80, margin 180; 1:1 dan 16:9 memakai font/margin lebih kecil — `round(nilai * height / 1920)`). Karaoke `\k` tidak dipakai; sebagai gantinya satu event `Dialogue` non-overlapping per jendela kata yang memuat seluruh teks chunk (9:16/1:1: maks 4 kata / 18 karakter; 16:9: maks 6 kata / 32 karakter) dengan kata aktif dibungkus `{\c&H0000FFFF&}...{\c&H00FFFFFF&}` (kuning) dan kata lain putih. Margin aman bawah >=18% tinggi frame (Alignment 2) pada mode satu pembicara; mode dua pembicara (hanya 9:16) memakai Alignment 5 (tengah, tepat pada sambungan panel) dengan MarginV 0.
   - Jika `captions: false`, langkah pembakaran takarir dilewati.
 - **Encoding Video:**
-  - ffmpeg dipanggil menggunakan video codec `libx264` dengan pixel format standar `yuv420p` (menjamin kompatibilitas playback di Safari/iOS dan browser Android), audio `aac` 128k, preset `veryfast`, dan `movflags +faststart`.
+  - ffmpeg dipanggil menggunakan video codec `libx264` (default; `VIDEO_ENCODER=h264_videotoolbox` memilih encoder hardware Mac dengan `-q:v` = `VT_QUALITY`, fallback otomatis ke `libx264` bila encoder tidak ada di build ffmpeg) dengan pixel format standar `yuv420p` (menjamin kompatibilitas playback di Safari/iOS dan browser Android), audio `aac` 128k, preset `veryfast`, dan `movflags +faststart`.
 
 ### 6. Tahap Penyimpanan (`save`)
 - File klip disimpan di direktori `CLIPS_DIR/<job_id>/clip-01.mp4`, `clip-02.mp4`, dst.
@@ -318,6 +322,18 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 | `LLM_REFINE` | Worker | Pass-2 refinement batas momen oleh LLM; default aktif, matikan dengan `0`/`false`/`no`/`off` |
 | `MIN_FREE_GB` | Worker | Ambang batas ruang disk minimum (default `5.0`) |
 | `LOG_LEVEL` | Worker | Tingkat logging (`INFO`, `DEBUG`, dsb.) |
+| `VIDEO_ENCODER` | Worker | Opsional; `libx264` (default, server) atau `h264_videotoolbox` (Mac) |
+| `VT_QUALITY` | Worker | Opsional; kualitas VideoToolbox 1–100 (default 65, 75 untuk transcode sumber) |
+| `FONTS_DIR` | Worker | Opsional; folder font untuk filter `subtitles` (`fontsdir`). Kosong di Docker (font terpasang via fontconfig); diisi otomatis oleh bundel desktop |
+
+## Desktop spike (macOS Apple Silicon, pemakaian pribadi)
+
+Bukti konsep, bukan produk: tanpa signing/notarization, tanpa API/DB lokal. Jalur Docker/BullMQ tidak berubah.
+
+- **Worker lokal:** `python -m clipper.local_cli --url URL [--range 120-170 ...] [--encoder h264_videotoolbox] [--out ~/DartClip/clips]` memanggil `pipeline.run_job` langsung (tanpa Redis). Tanpa `--range` = mode auto (butuh LLM). stdout = satu event JSON per baris (`start`/`progress`/`done`/`error`), log ke stderr.
+- **LLM:** dipilih dari env, tanpa key di kode: `LLM_BASE_URL`+`LLM_API_KEY` bila di-set; lalu 9router (`NINEROUTER_API_KEY`, URL `DARTCLIP_9ROUTER_URL`, default `https://9router.rencraft.site/v1`, dicek terjangkau lewat `GET /models`); lalu Gemini (`GEMINI_API_KEY`, endpoint OpenAI-compatible) atau OpenAI (`OPENAI_API_KEY`). Tanpa LLM, mode manual tetap jalan dan caption sosial dilewati.
+- **Bundel:** `worker/desktop/build-mac.sh` → PyInstaller onedir `worker/desktop/dist/dartclip-worker/` (~357 MB, tgz ~164 MB) + ffmpeg/ffprobe statis arm64 dari martin-riedl.de di `bin/`. Saat frozen, `local_cli` menaruh shim `yt-dlp` (memanggil binary yang sama dengan `--yt-dlp`) dan `bin/` di PATH, `FONTS_DIR` = font bundel, `SSL_CERT_FILE=/etc/ssl/cert.pem` (OpenSSL ffmpeg statis tidak membaca keychain macOS; tanpa ini unduhan section gagal dan jatuh ke unduh video penuh), dan `MPLCONFIGDIR` tetap di `~/Library/Caches/DartClip` (kalau tidak, cache font matplotlib dibangun ulang tiap job).
+- **Shell:** `apps/desktop` (Electron) memuat satu jendela (URL, rentang, encoder, tombol Render), menjalankan binary bundel lewat `spawn`, menampilkan progress/log, dan menautkan file hasil. Binary dicari di `DARTCLIP_WORKER_BIN`, `resources/dartclip-worker/`, lalu `worker/desktop/dist/`.
 
 ## Testing
 
