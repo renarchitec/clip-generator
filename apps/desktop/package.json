@@ -1,12 +1,16 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.0.0",
-  "description": "DartClip desktop spike (macOS Apple Silicon, pemakaian pribadi)",
+  "version": "0.2.0",
+  "description": "DartClip local desktop app for macOS Apple Silicon",
   "main": "main.js",
   "scripts": {
     "postinstall": "node node_modules/electron/install.js",
-    "start": "electron ."
+    "start": "electron .",
+    "build:assets": "pnpm --filter api build && pnpm --filter api prisma:sqlite:generate && pnpm --filter web build:desktop",
+    "package:mac": "node scripts/package-mac.mjs",
+    "package:mac:full": "pnpm build:assets && bash ../../worker/desktop/build-mac.sh && node scripts/package-mac.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
     "electron": "^39.0.0"

@@ -1,9 +1,22 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('dartclip', {
-  render: (opts) => ipcRenderer.invoke('render', opts),
-  reveal: (file) => ipcRenderer.invoke('reveal', file),
-  onEvent: (cb) => ipcRenderer.on('worker-event', (_e, data) => cb(data)),
-  onLog: (cb) => ipcRenderer.on('worker-log', (_e, line) => cb(line)),
-  onExit: (cb) => ipcRenderer.on('worker-exit', (_e, data) => cb(data)),
+function getArgument(name) {
+  const prefix = `--dartclip-${name}=`;
+  return process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
+const apiBaseUrl = getArgument('api-base-url');
+const clipsDir = getArgument('clips-dir');
+const fallback = apiBaseUrl && clipsDir ? {} : ipcRenderer.sendSync('desktop:bootstrap') ?? {};
+
+contextBridge.exposeInMainWorld('dartclipDesktop', {
+  isDesktop: true,
+  apiBaseUrl: apiBaseUrl || fallback.apiBaseUrl || '',
+  clipsDir: clipsDir || fallback.clipsDir || '',
+  platform: process.platform,
+  getSettings: () => ipcRenderer.invoke('desktop:get-settings'),
+  saveSettings: (patch) => ipcRenderer.invoke('desktop:save-settings', patch),
+  testLlm: () => ipcRenderer.invoke('desktop:test-llm'),
+  revealInFinder: (filePath) => ipcRenderer.invoke('desktop:reveal-in-finder', filePath),
+  openClipsFolder: () => ipcRenderer.invoke('desktop:open-clips-folder'),
 });
