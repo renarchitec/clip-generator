@@ -21,6 +21,7 @@ export const TARGETS_MAX = 5;
 export const PRIVACIES = ['public', 'unlisted', 'private'] as const;
 /** Batas caption TikTok dalam UTF-16 code unit (String.length). */
 export const TIKTOK_CAPTION_MAX = 2200;
+export const INSTAGRAM_TARGET_CAPTION_MAX = 2200;
 export const PUBLISH_MODES = ['direct', 'inbox'] as const;
 export const TIKTOK_PRIVACY_LEVEL_MAX = 64;
 export const ACTIVE_PUBLICATION_STATUSES = [
@@ -190,6 +191,18 @@ export function validateTiktokTarget(raw: PublishTargetInput): string | null {
   return null;
 }
 
+/** Validasi target Instagram Reels; title dan privacy diabaikan. */
+export function validateInstagramTarget(raw: PublishTargetInput): string | null {
+  if (raw.title !== undefined && typeof raw.title !== 'string') {
+    return 'title harus berupa teks.';
+  }
+  if (typeof raw.caption !== 'string') return 'caption wajib berupa teks.';
+  if (raw.caption.length > INSTAGRAM_TARGET_CAPTION_MAX) {
+    return `caption Instagram maksimal ${INSTAGRAM_TARGET_CAPTION_MAX} karakter.`;
+  }
+  return null;
+}
+
 /** Validasi struktural sebelum platform akun diketahui (dipakai publish service). */
 export function validatePublishTargetsShape(targets: unknown): string | null {
   if (!Array.isArray(targets) || targets.length < 1) {
@@ -235,6 +248,11 @@ export function validatePublishTargets(
     seen.add(raw.accountId);
     if (platformOf?.(raw.accountId) === 'tiktok') {
       const invalid = validateTiktokTarget(raw);
+      if (invalid) return invalid;
+      continue;
+    }
+    if (platformOf?.(raw.accountId) === 'instagram') {
+      const invalid = validateInstagramTarget(raw);
       if (invalid) return invalid;
       continue;
     }

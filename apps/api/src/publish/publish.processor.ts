@@ -12,6 +12,17 @@ import { SocialProviderError } from '../social/social-provider';
 import { SocialService } from '../social/social.service';
 import { fetchTiktokCreatorInfo } from '../social/tiktok-api';
 import {
+  derivePublicMediaKey,
+  publicMediaUrl,
+} from '../clips/public-media';
+import {
+  INSTAGRAM_CHECK_DELAY_MS,
+  INSTAGRAM_MAX_CHECKS,
+  composeInstagramCaption,
+  validateInstagramReel,
+} from './instagram-helpers';
+import { InstagramUploader } from './instagram-uploader';
+import {
   MAX_PROCESSING_CHECKS,
   PROCESSING_CHECK_DELAY_MS,
   PublishError,
@@ -40,6 +51,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
     private readonly social: SocialService,
     private readonly uploader: YoutubeUploader,
     private readonly tiktokUploader: TiktokUploader,
+    private readonly instagramUploader: InstagramUploader,
     private readonly publish: PublishService,
     @InjectQueue(PUBLISH_QUEUE_NAME)
     private readonly queue: Queue<PublishJobData>,
@@ -145,6 +157,11 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       return;
     }
 
+    if (publication.platform === 'instagram') {
+      await this.uploadInstagram(publicationId, publication, size);
+      return;
+    }
+
     if (publication.platform !== 'tiktok') {
       throw new PublishError('Publishing to this platform is not available yet');
     }
@@ -221,6 +238,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
         privacy: true,
         caption: true,
         options: true,
+        clipId: true,
       },
     });
     if (
@@ -252,6 +270,11 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
         return this.markPublished(publicationId);
       }
       return this.scheduleCheck(publicationId, checks + 1);
+    }
+
+    if (publication.platform === 'instagram') {
+      await this.checkInstagram(publicationId, publication, checks);
+      return;
     }
 
     if (publication.platform !== 'tiktok') return;
@@ -312,9 +335,12 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       where: { id: publicationId },
       select: { platform: true },
     });
-    const delay = publication?.platform === 'tiktok'
-      ? TIKTOK_CHECK_DELAY_MS
-      : PROCESSING_CHECK_DELAY_MS;
+    const delay =
+      publication?.platform === 'instagram'
+        ? INSTAGRAM_CHECK_DELAY_MS
+        : publication?.platform === 'tiktok'
+          ? TIKTOK_CHECK_DELAY_MS
+          : PROCESSING_CHECK_DELAY_MS;
     await this.queue.add(
       'check',
       { publicationId, kind: 'check', checks },
@@ -328,12 +354,19 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
     );
   }
 
-  private async accessToken(accountId: string, platform: 'youtube' | 'tiktok'): Promise<string> {
+  private async accessToken(
+    accountId: string,
+    platform: 'youtube' | 'tiktok' | 'instagram',
+  ): Promise<string> {
     try {
       return await this.social.getValidAccessToken(accountId);
     } catch (error) {
       if (error instanceof SocialProviderError && error.code === 'not_configured') {
-        throw new PublishError('YouTube publishing is not configured on the server');
+        throw new PublishError(
+          platform === 'instagram'
+            ? 'Instagram publishing is not configured on the server'
+            : 'YouTube publishing is not configured on the server',
+        );
       }
       throw new PublishError(RECONNECT_MESSAGE);
     }
@@ -378,6 +411,168 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       brandContent: options.brandContent === true,
       brandOrganic: options.brandOrganic === true,
     };
+  }
+
+  /** Unggah Reels Instagram: validasi batas, buat container REELS, lalu cek status. */
+  private async uploadInstagram(
+    publicationId: string,
+    publication: {
+      id: string;
+      caption: string;
+      socialAccountId: string;
+      options: PrismaJsonish;
+      clip: { id: string; startSec: number; endSec: number; hashtags: string[] };
+    },
+    size: number,
+  ): Promise<void> {
+    const accessToken = await this.accessToken(
+      publication.socialAccountId,
+      'instagram',
+    );
+    const igUserId = await this.instagramUserId(publication.socialAccountId);
+    const durationSec = publication.clip.endSec - publication.clip.startSec;
+    const reelError = validateInstagramReel({ durationSec, sizeBytes: size });
+    if (reelError) throw new PublishError(reelError);
+
+    const videoUrl = publicMediaUrl(
+      this.config.publicWebUrl,
+      publication.clip.id,
+      derivePublicMediaKey(this.tokenKey()),
+    );
+    const caption = composeInstagramCaption(
+      publication.caption,
+      publication.clip.hashtags,
+    );
+    const containerId = await this.instagramUploader.createContainer({
+      accessToken,
+      igUserId,
+      videoUrl,
+      caption,
+    });
+    await this.prisma.publication.updateMany({
+      where: { id: publicationId, status: PublicationStatus.uploading },
+      data: {
+        status: PublicationStatus.processing,
+        progress: 100,
+        externalId: containerId,
+        options: {
+          ...(asRecord(publication.options) ?? {}),
+          igUserId,
+        },
+      },
+    });
+    await this.scheduleCheck(publicationId, 1);
+  }
+
+  /** Cek container Reels: FINISHED → media_publish → simpan permalink. */
+  private async checkInstagram(
+    publicationId: string,
+    publication: {
+      externalId: string | null;
+      socialAccountId: string;
+      options: PrismaJsonish;
+      clipId: string;
+    },
+    checks: number,
+  ): Promise<void> {
+    const containerId = publication.externalId;
+    if (!containerId) return;
+    const accessToken = await this.accessToken(
+      publication.socialAccountId,
+      'instagram',
+    );
+    const igUserId =
+      instagramUserIdFromOptions(publication.options) ??
+      (await this.instagramUserId(publication.socialAccountId));
+
+    let outcome;
+    try {
+      outcome = await this.instagramUploader.containerStatus(
+        accessToken,
+        containerId,
+      );
+    } catch (error) {
+      if (
+        error instanceof PublishError &&
+        error.transient &&
+        checks < INSTAGRAM_MAX_CHECKS
+      ) {
+        await this.scheduleCheck(publicationId, checks + 1);
+        return;
+      }
+      throw error;
+    }
+
+    if (outcome.state === 'failed') {
+      return this.markFailed(publicationId, outcome.reason, [
+        PublicationStatus.processing,
+      ]);
+    }
+    if (outcome.state === 'published') return this.markPublished(publicationId);
+
+    if (outcome.state === 'ready') {
+      try {
+        const result = await this.instagramUploader.publishContainer(
+          accessToken,
+          igUserId,
+          containerId,
+        );
+        const permalink = result.mediaId
+          ? await this.instagramUploader
+              .fetchPermalink(accessToken, result.mediaId)
+              .catch(() => null)
+          : null;
+        await this.prisma.publication.updateMany({
+          where: { id: publicationId, status: PublicationStatus.processing },
+          data: {
+            status: PublicationStatus.published,
+            publishedAt: new Date(),
+            externalId: result.mediaId ?? containerId,
+            externalUrl: permalink,
+          },
+        });
+        if (result.configIssue) {
+          this.logger.warn(
+            `publikasi ${publicationId}: Instagram publish sebagian (${result.configIssue})`,
+          );
+        }
+        return;
+      } catch (error) {
+        if (
+          error instanceof PublishError &&
+          error.transient &&
+          checks < INSTAGRAM_MAX_CHECKS
+        ) {
+          await this.scheduleCheck(publicationId, checks + 1);
+          return;
+        }
+        throw error;
+      }
+    }
+
+    if (checks >= INSTAGRAM_MAX_CHECKS) {
+      return this.markFailed(
+        publicationId,
+        'Instagram publishing timed out after 10 minutes',
+        [PublicationStatus.processing],
+      );
+    }
+    await this.scheduleCheck(publicationId, checks + 1);
+  }
+
+  private async instagramUserId(accountId: string): Promise<string> {
+    const account = await this.prisma.socialAccount.findUnique({
+      where: { id: accountId },
+      select: { externalId: true },
+    });
+    if (!account?.externalId) throw new PublishError('Reconnect your Instagram account');
+    return account.externalId;
+  }
+
+  private tokenKey(): string {
+    const key = this.config.socialTokenKey;
+    if (!key) throw new PublishError('Instagram publishing is not configured on the server');
+    return key;
   }
 
   private async fail(publicationId: string, error: unknown): Promise<void> {
@@ -460,4 +655,19 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type PrismaJsonish = unknown;
+
+function asRecord(value: unknown): Record<string, any> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, any>)
+    : null;
+}
+
+function instagramUserIdFromOptions(value: unknown): string | null {
+  const record = asRecord(value);
+  return typeof record?.igUserId === 'string' && record.igUserId
+    ? record.igUserId
+    : null;
 }

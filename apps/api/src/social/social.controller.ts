@@ -91,6 +91,32 @@ export class SocialController {
     return this.callback(res, user.id, 'tiktok', code, state);
   }
 
+  @Get('instagram/connect')
+  instagramConnect(
+    @Res() res: Response,
+    @CurrentUser() user: { id: string },
+  ): Promise<void> {
+    return this.connect(res, user.id, 'instagram');
+  }
+
+  @Get('instagram/callback')
+  instagramCallback(
+    @Res() res: Response,
+    @CurrentUser() user: { id: string },
+    @Query('code') code?: string,
+    @Query('state') state?: string,
+    @Query('error') providerError?: string,
+  ): Promise<void> {
+    // Instagram mengirim ?error=access_denied bila pengguna menolak.
+    if (providerError) {
+      const code =
+        providerError === 'access_denied' ? 'access_denied' : 'oauth_failed';
+      this.redirectError(res, new SocialProviderError(code), 'oauth_failed');
+      return Promise.resolve();
+    }
+    return this.callback(res, user.id, 'instagram', code, state);
+  }
+
   private async connect(
     res: Response,
     userId: string,

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { useT } from "@/lib/i18n"
 import { isActivePublication, PublishDialog, type ClipPublication } from "@/components/publish-dialog"
-import { TikTokMark, YouTubeMark } from "@/components/social-accounts"
+import { InstagramMark, TikTokMark, YouTubeMark } from "@/components/social-accounts"
 
 export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
 
@@ -98,10 +98,11 @@ function PublishBadge({ publications }: { publications?: ClipPublication[] }) {
   const published = publications.some((item) => item.status === "published")
   if (!busy && !published) return null
   const shown = publications.filter((item) => item.status === "published" || isActivePublication(item.status))
-  const hasYouTube = shown.some((item) => item.platform === "youtube"), hasTikTok = shown.some((item) => item.platform === "tiktok")
-  const single = hasYouTube !== hasTikTok ? (hasTikTok ? "TikTok" : "YouTube") : null
+  const platforms = (["youtube", "tiktok", "instagram"] as const).filter((platform) => shown.some((item) => item.platform === platform))
+  const hasYouTube = platforms.includes("youtube"), hasTikTok = platforms.includes("tiktok"), hasInstagram = platforms.includes("instagram")
+  const single = platforms.length === 1 ? t.socialPlatforms[platforms[0]] : null
   const label = single ? (busy ? t.publishingTo : t.publishedOn).replace("{platform}", single) : busy ? t.publishingBadge : t.publishedBadge
   return <span title={label} className="inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 pl-1 pr-1.5 text-white shadow-sm backdrop-blur-sm sm:bottom-20">
-    {hasYouTube && <YouTubeMark className="size-3.5"/>}{hasTikTok && <TikTokMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
+    {hasYouTube && <YouTubeMark className="size-3.5"/>}{hasTikTok && <TikTokMark className="size-3.5"/>}{hasInstagram && <InstagramMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
   </span>
 }

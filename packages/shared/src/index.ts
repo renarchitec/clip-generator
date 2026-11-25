@@ -249,6 +249,12 @@ export const PUBLISH_TARGETS_MAX = 5;
 /** Batas caption TikTok (UTF-16 code unit). */
 export const PUBLISH_TIKTOK_CAPTION_MAX = 2200;
 
+/** Batas caption Instagram (UTF-16 code unit) dan jumlah hashtag per Reel. */
+export const PUBLISH_INSTAGRAM_CAPTION_MAX = 2200;
+export const PUBLISH_INSTAGRAM_MAX_HASHTAGS = 30;
+/** Batas durasi Reels (detik). */
+export const PUBLISH_INSTAGRAM_MAX_DURATION_SEC = 15 * 60;
+
 /** Mode publikasi: 'direct' = Direct Post (video.publish), 'inbox' = draf di inbox TikTok (video.upload). */
 export const PUBLISH_MODES = ['direct', 'inbox'] as const;
 export type PublishMode = (typeof PUBLISH_MODES)[number];
@@ -265,11 +271,14 @@ export interface TiktokPublishOptions {
 
 export interface PublishTarget {
   accountId: string;
-  /** YouTube: 1..100 karakter, tanpa '<' atau '>'. TikTok: opsional (boleh kosong). */
+  /** YouTube: 1..100 karakter, tanpa '<' atau '>'. TikTok/Instagram: opsional (diabaikan). */
   title: string;
-  /** YouTube: 0..5000 karakter (deskripsi). TikTok: 0..2200 karakter (caption; tidak dipakai mode inbox). */
+  /**
+   * YouTube: 0..5000 karakter (deskripsi). TikTok/Instagram: 0..2200 karakter
+   * (caption; untuk TikTok tidak dipakai pada mode inbox).
+   */
   caption: string;
-  /** Wajib untuk YouTube; diabaikan untuk TikTok. */
+  /** Wajib untuk YouTube; diabaikan untuk TikTok dan Instagram. */
   privacy?: PublicationPrivacy;
   madeForKids?: boolean;
   /** Hanya TikTok; default 'direct'. */
@@ -303,7 +312,7 @@ export interface PublicationResponse {
   accountName: string;
   title: string;
   caption: string;
-  /** YouTube: public|unlisted|private. TikTok: privacy_level (direct) atau 'inbox'. */
+  /** YouTube: public|unlisted|private. TikTok: privacy_level (direct) atau 'inbox'. Instagram: selalu 'public'. */
   privacy: string;
   mode: PublishMode;
   status: PublicationStatus;

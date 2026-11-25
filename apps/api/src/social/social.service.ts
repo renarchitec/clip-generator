@@ -16,21 +16,25 @@ import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OAuthStateStore } from './oauth-state.store';
 import {
+  buildInstagramAuthorizationUrl,
   buildTiktokAuthorizationUrl,
   buildYoutubeAuthorizationUrl,
   createOAuthState,
   createPkceChallenge,
   socialCallbackUrl,
+  INSTAGRAM_SCOPES,
   TIKTOK_SCOPES,
   YOUTUBE_SCOPES,
 } from './oauth';
 import { SOCIAL_PLATFORM_LIST } from './social.constants';
 import {
+  InstagramProvider,
   SocialProviderError,
   TiktokProvider,
   YoutubeProvider,
   type SocialProvider,
 } from './social-provider';
+import { decideInstagramRefresh } from './instagram-token';
 import { TiktokApiError, fetchTiktokCreatorInfo } from './tiktok-api';
 import { decryptSocialToken, encryptSocialToken } from './token-crypto';
 
@@ -47,11 +51,13 @@ export class SocialService {
     private readonly config: AppConfig,
     private readonly youtube: YoutubeProvider,
     private readonly tiktok: TiktokProvider,
+    private readonly instagram: InstagramProvider,
     private readonly oauthStates: OAuthStateStore,
   ) {
     this.providers = new Map<SocialPlatform, SocialProvider>([
       [youtube.platform, youtube],
       [tiktok.platform, tiktok],
+      [instagram.platform, instagram],
     ]);
   }
 
@@ -131,6 +137,14 @@ export class SocialService {
         state: pending.state,
       });
     }
+    if (platform === 'instagram') {
+      // Instagram API with Instagram Login: tanpa PKCE.
+      return buildInstagramAuthorizationUrl({
+        clientId: this.config.instagramClientId!,
+        redirectUri,
+        state: pending.state,
+      });
+    }
     return buildYoutubeAuthorizationUrl({
       clientId: this.config.googleClientId!,
       redirectUri,
@@ -164,7 +178,9 @@ export class SocialService {
 
     const tokens = await provider.exchangeCode(
       code,
-      platform === 'tiktok' ? undefined : pending.codeVerifier,
+      platform === 'tiktok' || platform === 'instagram'
+        ? undefined
+        : pending.codeVerifier,
       socialCallbackUrl(this.config.publicWebUrl, platform),
     );
     const external = await provider.fetchAccount(tokens.accessToken);
@@ -178,7 +194,11 @@ export class SocialService {
       : null;
     const scopes =
       tokens.scopes ??
-      [...(platform === 'tiktok' ? TIKTOK_SCOPES : YOUTUBE_SCOPES)];
+      [...(platform === 'tiktok'
+        ? TIKTOK_SCOPES
+        : platform === 'instagram'
+          ? INSTAGRAM_SCOPES
+          : YOUTUBE_SCOPES)];
 
     await this.prisma.socialAccount.upsert({
       where: {
@@ -269,6 +289,25 @@ export class SocialService {
 
     const key = this.tokenKey();
     const accessToken = decryptSocialToken(account.accessTokenEnc, key);
+
+    if (account.platform === 'instagram') {
+      // Instagram tidak punya refresh token: access token diperpanjang dengan
+      // dirinya sendiri bila sisa umurnya <= 7 hari.
+      const decision = decideInstagramRefresh(account.expiresAt);
+      if (!decision.refresh) return accessToken;
+
+      const inflightInstagram = this.refreshing.get(account.id);
+      if (inflightInstagram) return inflightInstagram;
+
+      const refreshInstagram = this.refreshInstagramAccount(
+        account,
+        accessToken,
+        key,
+      ).finally(() => this.refreshing.delete(account.id));
+      this.refreshing.set(account.id, refreshInstagram);
+      return refreshInstagram;
+    }
+
     const expiresSoon = Boolean(
       account.expiresAt &&
         account.expiresAt.getTime() - Date.now() <=
@@ -319,6 +358,42 @@ export class SocialService {
     });
 
     return tokens.accessToken;
+  }
+
+  /**
+   * Perpanjang access token Instagram dengan token itu sendiri. Bila refresh
+   * gagal tetapi token lama masih valid, token lama tetap dipakai supaya
+   * publish tidak gagal karena gangguan sesaat.
+   */
+  private async refreshInstagramAccount(
+    account: { id: string; expiresAt: Date | null },
+    accessToken: string,
+    key: string,
+  ): Promise<string> {
+    const provider = this.providers.get('instagram');
+    if (!provider) throw new SocialProviderError('provider_unavailable');
+
+    try {
+      const tokens = await provider.refresh(accessToken);
+      await this.prisma.socialAccount.update({
+        where: { id: account.id },
+        data: {
+          accessTokenEnc: encryptSocialToken(tokens.accessToken, key),
+          // Instagram tidak merotasi refresh token (tidak punya refresh token).
+          refreshTokenEnc: null,
+          expiresAt: tokens.expiresIn
+            ? new Date(Date.now() + tokens.expiresIn * 1000)
+            : account.expiresAt,
+        },
+      });
+      return tokens.accessToken;
+    } catch (error) {
+      const stillValid =
+        !account.expiresAt || account.expiresAt.getTime() > Date.now();
+      if (stillValid) return accessToken;
+      if (error instanceof SocialProviderError) throw error;
+      throw new SocialProviderError('refresh_failed');
+    }
   }
 
   private tokenKey(): string {

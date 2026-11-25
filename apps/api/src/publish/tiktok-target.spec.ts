@@ -69,5 +69,5 @@ test('kontrak shared dan Prisma mendukung mode/opsi TikTok', async () => {
   );
   assert.match(migration, /"options" JSONB/);
   const service = await read('apps/api/src/publish/publish.service.ts');
-  assert.match(service, /\['youtube', 'tiktok'\]/);
+  assert.match(service, /\['youtube', 'tiktok', 'instagram'\]/);
 });

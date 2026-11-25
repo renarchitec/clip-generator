@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { SocialPlatform } from '@clipper/shared';
 import { AppConfig } from '../config/app-config.service';
+import { INSTAGRAM_SCOPES } from './oauth';
+import { isInstagramAccountTypeSupported } from './instagram-token';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
@@ -326,6 +328,205 @@ export class TiktokProvider implements SocialProvider {
           ? body.scope.split(/[\s,]+/).filter(Boolean)
           : undefined,
     };
+  }
+}
+
+const INSTAGRAM_TOKEN_URL = 'https://api.instagram.com/oauth/access_token';
+const INSTAGRAM_GRAPH_ORIGIN = 'https://graph.instagram.com';
+const INSTAGRAM_ME_URL = `${INSTAGRAM_GRAPH_ORIGIN}/v27.0/me?fields=user_id,username,profile_picture_url,account_type`;
+/** Umur access token long-lived Instagram. */
+const INSTAGRAM_LONG_LIVED_SECONDS = 60 * 24 * 60 * 60;
+
+/**
+ * Instagram API with Instagram Login (bukan Facebook Login): tanpa PKCE,
+ * tanpa refresh token. Token long-lived diperpanjang dengan token itu sendiri.
+ */
+@Injectable()
+export class InstagramProvider implements SocialProvider {
+  readonly platform: SocialPlatform = 'instagram';
+  readonly available = true;
+
+  constructor(private readonly config: AppConfig) {}
+
+  get configured(): boolean {
+    return Boolean(
+      this.config.instagramClientId &&
+        this.config.instagramClientSecret &&
+        this.config.socialTokenKey,
+    );
+  }
+
+  /**
+   * Tukar authorization code (sekali pakai, berlaku 1 jam) menjadi token
+   * long-lived. Respons short-lived bisa berbentuk `{data:[{...}]}` atau flat.
+   */
+  async exchangeCode(
+    code: string,
+    _codeVerifier: string | undefined,
+    redirectUri: string,
+  ): Promise<OAuthTokens> {
+    const credentials = this.credentials();
+    // Instagram menambahkan `#_` di belakang code pada redirect.
+    const cleanCode = code.trim().replace(/#_?$/, '');
+
+    let response: Response;
+    try {
+      response = await fetch(INSTAGRAM_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: credentials.clientId,
+          client_secret: credentials.clientSecret,
+          grant_type: 'authorization_code',
+          redirect_uri: redirectUri,
+          code: cleanCode,
+        }),
+      });
+    } catch {
+      throw new SocialProviderError('token_exchange');
+    }
+    if (!response.ok) throw new SocialProviderError('token_exchange');
+
+    const body = asRecord(await responseJson(response, 'token_exchange'));
+    const data = asRecord(body?.data) ?? body;
+    const shortToken =
+      typeof data?.access_token === 'string' && data.access_token
+        ? data.access_token
+        : null;
+    if (!shortToken) throw new SocialProviderError('token_exchange');
+
+    const permissions = Array.isArray(data?.permissions)
+      ? (data!.permissions as unknown[])
+          .filter((item): item is string => typeof item === 'string')
+          .flatMap((item) => item.split(','))
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined;
+
+    // Tukar ke long-lived (60 hari). Bila gagal, token 1 jam tetap terpakai.
+    const longLived = await this.exchangeForLongLived(
+      shortToken,
+      credentials.clientSecret,
+    );
+
+    return {
+      accessToken: longLived?.accessToken ?? shortToken,
+      expiresIn: longLived?.expiresIn ?? INSTAGRAM_LONG_LIVED_SECONDS,
+      scopes: permissions ?? [...INSTAGRAM_SCOPES],
+    };
+  }
+
+  /** `GET /me`: hanya akun Business/Creator yang boleh memakai Content Publishing. */
+  async fetchAccount(accessToken: string): Promise<ExternalSocialAccount> {
+    let response: Response;
+    try {
+      response = await fetch(INSTAGRAM_ME_URL, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+    } catch {
+      throw new SocialProviderError('profile_fetch');
+    }
+    if (!response.ok) throw new SocialProviderError('profile_fetch');
+
+    const body = asRecord(await responseJson(response, 'profile_fetch'));
+    const accountType =
+      typeof body?.account_type === 'string' ? body.account_type : null;
+    if (!isInstagramAccountTypeSupported(accountType)) {
+      throw new SocialProviderError(
+        accountType?.toLowerCase() === 'personal'
+          ? 'account_type_personal'
+          : 'account_type_unsupported',
+      );
+    }
+
+    const externalId =
+      typeof body?.user_id === 'string' && body.user_id
+        ? body.user_id
+        : typeof body?.id === 'string' && body.id
+          ? body.id
+          : null;
+    if (!externalId) throw new SocialProviderError('profile_fetch');
+
+    return {
+      externalId,
+      displayName:
+        typeof body?.username === 'string' && body.username
+          ? body.username
+          : 'Instagram',
+      avatarUrl:
+        typeof body?.profile_picture_url === 'string' && body.profile_picture_url
+          ? body.profile_picture_url
+          : undefined,
+    };
+  }
+
+  /**
+   * Perpanjang access token long-lived dengan token itu sendiri
+   * (`grant_type=ig_refresh_token`). Loop: token baru menggantikan yang lama.
+   */
+  async refresh(accessToken: string): Promise<OAuthTokens> {
+    const url = new URL(`${INSTAGRAM_GRAPH_ORIGIN}/refresh_access_token`);
+    url.searchParams.set('grant_type', 'ig_refresh_token');
+    url.searchParams.set('access_token', accessToken);
+
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch {
+      throw new SocialProviderError('refresh_failed');
+    }
+    if (!response.ok) throw new SocialProviderError('refresh_failed');
+
+    const body = asRecord(await responseJson(response, 'refresh_failed'));
+    if (typeof body?.access_token !== 'string' || !body.access_token) {
+      throw new SocialProviderError('refresh_failed');
+    }
+    const expiresIn = Number(body.expires_in);
+    return {
+      accessToken: body.access_token,
+      expiresIn:
+        Number.isFinite(expiresIn) && expiresIn > 0
+          ? expiresIn
+          : INSTAGRAM_LONG_LIVED_SECONDS,
+    };
+  }
+
+  private credentials(): { clientId: string; clientSecret: string } {
+    const clientId = this.config.instagramClientId;
+    const clientSecret = this.config.instagramClientSecret;
+    if (!clientId || !clientSecret || !this.config.socialTokenKey) {
+      throw new SocialProviderError('not_configured');
+    }
+    return { clientId, clientSecret };
+  }
+
+  private async exchangeForLongLived(
+    shortToken: string,
+    clientSecret: string,
+  ): Promise<{ accessToken: string; expiresIn: number } | null> {
+    const url = new URL(`${INSTAGRAM_GRAPH_ORIGIN}/access_token`);
+    url.searchParams.set('grant_type', 'ig_exchange_token');
+    url.searchParams.set('client_secret', clientSecret);
+    url.searchParams.set('access_token', shortToken);
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return null;
+      const body = asRecord(await response.json());
+      if (typeof body?.access_token !== 'string' || !body.access_token) {
+        return null;
+      }
+      const expiresIn = Number(body.expires_in);
+      return {
+        accessToken: body.access_token,
+        expiresIn:
+          Number.isFinite(expiresIn) && expiresIn > 0
+            ? expiresIn
+            : INSTAGRAM_LONG_LIVED_SECONDS,
+      };
+    } catch {
+      return null;
+    }
   }
 }
 

@@ -7,12 +7,13 @@ import { CAPTION_QUEUE_NAME } from '../queue/queue.constants';
 import { redisConnection } from '../queue/redis';
 import { CAPTION_QUEUE_EVENTS, ClipCaptionsService } from './clip-captions.service';
 import { ClipsController } from './clips.controller';
+import { PublicMediaController } from './public-media.controller';
 import { ClipsService } from './clips.service';
 
 @Module({
   // QueueModule menyediakan koneksi BullMQ root; antrean `captions` didaftarkan lokal.
   imports: [QueueModule, BullModule.registerQueue({ name: CAPTION_QUEUE_NAME })],
-  controllers: [ClipsController],
+  controllers: [ClipsController, PublicMediaController],
   providers: [
     ClipsService,
     ClipCaptionsService,

@@ -28,9 +28,10 @@ import {
   validatePublishTargets,
   validatePublishTargetsShape,
 } from './publish-helpers';
+import { sanitizeInstagramCaption } from './instagram-helpers';
 
 /** Platform yang sudah bisa dipublikasikan. */
-const PUBLISHABLE_PLATFORMS = new Set<string>(['youtube', 'tiktok']);
+const PUBLISHABLE_PLATFORMS = new Set<string>(['youtube', 'tiktok', 'instagram']);
 
 export const PUBLICATION_INCLUDE = {
   socialAccount: { select: { displayName: true } },
@@ -120,19 +121,23 @@ export class PublishService {
               socialAccountId: account.id,
               platform: account.platform,
               title:
-                account.platform === 'tiktok'
+                account.platform === 'tiktok' || account.platform === 'instagram'
                   ? sanitizeTitle(target.title ?? '')
                   : sanitizeTitle(target.title!),
               caption:
                 account.platform === 'tiktok'
                   ? sanitizeTiktokCaption(target.caption ?? '')
-                  : sanitizeCaption(target.caption ?? ''),
+                  : account.platform === 'instagram'
+                    ? sanitizeInstagramCaption(target.caption ?? '')
+                    : sanitizeCaption(target.caption ?? ''),
               privacy:
                 account.platform === 'tiktok'
                   ? tiktokMode(target) === 'inbox'
                     ? 'inbox'
                     : target.tiktok!.privacyLevel
-                  : target.privacy!,
+                  : account.platform === 'instagram'
+                    ? 'public'
+                    : target.privacy!,
               mode: account.platform === 'tiktok' ? tiktokMode(target) : 'direct',
               options:
                 account.platform === 'tiktok' && tiktokMode(target) === 'direct'

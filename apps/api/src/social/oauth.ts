@@ -13,6 +13,11 @@ export const TIKTOK_SCOPES = [
   'video.publish',
 ] as const;
 
+export const INSTAGRAM_SCOPES = [
+  'instagram_business_basic',
+  'instagram_business_content_publish',
+] as const;
+
 export interface OAuthStatePayload {
   userId: string;
   platform: SocialPlatform;
@@ -72,6 +77,20 @@ export function buildTiktokAuthorizationUrl(input: {
   url.searchParams.set('state', input.state);
   // Selalu tampilkan layar izin supaya akun TikTok kedua bisa disambungkan.
   url.searchParams.set('disable_auto_auth', '1');
+  return url.toString();
+}
+
+export function buildInstagramAuthorizationUrl(input: {
+  clientId: string;
+  redirectUri: string;
+  state: string;
+}): string {
+  const url = new URL('https://www.instagram.com/oauth/authorize');
+  url.searchParams.set('client_id', input.clientId);
+  url.searchParams.set('redirect_uri', input.redirectUri);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', INSTAGRAM_SCOPES.join(','));
+  url.searchParams.set('state', input.state);
   return url.toString();
 }
 

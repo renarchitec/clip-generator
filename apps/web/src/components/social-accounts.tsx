@@ -21,8 +21,8 @@ const connect = (platform: SocialPlatform) => window.location.assign(`/api/socia
 export function YouTubeMark({ className = "size-5" }: { className?: string }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" className={className}><path fill="#FF0033" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8Z"/><path fill="#fff" d="m9.6 15.6 6.2-3.6-6.2-3.6v7.2Z"/></svg>
 }
-function InstagramMark() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5"><defs><radialGradient id="ig-grad" cx="30%" cy="107%" r="150%"><stop offset="0" stopColor="#fdf497"/><stop offset=".05" stopColor="#fdf497"/><stop offset=".45" stopColor="#fd5949"/><stop offset=".6" stopColor="#d6249f"/><stop offset=".9" stopColor="#285AEB"/></radialGradient></defs><rect width="24" height="24" rx="6" fill="url(#ig-grad)"/><rect x="5.5" y="5.5" width="13" height="13" rx="3.8" fill="none" stroke="#fff" strokeWidth="1.7"/><circle cx="12" cy="12" r="3.1" fill="none" stroke="#fff" strokeWidth="1.7"/><circle cx="16.1" cy="7.9" r="1" fill="#fff"/></svg>
+export function InstagramMark({ className = "size-5" }: { className?: string }) {
+  return <svg viewBox="0 0 24 24" aria-hidden="true" className={cn("text-[#E1306C]", className)} fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3.25" y="3.25" width="17.5" height="17.5" rx="5.2"/><circle cx="12" cy="12" r="4.1"/><circle cx="17.7" cy="6.7" r="1" fill="currentColor" stroke="none"/></svg>
 }
 export function TikTokMark({ className = "size-5" }: { className?: string }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" className={className}><path fill="#25F4EE" d="M9.4 9.6v-.9a6.8 6.8 0 0 0-1-.1 6.6 6.6 0 0 0-3.8 12 6.6 6.6 0 0 1 4.8-11Z"/><path fill="#25F4EE" d="M9.6 19.9a3 3 0 0 0 3-2.9V2.6h2.6a5 5 0 0 1-.1-.9h-3.6v14.5a3 3 0 0 1-3 2.9 3 3 0 0 1-1.4-.4 3 3 0 0 0 2.5 1.2Zm10.6-12.5v-.9a5 5 0 0 1-2.7-.8 5 5 0 0 0 2.7 1.7Z"/><path fill="#FE2C55" d="M17.5 5.7a5 5 0 0 1-1.2-3.2h-1a5 5 0 0 0 2.2 3.2ZM8.4 12.9a3 3 0 0 0-1.4 5.6 3 3 0 0 1 3.4-4.7V10a6.5 6.5 0 0 0-1-.1h-.1v2.8a3 3 0 0 0-.9.2Z"/><path fill="#FE2C55" d="M20.2 7.4v2.8a8.6 8.6 0 0 1-5-1.6V16a6.6 6.6 0 0 1-10.3 5.4 6.6 6.6 0 0 0 11.4-4.5V9.5a8.6 8.6 0 0 0 5 1.6V7.6a5 5 0 0 1-1.1-.2Z"/><path className="fill-foreground" d="M15.2 16V8.6a8.6 8.6 0 0 0 5 1.6V7.4a5 5 0 0 1-2.7-1.7 5 5 0 0 1-2.2-3.2h-2.7V17a3 3 0 0 1-5.4 1.5 3 3 0 0 1 1.4-5.6 3 3 0 0 1 .9.1V10a6.6 6.6 0 0 0-4.7 11.1A6.6 6.6 0 0 0 15.2 16Z"/></svg>
@@ -70,6 +70,7 @@ function PlatformBlock({ provider, accounts }: { provider: SocialProvider; accou
       </div>
       {!comingSoon && <Button variant={accounts.length ? "outline" : "default"} size="lg" className="ml-auto min-h-10 px-3" disabled={unconfigured} aria-describedby={hint ? hintId : undefined} onClick={() => connect(provider.platform)}><Plus aria-hidden="true"/>{accounts.length ? t.socialAddAccount : t.socialConnect}<span className="sr-only"> {name}</span></Button>}
     </div>
+    {!comingSoon && provider.platform === "instagram" && <p className="mt-3 text-xs text-muted-foreground sm:ml-14">{t.instagramAccountNote}</p>}
     {accounts.length > 0 && <ul className="mt-4 space-y-2 sm:pl-14">{accounts.map((account) => <AccountRow key={account.id} account={account} platformName={name}/>)}</ul>}
   </li>
 }
