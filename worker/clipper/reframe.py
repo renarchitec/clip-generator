@@ -264,7 +264,7 @@ def two_speaker_centers_from_frames(
 FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 640  # panel atas 27:16
 FACECAM_FACE_SCALE = 3.0  # tinggi panel = 3x tinggi wajah
 FACECAM_MIN_PANEL_H = 64  # piksel; di bawah ini upscale terlalu kasar
-FACECAM_MIN_FACE_SCALE = 2.2  # batas zoom-in saat memusatkan wajah di sudut
+FACECAM_MIN_FACE_SCALE = 1.8  # batas zoom-in saat memusatkan wajah di sudut
 # Panel facecam ada di paling atas output 9:16, tempat UI TikTok/Reels/Shorts
 # (status bar, tab "Following | For You", ikon search) menutupi ~200px pertama.
 # Wajah diletakkan di bawah tengah panel supaya tidak tertutup.
@@ -318,10 +318,11 @@ def facecam_box(
         w, h = int(w * scale), int(h * scale)
     w, h = max(2, w - w % 2), max(2, h - h % 2)  # dimensi genap untuk x264
 
+    # Wajah selalu tepat di tengah horizontal & di FACECAM_FACE_Y vertikal.
+    # Kotak boleh keluar dari frame; pipeline mengisi sisa di luar frame dengan
+    # blur (lihat `_facecam_graph`), jadi wajah tidak bergeser ke tepi panel.
     x = int(round(cx * src_w - w / 2))
     y = int(round(cy * src_h - h * FACECAM_FACE_Y))
-    x = min(max(0, x), max(0, src_w - w))
-    y = min(max(0, y), max(0, src_h - h))
     return (x, y, w, h)
 
 

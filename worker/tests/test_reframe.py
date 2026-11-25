@@ -154,15 +154,17 @@ def test_job_data_facecam_defaults_false_and_parses_tolerantly():
     assert job_data_from_dict({**base, "facecam": 0}).facecam is False
 
 
-def test_facecam_box_pinned_corner_face_clamps_to_corner():
-    # Wajah menempel sudut kiri atas: kotak dijepit ke (0,0), tetap di dalam frame.
+def test_facecam_box_pinned_corner_face_stays_centered():
+    # Wajah menempel sudut kiri atas: kotak keluar frame (sisa diisi blur oleh
+    # pipeline) supaya wajah tetap di tengah horizontal & di FACECAM_FACE_Y.
     frames = _frames(lambda t, i: [(0.05, 0.05, 0.08, 0.0)])
     box = reframe.facecam_box(frames, 1920, 1080)
 
     assert box is not None
     x, y, w, h = box
-    assert (x, y) == (0, 0)
-    assert 0 < w <= 1920 and 0 < h <= 1080
+    assert x < 0 and y < 0
+    assert (0.05 * 1920 - x) / w == pytest.approx(0.5, abs=0.01)
+    assert (0.05 * 1080 - y) / h == pytest.approx(reframe.FACECAM_FACE_Y, abs=0.01)
     assert w % 2 == 0 and h % 2 == 0
 
 
@@ -205,7 +207,15 @@ def test_facecam_graph_vstacks_face_panel_over_gameplay():
 
     joined = ";".join(graph)
     assert "split=2" in joined
-    assert "crop=546:324:12:34" in joined
+    assert "crop=w='min(558\\,iw)-12':h='min(358\\,ih)-34':x=12:y=34" in joined
+    assert "boxblur" in joined and "overlay=x=0:y=0" in joined
+    assert "min(ih*27/32,in_w)" in joined
+
+    # Kotak keluar frame di kiri/atas: potong dari 0, geser overlay sebanding.
+    graph, _ = pipeline._facecam_graph((-100, -64, 1080, 640), None)
+    joined = ";".join(graph)
+    assert "crop=w='min(980\\,iw)-0':h='min(576\\,ih)-0':x=0:y=0" in joined
+    assert "overlay=x=100:y=64" in joined
     assert "min(ih*27/32,in_w)" in joined
     assert "scale=1080:640" in joined
     assert "scale=1080:1280" in joined

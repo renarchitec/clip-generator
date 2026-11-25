@@ -684,9 +684,22 @@ def _facecam_graph(
     di tengah frame, keduanya diskalakan lalu ditumpuk (total 1080x1920).
     """
     x, y, w, h = box
+    # Kotak boleh keluar dari frame (wajah di tepi tetap di tengah panel):
+    # potong bagian yang ada di frame, skalakan dengan faktor kotak, taruh di
+    # posisinya di atas latar blur dari potongan yang sama.
+    s = 640 / h
+    ox, oy = round(max(0, -x) * s), round(max(0, -y) * s)
+    inner = (
+        f"crop=w='min({x + w}\\,iw)-{max(0, x)}':h='min({y + h}\\,ih)-{max(0, y)}'"
+        f":x={max(0, x)}:y={max(0, y)},"
+        f"scale=w='trunc(iw*{s:.6f}/2)*2':h='trunc(ih*{s:.6f}/2)*2'"
+    )
     graph = [
         "[0:v]split=2[fc0][fc1]",
-        f"[fc0]crop={w}:{h}:{x}:{y},scale=1080:640[top]",
+        f"[fc0]{inner},split=2[fcs][fcb]",
+        "[fcb]scale=1080:640:force_original_aspect_ratio=increase,crop=1080:640,"
+        "boxblur=luma_radius=40:luma_power=2[fcbg]",
+        f"[fcbg][fcs]overlay=x={ox}:y={oy},setsar=1[top]",
         "[fc1]crop=w='min(ih*27/32,in_w)':h=ih:x='(in_w-out_w)/2':y=0,scale=1080:1280[bot]",
         "[top][bot]vstack=inputs=2[v]",
     ]
