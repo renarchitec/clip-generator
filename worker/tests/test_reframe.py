@@ -154,17 +154,15 @@ def test_job_data_facecam_defaults_false_and_parses_tolerantly():
     assert job_data_from_dict({**base, "facecam": 0}).facecam is False
 
 
-def test_facecam_box_pinned_corner_face_stays_centered():
-    # Wajah menempel sudut kiri atas: kotak keluar frame (sisa diisi blur oleh
-    # pipeline) supaya wajah tetap di tengah horizontal & di FACECAM_FACE_Y.
+def test_facecam_box_pinned_corner_face_clamps_to_corner():
+    # Wajah menempel sudut kiri atas: kotak dijepit ke (0,0), tetap di dalam frame.
     frames = _frames(lambda t, i: [(0.05, 0.05, 0.08, 0.0)])
     box = reframe.facecam_box(frames, 1920, 1080)
 
     assert box is not None
     x, y, w, h = box
-    assert x < 0 and y < 0
-    assert (0.05 * 1920 - x) / w == pytest.approx(0.5, abs=0.01)
-    assert (0.05 * 1080 - y) / h == pytest.approx(reframe.FACECAM_FACE_Y, abs=0.01)
+    assert (x, y) == (0, 0)
+    assert 0 < w <= 1920 and 0 < h <= 1080
     assert w % 2 == 0 and h % 2 == 0
 
 
@@ -180,11 +178,11 @@ def test_facecam_box_empty_or_rare_faces_returns_none():
 
 
 def test_facecam_box_centers_and_stays_in_bounds():
-    # Wajah besar di tengah: kotak full-width (1080), rasio tetap 27:16, di dalam frame.
+    # Wajah besar di tengah: kotak full-width (1080), rasio tetap 45:32, di dalam frame.
     frames = _frames(lambda t, i: [(0.5, 0.5, 0.4, 0.0)])
     x, y, w, h = reframe.facecam_box(frames, 1080, 1920)
 
-    assert w == 1080 and h == 640  # 27:16 dijaga saat clamp ke lebar frame
+    assert w == 1080 and h == 768  # 45:32 dijaga saat clamp ke lebar frame
     assert 0 <= x <= 1080 - w and 0 <= y <= 1920 - h
 
 
@@ -203,22 +201,15 @@ def test_facecam_box_picks_smallest_face_per_frame():
 def test_facecam_graph_vstacks_face_panel_over_gameplay():
     from clipper import pipeline
 
-    graph, label = pipeline._facecam_graph((12, 34, 546, 324), None)
+    graph, label = pipeline._facecam_graph((12, 34, 546, 388), None)
 
     joined = ";".join(graph)
     assert "split=2" in joined
-    assert "crop=w='min(558\\,iw)-12':h='min(358\\,ih)-34':x=12:y=34" in joined
-    assert "boxblur" in joined and "overlay=x=0:y=0" in joined
-    assert "min(ih*27/32,in_w)" in joined
-
-    # Kotak keluar frame di kiri/atas: potong dari 0, geser overlay sebanding.
-    graph, _ = pipeline._facecam_graph((-100, -64, 1080, 640), None)
-    joined = ";".join(graph)
-    assert "crop=w='min(980\\,iw)-0':h='min(576\\,ih)-0':x=0:y=0" in joined
-    assert "overlay=x=100:y=64" in joined
-    assert "min(ih*27/32,in_w)" in joined
-    assert "scale=1080:640" in joined
-    assert "scale=1080:1280" in joined
+    assert "crop=546:388:12:34" in joined
+    assert "scale=1080:768" in joined
+    assert "min(ih*1080/1152,in_w)" in joined
+    assert "scale=1080:1152" in joined
+    assert "boxblur" not in joined
     assert "vstack" in joined
     assert label == "[v]"
 
@@ -226,7 +217,7 @@ def test_facecam_graph_vstacks_face_panel_over_gameplay():
 def test_facecam_graph_burns_subtitles_with_vout_label():
     from clipper import pipeline
 
-    graph, label = pipeline._facecam_graph((0, 0, 1080, 640), "/tmp/sub.ass")
+    graph, label = pipeline._facecam_graph((0, 0, 1080, 768), "/tmp/sub.ass")
 
     assert label == "[vout]"
     assert any("subtitles=" in line for line in graph)
@@ -350,17 +341,27 @@ def test_facecam_box_centers_corner_face_by_zooming_in():
     face_y = 0.47 * 1440
     assert (face_x - x) / w == pytest.approx(0.5, abs=0.02)
     assert (face_y - y) / h == pytest.approx(reframe.FACECAM_FACE_Y, abs=0.02)
-    assert w * 640 == pytest.approx(h * 1080, rel=0.01)  # rasio 27:16 tetap
+    assert w * reframe.FACECAM_PANEL_H == pytest.approx(
+        h * reframe.FACECAM_PANEL_W, rel=0.01
+    )  # rasio 45:32 tetap
+    assert 0 <= x and x + w <= 2560 and 0 <= y and y + h <= 1440
 
 
-@pytest.mark.parametrize("cx,cy,fh", [(0.5, 0.2, 0.2), (0.85, 0.25, 0.15), (0.12, 0.47, 0.114)])
-def test_facecam_face_top_below_tiktok_top_ui(cx, cy, fh):
-    # UI atas TikTok (status bar, tab, ikon search) menutupi ~0-220px dari 1920.
-    # Atas wajah (perkiraan rambut = 0.35x tinggi wajah di atasnya) harus di bawahnya.
+@pytest.mark.parametrize(
+    "cx,cy,fh",
+    [(0.87, 0.82, 0.14), (0.87, 0.50, 0.14), (0.12, 0.47, 0.114), (0.5, 0.35, 0.15)],
+)
+def test_facecam_face_centered_in_bounds_and_below_tiktok_top_ui(cx, cy, fh):
+    # Wajah tetap di tengah horizontal, kotak sepenuhnya di dalam frame (tanpa
+    # overflow/blur), dan atas wajah di bawah UI atas TikTok (~0-220px dari 1920).
     x, y, w, h = reframe.facecam_box([(t, [(cx, cy, fh, 0.0)]) for t in range(10)], 1920, 1080)
-    s = 640 / h
+    assert 0 <= x and x + w <= 1920 and 0 <= y and y + h <= 1080
+    assert (cx * 1920 - x) / w == pytest.approx(0.5, abs=0.02)
+    s = reframe.FACECAM_PANEL_H / h
     face_px = fh * 1080 * s
-    hair_top = (cy * 1080 - y) * s - face_px / 2 - 0.35 * face_px
+    face_top = (cy * 1080 - y) * s - face_px / 2
+    hair_top = face_top - 0.30 * face_px
+    assert face_top >= 280
     assert hair_top >= 200
 
 

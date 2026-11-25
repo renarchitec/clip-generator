@@ -261,14 +261,15 @@ def two_speaker_centers_from_frames(
 
     return (min(left, right), max(left, right))
 
-FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 640  # panel atas 27:16
+FACECAM_PANEL_W, FACECAM_PANEL_H = 1080, 768  # panel atas 45:32 (40% dari 1920)
+FACECAM_GAMEPLAY_H = 1920 - FACECAM_PANEL_H  # panel bawah 1080x1152 (60%, 15:16)
 FACECAM_FACE_SCALE = 3.0  # tinggi panel = 3x tinggi wajah
 FACECAM_MIN_PANEL_H = 64  # piksel; di bawah ini upscale terlalu kasar
-FACECAM_MIN_FACE_SCALE = 2.6  # batas zoom-in: wajah maks ~38% tinggi panel
+FACECAM_MIN_FACE_SCALE = 1.8  # batas zoom-in saat memusatkan wajah di sudut
 # Panel facecam ada di paling atas output 9:16, tempat UI TikTok/Reels/Shorts
 # (status bar, tab "Following | For You", ikon search) menutupi ~200px pertama.
-# Wajah diletakkan di bawah tengah panel supaya tidak tertutup.
-FACECAM_FACE_Y = 0.66  # posisi vertikal pusat wajah, pecahan tinggi panel
+# Wajah diletakkan sedikit di bawah tengah panel supaya tidak tertutup.
+FACECAM_FACE_Y = 0.62  # posisi vertikal pusat wajah, pecahan tinggi panel
 
 
 def facecam_box(
@@ -280,7 +281,7 @@ def facecam_box(
 
     Wajah per frame: pilih yang paling kecil (paling statis/jauh). Butuh wajah di
     >=50% sampel, kalau tidak -> None (pipeline pakai reframe biasa). Kotak
-    27:16 (1080x640), tinggi ~3x wajah, wajah di tengah horizontal dan di
+    45:32 (1080x768), tinggi ~3x wajah, wajah di tengah horizontal dan di
     FACECAM_FACE_Y vertikal (aman dari UI atas TikTok), dijepit ke dalam frame,
     dimensi genap.
     """
@@ -296,7 +297,7 @@ def facecam_box(
 
     h = max(FACECAM_MIN_PANEL_H, int(round(face_h * FACECAM_FACE_SCALE * src_h)))
     w = int(round(h * FACECAM_PANEL_W / FACECAM_PANEL_H))
-    # Jaga rasio 27:16 bila kotak lebih besar dari frame.
+    # Jaga rasio 45:32 bila kotak lebih besar dari frame.
     if w > src_w:
         h = int(round(h * src_w / w))
         w = src_w
@@ -318,11 +319,10 @@ def facecam_box(
         w, h = int(w * scale), int(h * scale)
     w, h = max(2, w - w % 2), max(2, h - h % 2)  # dimensi genap untuk x264
 
-    # Wajah selalu tepat di tengah horizontal & di FACECAM_FACE_Y vertikal.
-    # Kotak boleh keluar dari frame; pipeline mengisi sisa di luar frame dengan
-    # blur (lihat `_facecam_graph`), jadi wajah tidak bergeser ke tepi panel.
     x = int(round(cx * src_w - w / 2))
     y = int(round(cy * src_h - h * FACECAM_FACE_Y))
+    x = min(max(0, x), max(0, src_w - w))
+    y = min(max(0, y), max(0, src_h - h))
     return (x, y, w, h)
 
 
