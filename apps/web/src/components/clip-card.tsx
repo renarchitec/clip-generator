@@ -1,23 +1,53 @@
-import { ArrowDownToLine, CircleCheck, LoaderCircle, Play, Send, Trash2, X } from "lucide-react"
+import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Copy, ExternalLink, LoaderCircle, Play, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
-import { useState } from "react"
+import { Children, createContext, isValidElement, useContext, useEffect, useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { sourceLabel } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { isActivePublication, PublishDialog, type ClipPublication } from "@/components/publish-dialog"
 import { InstagramMark, TikTokMark, YouTubeMark } from "@/components/social-accounts"
 
 export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
 
+export type ClipFeedItem = { clip: ClipCardData; meta: string; index?: number }
+
+/** Ordered sibling clips, supplied automatically by grids and carousels. */
+export const ClipFeedContext = createContext<ClipFeedItem[]>([])
+
+export function ClipFeedProvider({ items, children }: { items: ClipFeedItem[]; children: React.ReactNode }) {
+  return <ClipFeedContext.Provider value={items}>{children}</ClipFeedContext.Provider>
+}
+
+function feedItemsFromChildren(children: React.ReactNode): ClipFeedItem[] {
+  return Children.toArray(children).flatMap((child) => {
+    if (!isValidElement<{ clip?: ClipCardData; meta?: string; index?: number }>(child)) return []
+    const clip = child.props?.clip
+    if (!clip?.id) return []
+    return [{ clip, meta: typeof child.props?.meta === "string" ? child.props.meta : "", index: typeof child.props?.index === "number" ? child.props.index : undefined }]
+  })
+}
+
 function shortDuration(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
   const minutes = Math.floor(total / 60)
   const rest = total % 60
   return minutes ? (rest ? `${minutes}m ${rest}s` : `${minutes}m`) : `${rest}s`
+}
+
+function formatTimecode(seconds: number) {
+  const total = Math.max(0, Math.round(seconds))
+  return `${Math.floor(total / 60).toString().padStart(2, "0")}:${(total % 60).toString().padStart(2, "0")}`
+}
+
+function formatCaption(caption: string | null | undefined, hashtags: string[] | undefined) {
+  const tags = (hashtags ?? []).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean).map((tag) => `#${tag}`).join(" ")
+  return [caption?.trim(), tags].filter(Boolean).join("\n\n")
 }
 
 export function clipAspectClass(aspectRatio: ClipCardData["job"]["aspectRatio"]) {
@@ -30,7 +60,7 @@ export function ClipCardGrid({ aspectRatio, children, className = "", ...props }
     : aspectRatio === "1:1"
       ? "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
       : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8"
-  return <div {...props} className={`grid items-start ${columns} gap-x-3 gap-y-5 sm:gap-4 ${className}`}>{children}</div>
+  return <ClipFeedProvider items={feedItemsFromChildren(children)}><div {...props} className={`grid items-start ${columns} gap-x-3 gap-y-5 sm:gap-4 ${className}`}>{children}</div></ClipFeedProvider>
 }
 
 export function ClipCard({ clip, meta, downloaded = false, index, frame }: { clip: ClipCardData; meta: string; downloaded?: boolean; index?: number; /** Force one media frame (e.g. mixed-ratio library) */ frame?: "uniform" }) {
@@ -65,7 +95,7 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
       <button type="button" onClick={() => setPublishOpen(true)} aria-label={`${t.publish}: ${title}`} title={t.publish} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Send className="size-3.5"/></button>
       <button type="button" onClick={() => setConfirmOpen(true)} disabled={remove.isPending} aria-label={`${t.deleteClip}: ${title}`} title={t.deleteClip} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-destructive/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive disabled:opacity-50"><Trash2 className="size-3.5"/></button>
     </div>
-    <ClipPlayerDialog clip={clip} open={playerOpen} onOpenChange={setPlayerOpen} meta={meta} onDelete={() => setConfirmOpen(true)} onPublish={() => setPublishOpen(true)}/>
+    <ClipPlayerDialog clip={clip} open={playerOpen} onOpenChange={setPlayerOpen} meta={meta}/>
     <PublishDialog clip={clip} open={publishOpen} onOpenChange={setPublishOpen}/>
     <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!remove.isPending) setConfirmOpen(open) }}>
       <AlertDialogContent>
@@ -81,14 +111,333 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
 
 export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onPublish }: { clip: ClipCardData | null; open: boolean; onOpenChange: (open: boolean) => void; meta?: string; onDelete?: () => void; onPublish?: () => void }) {
   const t = useT()
-  const [ownPublishOpen, setOwnPublishOpen] = useState(false)
-  if (!clip) return null
-  const openPublish = onPublish ?? (() => setOwnPublishOpen(true))
-  const title = clip.title || t.clip
-  return <><Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-w-4xl gap-3 p-4 sm:p-5"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><DialogTitle className="truncate font-display text-base">{title}</DialogTitle><DialogDescription className="mt-1 truncate">{meta || clip.job.url}</DialogDescription></div><DialogClose asChild><Button type="button" variant="outline" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}><X className="size-4"/></Button></DialogClose></div><video key={clip.id} src={`/api/clips/${clip.id}/stream`} controls autoPlay playsInline className="mx-auto max-h-[min(72dvh,760px)] w-full rounded-md bg-black object-contain"/><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-1"><Button type="button" className="mr-1 h-10 px-4" onClick={() => { onOpenChange(false); openPublish() }}><Send aria-hidden="true" className="size-4"/>{t.publish}</Button><a href={`/api/clips/${clip.id}/download`} download className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"><ArrowDownToLine className="size-4"/>{t.download}</a>{onDelete && <button type="button" onClick={onDelete} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"><Trash2 className="size-4"/>{t.deleteClip}</button>}</div><Link to="/jobs/$jobId" params={{ jobId: clip.job.id }} className="inline-flex min-h-11 items-center gap-2 px-3 text-sm text-muted-foreground transition-colors hover:text-foreground">{t.openJob}</Link></div></DialogContent>
-  </Dialog>
-  {!onPublish && <PublishDialog clip={clip} open={ownPublishOpen} onOpenChange={setOwnPublishOpen}/>}</>
+  const client = useQueryClient()
+  const feed = useContext(ClipFeedContext)
+  const [activeClipId, setActiveClipId] = useState(clip?.id ?? "")
+  const [muted, setMuted] = useState(false)
+  const [playing, setPlaying] = useState(true)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [mediaDuration, setMediaDuration] = useState(0)
+  const [bufferedTime, setBufferedTime] = useState(0)
+  const [captionExpanded, setCaptionExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [publishClip, setPublishClip] = useState<ClipCardData | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const touchStartY = useRef<number | null>(null)
+  const suppressClick = useRef(false)
+
+  const activeIndex = feed.findIndex((item) => item.clip.id === activeClipId)
+  const activeItem = activeIndex >= 0 ? feed[activeIndex] : null
+  const activeClip = activeItem?.clip ?? clip
+  const activeMeta = activeItem?.meta ?? meta
+  const fallbackDuration = activeClip ? Math.max(0, activeClip.endSec - activeClip.startSec) : 0
+  const seekDuration = mediaDuration || fallbackDuration || 1
+  const playedPercent = Math.min(100, (currentTime / seekDuration) * 100)
+  const bufferedPercent = Math.min(100, (bufferedTime / seekDuration) * 100)
+  const trackFill = Math.max(playedPercent, bufferedPercent)
+  const canNavigate = feed.length > 1
+  const position = activeIndex >= 0 ? activeIndex + 1 : undefined
+  const title = activeClip?.title || t.clip
+  const timeRange = activeClip ? `${formatTimecode(activeClip.startSec)}–${formatTimecode(activeClip.endSec)}` : ""
+  const metaLabel = activeMeta && activeMeta !== timeRange ? activeMeta : activeClip ? sourceLabel(activeClip.job.url) : ""
+  const showTimeRange = Boolean(timeRange && !metaLabel.includes(timeRange))
+  const captionText = activeClip?.caption?.trim() ?? ""
+  const tags = (activeClip?.hashtags ?? []).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean)
+  const hasCaption = Boolean(captionText || tags.length)
+  const canExpandCaption = captionText.length + tags.join(" ").length > 75 || captionText.includes("\n")
+
+  function playWithFallback(video: HTMLVideoElement) {
+    video.muted = muted
+    void video.play().then(() => setPlaying(true)).catch(() => {
+      if (!video.muted) {
+        video.muted = true
+        setMuted(true)
+        void video.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+      } else {
+        setPlaying(false)
+      }
+    })
+  }
+
+  useEffect(() => {
+    if (open && clip?.id) setActiveClipId(clip.id)
+  }, [open, clip?.id])
+
+  useEffect(() => {
+    if (!open || !activeClip) return
+    setCurrentTime(0)
+    setBufferedTime(0)
+    setMediaDuration(0)
+    setCaptionExpanded(false)
+    setCopied(false)
+    setPlaying(true)
+    const video = videoRef.current
+    if (video) {
+      video.currentTime = 0
+      playWithFallback(video)
+    }
+  }, [open, activeClipId])
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = muted
+  }, [muted, activeClipId, open])
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/clips/${id}`, { method: "DELETE" }),
+    onSuccess: (_data, id) => {
+      setDeleteOpen(false)
+      void client.invalidateQueries({ queryKey: ["jobs"] })
+      void client.invalidateQueries({ queryKey: ["clips", "recent"] })
+      void client.invalidateQueries({ queryKey: ["clips"] })
+      toast.success(t.clipDeleted)
+      const deletedIndex = feed.findIndex((item) => item.clip.id === id)
+      const next = deletedIndex >= 0 && deletedIndex < feed.length - 1 ? feed[deletedIndex + 1] : deletedIndex > 0 ? feed[deletedIndex - 1] : null
+      if (next) setActiveClipId(next.clip.id)
+      else onOpenChange(false)
+    },
+    onError: () => toast.error(t.clipDeleteFailed),
+  })
+
+  function goTo(index: number) {
+    if (!canNavigate || index < 0 || index >= feed.length) return
+    setActiveClipId(feed[index].clip.id)
+  }
+
+  function goPrevious() { goTo(activeIndex >= 0 ? activeIndex - 1 : -1) }
+  function goNext() { goTo(activeIndex >= 0 ? activeIndex + 1 : -1) }
+
+  function togglePlay() {
+    const video = videoRef.current
+    if (!video) return
+    if (video.paused) void video.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+    else { video.pause(); setPlaying(false) }
+  }
+
+  function toggleMute() {
+    const next = !muted
+    setMuted(next)
+    if (videoRef.current) videoRef.current.muted = next
+  }
+
+  function seek(value: number) {
+    const video = videoRef.current
+    if (!video) return
+    const bounded = Math.max(0, Math.min(value, seekDuration))
+    video.currentTime = bounded
+    setCurrentTime(bounded)
+  }
+
+  function syncBuffered(video: HTMLVideoElement) {
+    if (video.buffered.length) setBufferedTime(video.buffered.end(video.buffered.length - 1))
+  }
+
+  function copyCaption() {
+    if (!activeClip) return
+    const text = formatCaption(activeClip.caption, activeClip.hashtags) || title
+    if (!navigator.clipboard?.writeText) { toast.error(t.tiktokCopyFailed); return }
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      toast.success(t.tiktokCaptionCopied)
+      window.setTimeout(() => setCopied(false), 1800)
+    }).catch(() => toast.error(t.tiktokCopyFailed))
+  }
+
+  function openPublish() {
+    if (!activeClip) return
+    if (videoRef.current && !videoRef.current.paused) {
+      videoRef.current.pause()
+      setPlaying(false)
+    }
+    if (onPublish && !canNavigate && activeClip.id === clip?.id) { onOpenChange(false); onPublish(); return }
+    setPublishClip(activeClip)
+  }
+
+  function openDelete() {
+    if (!activeClip) return
+    if (videoRef.current && !videoRef.current.paused) {
+      videoRef.current.pause()
+      setPlaying(false)
+    }
+    if (onDelete && !canNavigate && activeClip.id === clip?.id) { onDelete(); return }
+    setDeleteOpen(true)
+  }
+
+  function isTextTarget(target: EventTarget | null) {
+    const element = target as HTMLElement | null
+    return Boolean(element?.closest("input, textarea, select, [contenteditable='true']"))
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement | null
+    const typing = isTextTarget(target)
+    if (event.key === "ArrowUp" && !typing) { event.preventDefault(); goPrevious(); return }
+    if (event.key === "ArrowDown" && !typing) { event.preventDefault(); goNext(); return }
+    if (event.key === " " && !typing && !target?.closest("button, a")) { event.preventDefault(); togglePlay(); return }
+    if ((event.key === "m" || event.key === "M") && !typing) { event.preventDefault(); toggleMute() }
+  }
+
+  function handleTouchStart(event: React.TouchEvent<HTMLDivElement>) {
+    touchStartY.current = event.touches[0]?.clientY ?? null
+  }
+
+  function handleTouchEnd(event: React.TouchEvent<HTMLDivElement>) {
+    const start = touchStartY.current
+    touchStartY.current = null
+    const end = event.changedTouches[0]?.clientY
+    if (start == null || end == null) return
+    const delta = end - start
+    if (Math.abs(delta) <= 45) return
+    suppressClick.current = true
+    if (delta > 0) goPrevious()
+    else goNext()
+  }
+
+  function handleStageClick() {
+    if (suppressClick.current) { suppressClick.current = false; return }
+    togglePlay()
+  }
+
+  if (!activeClip) return null
+
+  return <>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[calc(100dvh-1.5rem)] w-auto max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border border-white/15 bg-black p-0 text-white shadow-2xl outline-none sm:p-0" onKeyDown={handleKeyDown}>
+        <div className="relative aspect-[9/16] h-[min(88dvh,764px,167vw)] max-h-[min(88dvh,820px)] w-auto max-w-[min(94vw,430px)] overflow-hidden rounded-2xl bg-black">
+          <div
+            role="button"
+            tabIndex={-1}
+            aria-label={playing ? t.pauseClip : t.playClip}
+            onClick={handleStageClick}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={() => { touchStartY.current = null }}
+            className="absolute inset-0 z-0 cursor-pointer bg-black focus-visible:outline-none"
+          >
+            <video
+              key={activeClip.id}
+              ref={videoRef}
+              src={`/api/clips/${activeClip.id}/stream`}
+              autoPlay
+              loop
+              playsInline
+              muted={muted}
+              preload="metadata"
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onLoadedMetadata={(event) => {
+                const video = event.currentTarget
+                if (Number.isFinite(video.duration)) setMediaDuration(video.duration)
+                playWithFallback(video)
+              }}
+              onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+              onProgress={(event) => syncBuffered(event.currentTarget)}
+              className="size-full bg-black object-contain"
+            />
+            {!playing && <span className="pointer-events-none absolute inset-0 grid place-items-center"><span className="grid size-16 place-items-center rounded-full border border-white/20 bg-black/55 shadow-xl backdrop-blur-md"><Play className="ml-1 size-7 fill-current"/></span></span>}
+          </div>
+
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 bg-gradient-to-b from-black/80 via-black/35 to-transparent pb-12 pl-3 pr-2 pt-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <span className="inline-flex h-6 items-center rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-sm">{shortDuration(fallbackDuration)}</span>
+                {canNavigate && position !== undefined && <Badge variant="outline" className="h-6 border-white/15 bg-black/55 px-2 font-mono text-[10px] tabular-nums text-white backdrop-blur-sm">{position} / {feed.length}</Badge>}
+                <PublishBadge publications={activeClip.publications}/>
+              </div>
+              <div className="pointer-events-auto flex shrink-0 items-center gap-1">
+                <Button type="button" variant="ghost" size="icon-sm" onClick={toggleMute} aria-label={muted ? t.unmuteClip : t.muteClip} title={muted ? t.unmuteClip : t.muteClip} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70">{muted ? <VolumeX className="size-4"/> : <Volume2 className="size-4"/>}</Button>
+                <DialogClose asChild><Button type="button" variant="ghost" size="icon-sm" aria-label={t.closePlayer} title={t.closePlayer} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70"><X className="size-4"/></Button></DialogClose>
+              </div>
+            </div>
+          </div>
+
+          {canNavigate && <div className="absolute left-2 top-1/2 z-40 flex -translate-y-1/2 flex-col gap-1.5">
+            <Button type="button" variant="ghost" size="icon-sm" onClick={goPrevious} disabled={activeIndex <= 0} aria-label={t.previousClip} title={t.previousClip} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70 disabled:opacity-35"><ChevronUp className="size-4"/></Button>
+            <Button type="button" variant="ghost" size="icon-sm" onClick={goNext} disabled={activeIndex >= feed.length - 1} aria-label={t.nextClip} title={t.nextClip} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70 disabled:opacity-35"><ChevronDown className="size-4"/></Button>
+          </div>}
+
+          <div className="absolute bottom-16 right-2 z-30 flex w-14 flex-col items-center gap-3">
+            <button type="button" onClick={openPublish} aria-label={`${t.publish}: ${title}`} title={t.publish} className="group/rail flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+              <span className="grid size-11 place-items-center rounded-full border border-accent/50 bg-accent text-accent-foreground shadow-lg backdrop-blur-md transition-transform group-hover/rail:scale-105"><Send className="size-[18px]"/></span>
+              <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.publish}</span>
+            </button>
+            <a href={`/api/clips/${activeClip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105"><ArrowDownToLine className="size-[18px]"/></span>
+              <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.download}</span>
+            </a>
+            <button type="button" onClick={copyCaption} aria-label={t.tiktokCopyCaption} title={t.tiktokCopyCaption} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105">{copied ? <Check className="size-[18px] text-accent"/> : <Copy className="size-[18px]"/>}</span>
+              <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.tiktokCopyCaption}</span>
+            </button>
+            <Link to="/jobs/$jobId" params={{ jobId: activeClip.job.id }} onClick={() => onOpenChange(false)} aria-label={`${t.openJob}: ${title}`} title={t.openJob} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105"><ExternalLink className="size-[18px]"/></span>
+              <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.openJob}</span>
+            </Link>
+            <button type="button" onClick={openDelete} disabled={remove.isPending} aria-label={`${t.deleteClip}: ${title}`} title={t.deleteClip} className="group/rail flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/70 disabled:opacity-50">
+              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-all group-hover/rail:border-destructive group-hover/rail:bg-destructive group-hover/rail:text-destructive-foreground">{remove.isPending ? <LoaderCircle className="size-[18px] animate-spin"/> : <Trash2 className="size-[18px]"/>}</span>
+              <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.deleteClip}</span>
+            </button>
+          </div>
+
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/70 to-transparent pb-12 pl-3 pr-20 pt-16">
+            <DialogDescription className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] leading-4 text-white/75 sm:text-xs">
+              <span className="line-clamp-1 min-w-0">{metaLabel}</span>
+              {showTimeRange && <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono tabular-nums">{timeRange}</span>
+              </>}
+              {activeClip.job.aspectRatio !== "9:16" && <Badge variant="outline" className="h-5 border-white/20 bg-black/50 px-1.5 text-[10px] text-white">{activeClip.job.aspectRatio}</Badge>}
+            </DialogDescription>
+            <DialogTitle className="mt-1 line-clamp-2 font-display text-sm font-semibold leading-snug text-white sm:text-base">{title}</DialogTitle>
+            {hasCaption && <div className="pointer-events-auto mt-1.5">
+              {captionExpanded ? (
+                <div className="max-h-36 overflow-y-auto rounded-lg bg-black/60 p-2 text-xs leading-5 text-white/90 backdrop-blur-sm sm:text-sm">
+                  {captionText && <p className="whitespace-pre-line">{captionText}</p>}
+                  {tags.length > 0 && <p className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">{tags.map((tag) => <span key={tag} className="font-semibold text-accent">#{tag}</span>)}</p>}
+                </div>
+              ) : (
+                <p className="line-clamp-2 text-xs leading-5 text-white/90 sm:text-sm">
+                  {captionText}
+                  {captionText && tags.length > 0 ? " " : ""}
+                  {tags.map((tag) => <span key={tag} className="mr-1.5 font-semibold text-accent">#{tag}</span>)}
+                </p>
+              )}
+              {canExpandCaption && <button type="button" onClick={() => setCaptionExpanded((value) => !value)} className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70 transition-colors hover:text-white sm:text-xs">{captionExpanded ? t.lessCaption : t.moreCaption}</button>}
+            </div>}
+          </div>
+
+          <div className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/90 to-transparent pb-2 pl-3 pr-3 pt-6">
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min={0}
+                max={seekDuration}
+                step={0.1}
+                value={Math.min(currentTime, seekDuration)}
+                onChange={(event) => seek(Number(event.target.value))}
+                aria-label={t.seekVideo}
+                className="h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/70 [&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow"
+                style={{ background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${playedPercent}%, rgba(255,255,255,.45) ${playedPercent}%, rgba(255,255,255,.45) ${trackFill}%, rgba(255,255,255,.22) ${trackFill}%, rgba(255,255,255,.22) 100%)` }}
+              />
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-white/85">{formatTimecode(currentTime)} / {formatTimecode(seekDuration)}</span>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    {publishClip && <PublishDialog clip={publishClip} open={Boolean(publishClip)} onOpenChange={(value) => { if (!value) setPublishClip(null) }}/>}
+
+    <AlertDialog open={deleteOpen} onOpenChange={(value) => { if (!remove.isPending) setDeleteOpen(value) }}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>{t.deleteClipTitle}</AlertDialogTitle><AlertDialogDescription>{t.deleteClipDescription}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={remove.isPending}>{t.cancel}</AlertDialogCancel>
+          <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={remove.isPending} onClick={(event) => { event.preventDefault(); remove.mutate(activeClip.id) }}>{remove.isPending && <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin"/>}{t.confirmDelete}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </>
 }
 
 function PublishBadge({ publications }: { publications?: ClipPublication[] }) {

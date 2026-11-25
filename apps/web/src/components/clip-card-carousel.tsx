@@ -3,7 +3,7 @@ import { Children, isValidElement, useRef, useState, useSyncExternalStore } from
 import type { Swiper as SwiperInstance } from "swiper"
 import { A11y, Keyboard, Navigation, Pagination } from "swiper/modules"
 import { Swiper, SwiperSlide } from "swiper/react"
-import type { ClipCardData } from "@/components/clip-card"
+import { ClipFeedProvider, type ClipCardData, type ClipFeedItem } from "@/components/clip-card"
 import { useT } from "@/lib/i18n"
 
 type AspectRatio = ClipCardData["job"]["aspectRatio"]
@@ -32,9 +32,14 @@ export function ClipCardCarousel({ aspectRatio, children, className = "", ...pro
   const paginationRef = useRef<HTMLDivElement>(null)
   const [locked, setLocked] = useState(true)
   const syncLock = (swiper: SwiperInstance) => setLocked(swiper.isLocked)
-  const slides = Children.toArray(children).filter(isValidElement)
+  const elements = Children.toArray(children).filter(isValidElement<{ clip?: ClipCardData; meta?: string; index?: number }>)
+  const items: ClipFeedItem[] = elements.flatMap((child) => {
+    const clip = child.props?.clip
+    if (!clip?.id) return []
+    return [{ clip, meta: typeof child.props?.meta === "string" ? child.props.meta : "", index: typeof child.props?.index === "number" ? child.props.index : undefined }]
+  })
 
-  return <div role="region" aria-roledescription="carousel" {...props} className={`clip-carousel min-w-0 ${className}`}>
+  return <ClipFeedProvider items={items}><div role="region" aria-roledescription="carousel" {...props} className={`clip-carousel min-w-0 ${className}`}>
     <Swiper
       modules={[Navigation, Pagination, Keyboard, A11y]}
       slidesPerView="auto"
@@ -58,7 +63,7 @@ export function ClipCardCarousel({ aspectRatio, children, className = "", ...pro
       onSlidesLengthChange={syncLock}
       className="clip-carousel__swiper !p-0.5"
     >
-      {slides.map((child, index) => <SwiperSlide key={child.key ?? index} className={`${carouselSlideWidth(aspectRatio)} !h-auto`}>{child}</SwiperSlide>)}
+      {elements.map((child, index) => <SwiperSlide key={child.key ?? index} className={`${carouselSlideWidth(aspectRatio)} !h-auto`}>{child}</SwiperSlide>)}
     </Swiper>
     <div className={`clip-carousel__controls mt-3 flex items-center gap-3 ${locked ? "hidden" : ""}`}>
       <div ref={paginationRef} className="clip-carousel__pagination min-w-0 flex-1" aria-label={t.clipPages}/>
@@ -67,5 +72,5 @@ export function ClipCardCarousel({ aspectRatio, children, className = "", ...pro
         <button ref={nextRef} type="button" aria-label={t.nextClips} className="clip-carousel__nav grid size-10 place-items-center rounded-full border border-border bg-card text-foreground shadow-sm transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"><ChevronRight className="size-4" aria-hidden="true"/></button>
       </div>
     </div>
-  </div>
+  </div></ClipFeedProvider>
 }
