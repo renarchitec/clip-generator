@@ -78,10 +78,18 @@ export class LocalQueueBackend implements OnApplicationShutdown {
   /** Provider env LLM opsional (disuntik Electron saat runtime jika pakai safeStorage). */
   private llmEnvProvider: (() => Record<string, string>) | null = null;
 
+  /** Konfigurasi LLM/encoder in-memory yang didorong oleh proses utama Electron. */
+  private runtimeConfig: DesktopLlmConfig | null = null;
+
   constructor(private readonly config: AppConfig) {}
 
   setLlmEnvProvider(provider: () => Record<string, string>): void {
     this.llmEnvProvider = provider;
+  }
+
+  setRuntimeConfig(config: DesktopLlmConfig): void {
+    this.runtimeConfig = { ...config };
+    this.refreshLlmStatus();
   }
 
   getQueue<T = unknown>(name: string): LocalQueueAdapter<T> {
@@ -498,25 +506,102 @@ export class LocalQueueBackend implements OnApplicationShutdown {
     }
 
     const env: Record<string, string> = {};
+    const apply = (parsed: DesktopLlmConfig) => {
+      if (parsed.nineRouterUrl) env.DARTCLIP_9ROUTER_URL = parsed.nineRouterUrl;
+      if (parsed.nineRouterApiKey) env.NINEROUTER_API_KEY = parsed.nineRouterApiKey;
+      if (parsed.nineRouterModel) env.NINEROUTER_MODEL = parsed.nineRouterModel;
+      if (parsed.geminiApiKey) env.GEMINI_API_KEY = parsed.geminiApiKey;
+      if (parsed.geminiModel) env.GEMINI_MODEL = parsed.geminiModel;
+      if (parsed.openaiApiKey) env.OPENAI_API_KEY = parsed.openaiApiKey;
+      if (parsed.openaiModel) env.OPENAI_MODEL = parsed.openaiModel;
+      if (parsed.videoEncoder) env.VIDEO_ENCODER = parsed.videoEncoder;
+    };
+
     const cfgPath = this.config.llmConfigPath || process.env.DARTCLIP_LLM_CONFIG_PATH;
     if (cfgPath && existsSync(cfgPath)) {
       try {
-        const parsed = JSON.parse(readFileSync(cfgPath, 'utf8')) as DesktopLlmConfig;
-        if (parsed.nineRouterUrl) env.DARTCLIP_9ROUTER_URL = parsed.nineRouterUrl;
-        if (parsed.nineRouterApiKey) env.NINEROUTER_API_KEY = parsed.nineRouterApiKey;
-        if (parsed.nineRouterModel) env.NINEROUTER_MODEL = parsed.nineRouterModel;
-        if (parsed.geminiApiKey) env.GEMINI_API_KEY = parsed.geminiApiKey;
-        if (parsed.geminiModel) env.GEMINI_MODEL = parsed.geminiModel;
-        if (parsed.openaiApiKey) env.OPENAI_API_KEY = parsed.openaiApiKey;
-        if (parsed.openaiModel) env.OPENAI_MODEL = parsed.openaiModel;
-        if (parsed.videoEncoder) env.VIDEO_ENCODER = parsed.videoEncoder;
+        apply(JSON.parse(readFileSync(cfgPath, 'utf8')) as DesktopLlmConfig);
       } catch (error) {
         this.logger.warn(
           `Gagal membaca konfigurasi LLM desktop: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
+    if (this.runtimeConfig) {
+      apply(this.runtimeConfig);
+    }
     return env;
+  }
+
+  /** Jalankan pemeriksaan koneksi LLM singkat melalui worker binary. */
+  async testLlmConnection(): Promise<{
+    ok: boolean;
+    configured: boolean;
+    provider?: string | null;
+    model?: string | null;
+    baseUrl?: string | null;
+    error?: string | null;
+  }> {
+    const { command, baseArgs, cwd } = this.resolveWorkerCommand();
+    const clipsDir = this.config.clipsDir;
+    const tempDir = this.config.tempRoot || path.join(clipsDir, 'tmp');
+    mkdirSync(clipsDir, { recursive: true });
+    mkdirSync(tempDir, { recursive: true });
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...this.resolveLlmEnv(),
+      CLIPS_DIR: clipsDir,
+      TEMP_ROOT: tempDir,
+      PYTHONUNBUFFERED: '1',
+    };
+
+    return new Promise((resolve) => {
+      const child = spawn(command, [...baseArgs, '--task', 'llm-check'], {
+        cwd,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let result: Record<string, unknown> | null = null;
+      let errMsg: string | null = null;
+      const outRl = readline.createInterface({ input: child.stdout });
+      outRl.on('line', (line) => {
+        try {
+          const evt = JSON.parse(line.trim()) as Record<string, unknown>;
+          if (evt.event === 'result' && evt.data && typeof evt.data === 'object') {
+            result = evt.data as Record<string, unknown>;
+          } else if (evt.event === 'llm_status') {
+            const { event: _ignored, ...status } = evt;
+            this.kv.set(LLM_STATUS_KEY, JSON.stringify(status));
+          } else if (evt.event === 'error' && typeof evt.message === 'string') {
+            errMsg = evt.message;
+          }
+        } catch {
+          // abaikan baris log non-JSON
+        }
+      });
+      child.on('error', (err) => {
+        resolve({ ok: false, configured: false, error: err.message });
+      });
+      child.on('close', () => {
+        if (result) {
+          resolve({
+            ok: Boolean(result.ok),
+            configured: Boolean(result.configured),
+            provider: (result.provider as string | null) ?? null,
+            model: (result.model as string | null) ?? null,
+            baseUrl: (result.baseUrl as string | null) ?? null,
+            error: (result.error as string | null) ?? null,
+          });
+          return;
+        }
+        resolve({
+          ok: false,
+          configured: this.buildFallbackLlmStatus().configured,
+          error: errMsg || 'Gagal menjalankan pemeriksaan LLM.',
+        });
+      });
+    });
   }
 
   private emitterFor(queueName: string): EventEmitter {
