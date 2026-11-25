@@ -310,17 +310,45 @@ def _system_prompt(has_brief: bool) -> str:
     return base
 
 
-def _complete(
+def _fallback_endpoints(env: Optional[Mapping[str, str]] = None) -> List[tuple[str, str, str]]:
+    """Daftar endpoint fallback opsional (mode desktop) bila endpoint utama gagal/timeout.
+
+    Diisi oleh `local_cli` lewat `LLM_FALLBACK_JSON` (`[{"baseUrl","apiKey","model"}]`).
+    Kosong di mode server Docker sehingga perilaku server tidak berubah.
+    """
+    raw = ((env if env is not None else os.environ).get("LLM_FALLBACK_JSON") or "").strip()
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(items, list):
+        return []
+    endpoints: List[tuple[str, str, str]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        url = str(item.get("baseUrl") or "").strip()
+        key = str(item.get("apiKey") or "").strip()
+        model = str(item.get("model") or "").strip()
+        if url and key and model:
+            endpoints.append((url, key, model))
+    return endpoints
+
+
+def _call_openai(
     base_url: str,
     api_key: str,
     model: str,
     prompt: str,
     temperature: float,
-    has_brief: bool = False,
+    has_brief: bool,
+    timeout: float,
 ) -> str:
     from openai import OpenAI  # impor lambat: butuh jaringan, bukan untuk unit test
 
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=180.0)
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0)
     response = client.chat.completions.create(
         model=model,
         temperature=temperature,
@@ -330,6 +358,49 @@ def _complete(
         ],
     )
     return response.choices[0].message.content or ""
+
+
+def _complete(
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    temperature: float,
+    has_brief: bool = False,
+) -> str:
+    fallbacks = _fallback_endpoints()
+    if not fallbacks:
+        from openai import OpenAI  # impor lambat: butuh jaringan, bukan untuk unit test
+
+        client = OpenAI(base_url=base_url, api_key=api_key, timeout=180.0)
+        response = client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            messages=[
+                {"role": "system", "content": _system_prompt(has_brief)},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        return response.choices[0].message.content or ""
+
+    # Mode desktop dengan fallback: batas waktu utama lebih ketat agar cepat pindah.
+    primary_timeout = float(os.getenv("LLM_PRIMARY_TIMEOUT_SEC") or "45")
+    candidates = [(base_url, api_key, model, primary_timeout)] + [
+        (fb_url, fb_key, fb_model, 120.0) for fb_url, fb_key, fb_model in fallbacks
+    ]
+    last_exc: Optional[Exception] = None
+    for idx, (url, key, mdl, timeout) in enumerate(candidates):
+        try:
+            return _call_openai(url, key, mdl, prompt, temperature, has_brief, timeout)
+        except Exception as exc:
+            last_exc = exc
+            if idx + 1 < len(candidates):
+                detail = _short_error(exc).replace(key, "***") if key else _short_error(exc)
+                log.warning("LLM %s (%s) gagal: %s — pindah ke fallback berikutnya", url, mdl, detail)
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
 
 
 def _number(value: Any) -> Optional[float]:
