@@ -13,14 +13,24 @@ import { SOCIAL_PLATFORM_LIST } from './social.constants';
 /** State OAuth disimpan singkat dan dikonsumsi atomik agar hanya sekali pakai. */
 @Injectable()
 export class OAuthStateStore implements OnModuleDestroy {
-  private readonly connection: RedisConnection;
+  private readonly connection: RedisConnection | null;
+  private readonly memory = new Map<string, { payload: OAuthStatePayload; expiresAt: number }>();
   private clientPromise: Promise<RedisClient> | null = null;
 
   constructor(config: AppConfig) {
-    this.connection = new RedisConnection(redisConnection(config.redisUrl));
+    this.connection = config.isDesktop
+      ? null
+      : new RedisConnection(redisConnection(config.redisUrl));
   }
 
   async save(pending: PendingOAuthState): Promise<void> {
+    if (!this.connection) {
+      this.memory.set(pending.state, {
+        payload: pending.payload,
+        expiresAt: Date.now() + OAUTH_STATE_TTL_SECONDS * 1000,
+      });
+      return;
+    }
     const client = await this.client();
     await client.set(
       socialOAuthStateKey(pending.state),
@@ -30,6 +40,12 @@ export class OAuthStateStore implements OnModuleDestroy {
   }
 
   async consume(state: string): Promise<OAuthStatePayload | null> {
+    if (!this.connection) {
+      const hit = this.memory.get(state);
+      this.memory.delete(state);
+      if (!hit || hit.expiresAt <= Date.now()) return null;
+      return hit.payload;
+    }
     const client = await this.client();
     const raw = (await client.runCommand('socialOauthConsume', [
       socialOAuthStateKey(state),
@@ -55,10 +71,15 @@ export class OAuthStateStore implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.connection.close();
+    if (this.connection) {
+      await this.connection.close();
+    }
   }
 
   private client(): Promise<RedisClient> {
+    if (!this.connection) {
+      throw new Error('Redis OAuthStateStore tidak aktif di mode desktop.');
+    }
     this.clientPromise ??= this.connection.client.then((client) => {
       client.defineCommand('socialOauthConsume', {
         numberOfKeys: 1,

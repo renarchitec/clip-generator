@@ -4,10 +4,16 @@ import { ConfigService } from '@nestjs/config';
 /** Akses env yang sudah divalidasi, dalam bentuk bertipe. */
 @Injectable()
 export class AppConfig {
+  readonly mode: 'server' | 'desktop';
+  readonly isDesktop: boolean;
   readonly databaseUrl: string;
   readonly redisUrl: string;
   readonly clipsDir: string;
+  readonly tempRoot: string | undefined;
+  readonly workerBin: string | undefined;
+  readonly llmConfigPath: string | undefined;
   readonly port: number;
+  readonly host: string;
   readonly allowRegistration: boolean;
   readonly socialTokenKey: string | undefined;
   readonly publicWebUrl: string;
@@ -20,10 +26,16 @@ export class AppConfig {
   readonly instagramConfigId: string | undefined;
 
   constructor(config: ConfigService) {
+    this.mode = (config.get<'server' | 'desktop'>('DARTCLIP_MODE') ?? 'server');
+    this.isDesktop = this.mode === 'desktop';
     this.databaseUrl = config.getOrThrow<string>('DATABASE_URL');
-    this.redisUrl = config.getOrThrow<string>('REDIS_URL');
+    this.redisUrl = config.get<string>('REDIS_URL') ?? '';
     this.clipsDir = config.getOrThrow<string>('CLIPS_DIR');
+    this.tempRoot = config.get<string>('TEMP_ROOT') || undefined;
+    this.workerBin = config.get<string>('DARTCLIP_WORKER_BIN') || undefined;
+    this.llmConfigPath = config.get<string>('DARTCLIP_LLM_CONFIG_PATH') || undefined;
     this.port = Number(config.get('PORT') ?? 3000);
+    this.host = config.get<string>('HOST') || (this.isDesktop ? '127.0.0.1' : '0.0.0.0');
     this.allowRegistration = config.get<boolean>('ALLOW_REGISTRATION') ?? false;
     this.socialTokenKey = config.get<string>('SOCIAL_TOKEN_KEY') || undefined;
     this.publicWebUrl =

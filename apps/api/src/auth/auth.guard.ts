@@ -12,6 +12,8 @@ import { hashToken } from './crypto';
 import { IS_PUBLIC_KEY } from './public.decorator';
 
 export const SESSION_COOKIE = 'clipper_session';
+export const LOCAL_DESKTOP_USER_EMAIL = 'local@dartclip.desktop';
+export const LOCAL_DESKTOP_USER_NAME = 'Local';
 
 /** Ambil token dari `Authorization: Bearer` atau cookie sesi. */
 export function extractToken(request: Request): string | null {
@@ -41,6 +43,8 @@ function parseCookie(header: string | undefined, name: string): string | undefin
 /** Guard global: semua route butuh sesi valid kecuali yang ditandai @Public(). */
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private desktopUserPromise: Promise<AuthUser> | null = null;
+
   constructor(
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
@@ -54,6 +58,12 @@ export class AuthGuard implements CanActivate {
     if (isPublic) return true;
 
     const request = context.switchToHttp().getRequest<Request>();
+
+    if (process.env.DARTCLIP_MODE === 'desktop') {
+      request.user = await this.ensureDesktopUser();
+      return true;
+    }
+
     const token = extractToken(request);
     if (!token) throw new UnauthorizedException();
 
@@ -73,5 +83,24 @@ export class AuthGuard implements CanActivate {
     };
     request.user = user;
     return true;
+  }
+
+  private ensureDesktopUser(): Promise<AuthUser> {
+    this.desktopUserPromise ??= this.prisma.user
+      .upsert({
+        where: { email: LOCAL_DESKTOP_USER_EMAIL },
+        update: {},
+        create: {
+          email: LOCAL_DESKTOP_USER_EMAIL,
+          name: LOCAL_DESKTOP_USER_NAME,
+          passwordHash: '!desktop-local-user',
+        },
+        select: { id: true, email: true, name: true },
+      })
+      .catch((error) => {
+        this.desktopUserPromise = null;
+        throw error;
+      });
+    return this.desktopUserPromise;
   }
 }

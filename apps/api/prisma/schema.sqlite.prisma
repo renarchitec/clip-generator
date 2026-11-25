@@ -1,0 +1,271 @@
+// AUTO-GENERATED dari prisma/schema.prisma oleh scripts/generate-sqlite-schema.cjs.
+// Jangan edit manual; ubah prisma/schema.prisma lalu jalankan `pnpm --filter api prisma:sqlite:generate`.
+
+generator client {
+  output   = "../node_modules/.prisma/sqlite-client"
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum JobMode {
+  auto
+  manual
+}
+
+enum JobStatus {
+  queued
+  running
+  done
+  failed
+  cancelled
+}
+
+model User {
+  id               String   @id @default(uuid())
+  email            String   @unique
+  name             String?
+  passwordHash     String
+  createdAt        DateTime @default(now())
+  /// Pengaturan watermark default: { watermarkId, x, y, scale, opacity } | null
+  watermarkDefault Json?
+  /// Outro default: { outroId } | null
+  outroDefault     Json?
+
+  sessions       Session[]
+  jobs           Job[]
+  socialAccounts SocialAccount[]
+  watermarks     Watermark[]
+  outros         Outro[]
+  briefHistory   BriefHistory[]
+  referenceJobs  ReferenceJob[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Job {
+  id                String    @id @default(uuid())
+  url               String
+  description       String?
+  mode              JobMode
+  reframe           String    @default("face_tracking")
+  captions          Boolean   @default(true)
+  twoSpeakers       Boolean   @default(false)
+  facecam           Boolean   @default(false)
+  aspectRatio       String    @default("9:16")
+  captionLanguage   String    @default("auto")
+  customHashtags    Json  @default("[]")
+  /// Gaya subtitle kustom/template: CaptionStyle | null
+  captionStyle      Json?
+  clipCount         Int
+  targetDurationSec Int
+  maxSourceSec      Int?
+  ranges            Json?
+  /// Snapshot watermark: { watermarkId, filePath, x, y, scale, opacity } | null
+  watermark         Json?
+  /// Snapshot outro: { outroId, filePath, durationSec } | null
+  outro             Json?
+  status            JobStatus @default(queued)
+  stage             String?
+  progress          Int       @default(0)
+  message           String?
+  error             String?
+  createdAt         DateTime  @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  userId            String?
+  user              User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  clips Clip[]
+
+  @@index([userId])
+  @@map("jobs")
+}
+
+model Watermark {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  /// relatif terhadap CLIPS_DIR, mis. watermarks/<userId>/<id>.png
+  filePath  String
+  mimeType  String
+  width     Int
+  height    Int
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("watermarks")
+}
+
+model Outro {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  /// relatif terhadap CLIPS_DIR, mis. outros/<userId>/<id>.mp4
+  filePath    String
+  mimeType    String
+  durationSec Float
+  width       Int
+  height      Int
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@map("outros")
+}
+
+model BriefHistory {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Maksimal 500 karakter setelah trim.
+  text       String
+  useCount   Int      @default(1)
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@unique([userId, text])
+  @@index([userId, lastUsedAt])
+  @@map("brief_history")
+}
+
+model ReferenceJob {
+  id                   String    @id @default(uuid())
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title                String    @default("")
+  brief                String?
+  aspectRatio          String    @default("9:16")
+  reframe              String    @default("face_tracking")
+  captions             Boolean   @default(true)
+  beatSync             Boolean   @default(true)
+  referenceUrl         String?
+  /// relatif terhadap CLIPS_DIR, mis. reference/uploads/<userId>/<id>.mp4
+  referenceFilePath    String?
+  referenceDurationSec Float?
+  /// ReferenceFootageItem[]
+  footage              Json      @default("[]")
+  status               JobStatus @default(queued)
+  stage                String?
+  progress             Int       @default(0)
+  message              String?
+  error                String?
+  /// ReferenceTemplateSlot[] | null
+  templateSlots        Json?
+  /// ReferencePlanSlot[] | null
+  planSlots            Json?
+  outputFilePath       String?
+  outputDurationSec    Float?
+  caption              String?
+  hashtags             Json  @default("[]")
+  createdAt            DateTime  @default(now())
+  startedAt            DateTime?
+  finishedAt           DateTime?
+
+  @@index([userId, createdAt])
+  @@map("reference_jobs")
+}
+
+model Clip {
+  id           String    @id @default(uuid())
+  jobId        String
+  job          Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  title        String
+  startSec     Float
+  endSec       Float
+  filePath     String
+  downloadedAt DateTime?
+  deletedAt    DateTime?
+  caption      String?
+  hashtags     Json  @default("[]")
+  transcript   String?
+  createdAt    DateTime  @default(now())
+
+  publications Publication[]
+
+  @@index([jobId])
+  @@index([createdAt])
+  @@map("clips")
+}
+
+enum SocialPlatform {
+  youtube
+  instagram
+  tiktok
+}
+
+model SocialAccount {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform        SocialPlatform
+  externalId      String
+  displayName     String
+  avatarUrl       String?
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  expiresAt       DateTime?
+  scopes          Json
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  publications Publication[]
+
+  @@unique([userId, platform, externalId])
+  @@index([userId])
+  @@map("social_accounts")
+}
+
+enum PublicationStatus {
+  queued
+  uploading
+  processing
+  published
+  failed
+}
+
+model Publication {
+  id              String            @id @default(uuid())
+  clipId          String
+  clip            Clip              @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  socialAccountId String
+  socialAccount   SocialAccount     @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  platform        SocialPlatform
+  mode            String            @default("direct")
+  title           String            @default("")
+  caption         String
+  privacy         String
+  options         Json?
+  madeForKids     Boolean           @default(false)
+  status          PublicationStatus @default(queued)
+  progress        Int               @default(0)
+  externalId      String?
+  externalUrl     String?
+  error           String?
+  attempts        Int               @default(0)
+  publishedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([clipId])
+  @@index([socialAccountId])
+  @@index([status])
+  @@map("publications")
+}
