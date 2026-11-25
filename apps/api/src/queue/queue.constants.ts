@@ -1,4 +1,7 @@
+export { REFERENCE_QUEUE_NAME } from '@clipper/shared';
+
 export const QUEUE_EVENTS = 'QUEUE_EVENTS';
+export const REFERENCE_QUEUE_EVENTS = 'REFERENCE_QUEUE_EVENTS';
 
 /**
  * Harus sama dengan QUEUE_NAME di packages/shared/src/index.ts.

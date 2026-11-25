@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import redis.asyncio as redis
 from bullmq import Worker
 
-from . import llm, models, pipeline
+from . import llm, models, pipeline, reference_pipeline
 
 log = logging.getLogger("clipper.worker")
 
@@ -30,6 +30,11 @@ CAPTION_CONCURRENCY = 2
 # Satu frame JPEG untuk posisi watermark di UI.
 FRAME_QUEUE_NAME = models.FRAME_QUEUE_NAME
 FRAME_CONCURRENCY = int(os.getenv("FRAME_CONCURRENCY", "1"))
+# Reference Edit: antrean dan konkurensi worker tersendiri.
+REFERENCE_QUEUE_NAME = models.REFERENCE_QUEUE_NAME
+REFERENCE_CONCURRENCY = 1
+DEFAULT_CLIPS_DIR = clips_dir()
+DEFAULT_TEMP_ROOT = os.getenv("TEMP_ROOT") or None
 
 # Kunci status LLM untuk UI. Harus sama dengan apps/api/src/system/llm-status.constants.ts.
 LLM_STATUS_KEY = "worker:status:llm"
@@ -182,6 +187,56 @@ async def handle_frame_job(job, token: str | None = None, redis_client: redis.Re
         await write_llm_status(redis_client)
 
 
+async def handle_reference_job(
+    job,
+    _token: str | None = None,
+    *,
+    clips_dir: str = DEFAULT_CLIPS_DIR,
+    temp_root: str | None = DEFAULT_TEMP_ROOT,
+    redis_client: redis.Redis | None = None,
+):
+    """Job antrean reference-jobs: analisis referensi + footage, rencana, render."""
+    data = models.reference_job_data_from_dict(getattr(job, "data", None) or {})
+    log.info("reference job %s mulai (footage=%s)", data.job_id, len(data.footage))
+
+    async def should_cancel() -> bool:
+        if redis_client is None:
+            return False
+        try:
+            return bool(await redis_client.exists(models.CANCEL_KEY.format(data.job_id)))
+        except Exception as exc:
+            log.warning("gagal cek sinyal pembatalan: %s", exc)
+            return False
+
+    async def on_progress(progress: models.ReferenceJobProgress) -> None:
+        try:
+            await job.updateProgress(progress.to_dict())
+        except Exception as exc:  # progress gagal tidak boleh membatalkan render
+            log.warning("reference job %s: gagal kirim progress: %s", data.job_id, exc)
+
+    try:
+        result = await reference_pipeline.run_reference_job(
+            data,
+            clips_dir=clips_dir,
+            temp_root=temp_root,
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+            env=os.environ,
+        )
+        log.info("reference job %s selesai: %s", data.job_id, result.output_file_path)
+        return result.to_dict()
+    except pipeline.JobCancelled:
+        log.info("reference job %s dihentikan aman karena dibatalkan", data.job_id)
+        raise
+    finally:
+        if redis_client is not None:
+            try:
+                await redis_client.delete(models.CANCEL_KEY.format(data.job_id))
+            except Exception:
+                pass
+        await write_llm_status(redis_client)
+
+
 async def main() -> None:
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
@@ -271,10 +326,23 @@ async def main() -> None:
         },
     )
 
-    log.info("worker menunggu job di antrean %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s)",
+    async def _handle_reference(job, token: str | None = None):
+        return await handle_reference_job(job, token, redis_client=redis_client)
+
+    reference_worker = Worker(
+        REFERENCE_QUEUE_NAME,
+        _handle_reference,
+        {
+            "connection": redis_client,
+            "concurrency": REFERENCE_CONCURRENCY,
+        },
+    )
+
+    log.info("worker menunggu job di antrean %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s)",
              QUEUE_NAME, CONCURRENCY, PREVIEW_QUEUE_NAME, PREVIEW_CONCURRENCY,
              CAPTION_QUEUE_NAME, CAPTION_CONCURRENCY,
-             FRAME_QUEUE_NAME, FRAME_CONCURRENCY)
+             FRAME_QUEUE_NAME, FRAME_CONCURRENCY,
+             REFERENCE_QUEUE_NAME, REFERENCE_CONCURRENCY)
     try:
         await stop.wait()
     finally:
@@ -289,6 +357,7 @@ async def main() -> None:
             preview_worker.close(),
             caption_worker.close(),
             frame_worker.close(),
+            reference_worker.close(),
             return_exceptions=True,
         )
 

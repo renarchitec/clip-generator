@@ -24,6 +24,7 @@ const sample: ReviewDraft = {
   duration: 45,
   description: "highlights",
   captionLanguage: "id",
+  customHashtags: "",
   ranges: [{ start: "", end: "" }],
   reviewFirst: true,
   previewId: "prev-123",

@@ -451,3 +451,119 @@ export interface PublishJobData {
   /** jumlah pengecekan status yang sudah dilakukan (kind=check) */
   checks?: number;
 }
+
+/** Antrean BullMQ modul Reference Edit (analisis referensi + footage + rencana edit + render). */
+export const REFERENCE_QUEUE_NAME = 'reference-jobs';
+
+export const REFERENCE_STAGES = [
+  'analyze_reference',
+  'analyze_footage',
+  'plan_edit',
+  'render',
+  'save',
+] as const;
+
+export type ReferenceStage = (typeof REFERENCE_STAGES)[number];
+export type ReferenceJobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export const REFERENCE_MAX_FOOTAGE_FILES = 12;
+export const REFERENCE_MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+export interface ReferenceFootageItem {
+  id: string;
+  name: string;
+  /** path relatif di bawah CLIPS_DIR, mis. reference/<jobId>/footage-01.mp4 */
+  filePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  durationSec: number;
+  width: number;
+  height: number;
+}
+
+export interface ReferenceTemplateSlot {
+  index: number;
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  shotType: string;
+  description: string;
+  overlayText?: string | null;
+  zoom?: 'none' | 'in' | 'out';
+  beatSync?: boolean;
+}
+
+export interface ReferencePlanSlot {
+  slotIndex: number;
+  footageId: string;
+  footageName: string;
+  sourceStartSec: number;
+  sourceEndSec: number;
+  targetDurationSec: number;
+  shotType: string;
+  reason: string;
+  overlayText?: string | null;
+  zoom?: 'none' | 'in' | 'out';
+}
+
+export interface ReferenceJobData {
+  jobId: string;
+  userId: string;
+  title: string;
+  brief?: string | null;
+  aspectRatio: AspectRatio;
+  reframe: ReframeMode;
+  captions: boolean;
+  beatSync: boolean;
+  /** URL referensi (YouTube/TikTok/IG) atau null bila memakai file upload */
+  referenceUrl?: string | null;
+  /** Path relatif di bawah CLIPS_DIR bila video referensi di-upload */
+  referenceFilePath?: string | null;
+  referenceDurationSec?: number | null;
+  footage: ReferenceFootageItem[];
+}
+
+export interface ReferenceJobProgress {
+  stage: ReferenceStage;
+  percent: number;
+  message?: string;
+  templateSlots?: ReferenceTemplateSlot[];
+  planSlots?: ReferencePlanSlot[];
+}
+
+export interface ReferenceJobResult {
+  outputFilePath: string;
+  durationSec: number;
+  templateSlots: ReferenceTemplateSlot[];
+  planSlots: ReferencePlanSlot[];
+  caption?: string;
+  hashtags?: string[];
+}
+
+export interface ReferenceJobResponse {
+  id: string;
+  title: string;
+  brief: string | null;
+  aspectRatio: AspectRatio;
+  reframe: ReframeMode;
+  captions: boolean;
+  beatSync: boolean;
+  referenceUrl: string | null;
+  referenceFilePath: string | null;
+  referenceDurationSec: number | null;
+  footage: ReferenceFootageItem[];
+  status: ReferenceJobStatus;
+  stage: ReferenceStage | null;
+  progress: number;
+  message: string | null;
+  error: string | null;
+  templateSlots: ReferenceTemplateSlot[] | null;
+  planSlots: ReferencePlanSlot[] | null;
+  outputFilePath: string | null;
+  outputDurationSec: number | null;
+  caption: string | null;
+  hashtags: string[];
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
