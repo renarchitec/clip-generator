@@ -17,6 +17,7 @@ export class AppConfig {
   readonly tiktokClientSecret: string | undefined;
   readonly instagramClientId: string | undefined;
   readonly instagramClientSecret: string | undefined;
+  readonly instagramConfigId: string | undefined;
 
   constructor(config: ConfigService) {
     this.databaseUrl = config.getOrThrow<string>('DATABASE_URL');
@@ -37,5 +38,7 @@ export class AppConfig {
       config.get<string>('INSTAGRAM_CLIENT_ID') || undefined;
     this.instagramClientSecret =
       config.get<string>('INSTAGRAM_CLIENT_SECRET') || undefined;
+    this.instagramConfigId =
+      config.get<string>('INSTAGRAM_CONFIG_ID') || undefined;
   }
 }

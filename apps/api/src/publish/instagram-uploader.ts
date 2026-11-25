@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PublishError } from './publish-helpers';
 import {
-  INSTAGRAM_GRAPH_URL,
+  instagramGraphBaseUrl,
   interpretInstagramContainerStatus,
   isPublicHttpsUrl,
   mapInstagramApiErrorDetail,
@@ -46,8 +46,9 @@ export class InstagramUploader {
       caption: input.caption,
       share_to_feed: 'true',
     });
+    const baseUrl = instagramGraphBaseUrl(input.accessToken);
     const data = await this.request<{ id?: unknown }>(
-      `${INSTAGRAM_GRAPH_URL}/${encodeURIComponent(input.igUserId)}/media`,
+      `${baseUrl}/${encodeURIComponent(input.igUserId)}/media`,
       input.accessToken,
       { method: 'POST', body },
     );
@@ -62,7 +63,7 @@ export class InstagramUploader {
     containerId: string,
   ): Promise<InstagramContainerOutcome> {
     const data = await this.request(
-      `${INSTAGRAM_GRAPH_URL}/${encodeURIComponent(containerId)}`,
+      `${instagramGraphBaseUrl(accessToken)}/${encodeURIComponent(containerId)}`,
       accessToken,
       { fields: 'status_code,status' },
     );
@@ -75,7 +76,7 @@ export class InstagramUploader {
     containerId: string,
   ): Promise<InstagramPublishResult> {
     const data = await this.request<{ id?: unknown; config_issue?: unknown }>(
-      `${INSTAGRAM_GRAPH_URL}/${encodeURIComponent(igUserId)}/media_publish`,
+      `${instagramGraphBaseUrl(accessToken)}/${encodeURIComponent(igUserId)}/media_publish`,
       accessToken,
       {
         method: 'POST',
@@ -96,7 +97,7 @@ export class InstagramUploader {
     mediaId: string,
   ): Promise<string | null> {
     const data = await this.request<{ permalink?: unknown }>(
-      `${INSTAGRAM_GRAPH_URL}/${encodeURIComponent(mediaId)}`,
+      `${instagramGraphBaseUrl(accessToken)}/${encodeURIComponent(mediaId)}`,
       accessToken,
       { fields: 'permalink' },
     );

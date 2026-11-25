@@ -13,6 +13,7 @@ const envSchema = z.object({
   TIKTOK_CLIENT_SECRET: z.string().optional(),
   INSTAGRAM_CLIENT_ID: z.string().optional(),
   INSTAGRAM_CLIENT_SECRET: z.string().optional(),
+  INSTAGRAM_CONFIG_ID: z.string().optional(),
   ALLOW_REGISTRATION: z
     .enum(['true', 'false'])
     .optional()

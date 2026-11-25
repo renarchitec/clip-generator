@@ -18,6 +18,12 @@ export const INSTAGRAM_SCOPES = [
   'instagram_business_content_publish',
 ] as const;
 
+/** Scope Instagram API with Unified Login (Facebook Login for Business). */
+export const INSTAGRAM_UNIFIED_SCOPES = [
+  'instagram_basic',
+  'instagram_content_publish',
+] as const;
+
 export interface OAuthStatePayload {
   userId: string;
   platform: SocialPlatform;
@@ -84,7 +90,23 @@ export function buildInstagramAuthorizationUrl(input: {
   clientId: string;
   redirectUri: string;
   state: string;
+  configId?: string;
 }): string {
+  // Unified Login (Facebook Login for Business): config_id menentukan scope,
+  // jadi URL tidak memuat `scope` sendiri.
+  if (input.configId) {
+    const url = new URL('https://www.facebook.com/dialog/oauth');
+    url.searchParams.set('client_id', input.clientId);
+    url.searchParams.set('config_id', input.configId);
+    url.searchParams.set('display', 'popup');
+    url.searchParams.set('override_default_response_type', 'true');
+    url.searchParams.set('redirect_uri', input.redirectUri);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('state', input.state);
+    url.searchParams.set('prompt', 'login');
+    return url.toString();
+  }
+
   const url = new URL('https://www.instagram.com/oauth/authorize');
   url.searchParams.set('client_id', input.clientId);
   url.searchParams.set('redirect_uri', input.redirectUri);

@@ -23,6 +23,7 @@ import {
   createPkceChallenge,
   socialCallbackUrl,
   INSTAGRAM_SCOPES,
+  INSTAGRAM_UNIFIED_SCOPES,
   TIKTOK_SCOPES,
   YOUTUBE_SCOPES,
 } from './oauth';
@@ -138,11 +139,13 @@ export class SocialService {
       });
     }
     if (platform === 'instagram') {
-      // Instagram API with Instagram Login: tanpa PKCE.
+      // Tanpa PKCE. config_id mengaktifkan Instagram API with Unified Login;
+      // bila kosong, tetap memakai Instagram Login lama.
       return buildInstagramAuthorizationUrl({
         clientId: this.config.instagramClientId!,
         redirectUri,
         state: pending.state,
+        configId: this.config.instagramConfigId,
       });
     }
     return buildYoutubeAuthorizationUrl({
@@ -197,7 +200,9 @@ export class SocialService {
       [...(platform === 'tiktok'
         ? TIKTOK_SCOPES
         : platform === 'instagram'
-          ? INSTAGRAM_SCOPES
+          ? this.config.instagramConfigId
+            ? INSTAGRAM_UNIFIED_SCOPES
+            : INSTAGRAM_SCOPES
           : YOUTUBE_SCOPES)];
 
     await this.prisma.socialAccount.upsert({

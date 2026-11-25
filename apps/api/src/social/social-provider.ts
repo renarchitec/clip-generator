@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import type { SocialPlatform } from '@clipper/shared';
 import { AppConfig } from '../config/app-config.service';
-import { INSTAGRAM_SCOPES } from './oauth';
+import { INSTAGRAM_SCOPES, INSTAGRAM_UNIFIED_SCOPES } from './oauth';
 import { isInstagramAccountTypeSupported } from './instagram-token';
+import {
+  exchangeInstagramUnifiedCode,
+  fetchInstagramUnifiedAccount,
+  isInstagramUnifiedLogin,
+} from './instagram-unified';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
@@ -337,6 +342,11 @@ const INSTAGRAM_ME_URL = `${INSTAGRAM_GRAPH_ORIGIN}/v27.0/me?fields=user_id,user
 /** Umur access token long-lived Instagram. */
 const INSTAGRAM_LONG_LIVED_SECONDS = 60 * 24 * 60 * 60;
 
+/** Graph host untuk Instagram API with Unified Login (SUAT `EAA...`). */
+const FACEBOOK_GRAPH_ORIGIN = 'https://graph.facebook.com';
+const FACEBOOK_GRAPH_VERSION = 'v27.0';
+const FACEBOOK_GRAPH_URL = `${FACEBOOK_GRAPH_ORIGIN}/${FACEBOOK_GRAPH_VERSION}`;
+
 /**
  * Instagram API with Instagram Login (bukan Facebook Login): tanpa PKCE,
  * tanpa refresh token. Token long-lived diperpanjang dengan token itu sendiri.
@@ -368,6 +378,21 @@ export class InstagramProvider implements SocialProvider {
     const credentials = this.credentials();
     // Instagram menambahkan `#_` di belakang code pada redirect.
     const cleanCode = code.trim().replace(/#_?$/, '');
+
+    if (this.isUnifiedLogin()) {
+      try {
+        return await exchangeInstagramUnifiedCode({
+          baseUrl: FACEBOOK_GRAPH_URL,
+          clientId: credentials.clientId,
+          clientSecret: credentials.clientSecret,
+          code: cleanCode,
+          redirectUri,
+          scopes: INSTAGRAM_UNIFIED_SCOPES,
+        });
+      } catch {
+        throw new SocialProviderError('token_exchange');
+      }
+    }
 
     let response: Response;
     try {
@@ -418,6 +443,19 @@ export class InstagramProvider implements SocialProvider {
 
   /** `GET /me`: hanya akun Business/Creator yang boleh memakai Content Publishing. */
   async fetchAccount(accessToken: string): Promise<ExternalSocialAccount> {
+    if (this.isUnifiedLogin(accessToken)) {
+      // Unified Login: SUAT tidak punya `account_type`, akun Instagram diambil
+      // dari edge assigned_instagram_accounts pada Graph API Facebook.
+      try {
+        return await fetchInstagramUnifiedAccount({
+          baseUrl: FACEBOOK_GRAPH_URL,
+          accessToken,
+        });
+      } catch {
+        throw new SocialProviderError('profile_fetch');
+      }
+    }
+
     let response: Response;
     try {
       response = await fetch(INSTAGRAM_ME_URL, {
@@ -489,6 +527,14 @@ export class InstagramProvider implements SocialProvider {
           ? expiresIn
           : INSTAGRAM_LONG_LIVED_SECONDS,
     };
+  }
+
+  /** Unified Login aktif bila config_id di-set atau token berupa SUAT `EAA...`. */
+  private isUnifiedLogin(accessToken?: string): boolean {
+    return isInstagramUnifiedLogin({
+      configId: this.config.instagramConfigId,
+      accessToken,
+    });
   }
 
   private credentials(): { clientId: string; clientSecret: string } {

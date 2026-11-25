@@ -8,6 +8,16 @@
 export const INSTAGRAM_GRAPH_VERSION = 'v27.0';
 export const INSTAGRAM_GRAPH_URL = `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}`;
 
+/** Graph host untuk token SUAT / Facebook Graph (`EAA...`). */
+export const FACEBOOK_GRAPH_URL = `https://graph.facebook.com/${INSTAGRAM_GRAPH_VERSION}`;
+
+/** Token SUAT / Facebook Graph diawali `EAA` → pakai graph.facebook.com; token Instagram Login (`IG...`) → graph.instagram.com. */
+export function instagramGraphBaseUrl(accessToken: string): string {
+  return accessToken.trim().startsWith('EAA')
+    ? FACEBOOK_GRAPH_URL
+    : INSTAGRAM_GRAPH_URL;
+}
+
 /** Batas caption Instagram. */
 export const INSTAGRAM_CAPTION_MAX = 2200;
 export const INSTAGRAM_MAX_HASHTAGS = 30;
