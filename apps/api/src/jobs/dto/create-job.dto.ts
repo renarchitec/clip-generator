@@ -18,6 +18,8 @@ import type { AspectRatio, CaptionLanguage, CaptionStyle, JobMode, ReframeMode }
 import {
   ASPECT_RATIOS,
   CAPTION_LANGUAGES,
+  CAPTION_POSITION_Y_MAX,
+  CAPTION_POSITION_Y_MIN,
   DEFAULT_ASPECT,
   DEFAULT_CAPTION_LANGUAGE,
   DEFAULT_REFRAME,
@@ -26,6 +28,7 @@ import {
   REFRAME_MODES,
   normalizeCaptionStyle,
 } from '@clipper/shared';
+import { parseWatermarkSettings, type WatermarkChromaKey } from '../../watermarks/watermark-helpers';
 
 export class ManualRangeDto {
   @IsNumber()
@@ -174,9 +177,10 @@ export class WatermarkSettingsDto {
   y?: number;
   scale?: number;
   opacity?: number;
+  chromaKey?: WatermarkChromaKey | null;
 }
 
-/** Izinkan null atau settings { watermarkId, x, y, scale, opacity }; nilai dibatasi zod di service. */
+/** Izinkan null atau pengaturan watermark yang lolos skema zod. */
 export function IsWatermarkSettings(validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string): void {
     registerDecorator({
@@ -185,20 +189,12 @@ export function IsWatermarkSettings(validationOptions?: ValidationOptions) {
       propertyName,
       options: validationOptions,
       validator: {
-        validate(value: unknown, _args: ValidationArguments) {
-          if (value === null) return true;
-          if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-          const candidate = value as Record<string, unknown>;
-          return (
-            typeof candidate.watermarkId === 'string' &&
-            typeof candidate.x === 'number' &&
-            typeof candidate.y === 'number' &&
-            typeof candidate.scale === 'number' &&
-            typeof candidate.opacity === 'number'
-          );
+        validate(value: unknown) {
+          return value === null || parseWatermarkSettings(value).ok;
         },
-        defaultMessage() {
-          return 'watermark harus null atau { watermarkId, x, y, scale, opacity }.';
+        defaultMessage({ value }: ValidationArguments) {
+          const parsed = parseWatermarkSettings(value);
+          return parsed.ok ? 'Pengaturan watermark tidak valid.' : parsed.message;
         },
       },
     });
@@ -210,8 +206,20 @@ export function IsWatermarkSettings(validationOptions?: ValidationOptions) {
 export function IsCaptionStyle(validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string): void {
     registerDecorator({ name: 'isCaptionStyle', target: object.constructor, propertyName, options: validationOptions,
-      validator: { validate(value: unknown) { return value === null || normalizeCaptionStyle(value) !== null; },
-        defaultMessage() { return 'captionStyle harus null atau objek gaya subtitle yang valid.'; } },
+      validator: {
+        validate(value: unknown) {
+          if (value === null) return true;
+          if (normalizeCaptionStyle(value) === null) return false;
+          const { positionY } = value as Record<string, unknown>;
+          return positionY === undefined || positionY === null || (
+            typeof positionY === 'number' && Number.isFinite(positionY) &&
+            positionY >= CAPTION_POSITION_Y_MIN && positionY <= CAPTION_POSITION_Y_MAX
+          );
+        },
+        defaultMessage() {
+          return 'captionStyle harus null atau objek gaya subtitle yang valid (positionY: 0,05–0,95 atau null).';
+        },
+      },
     });
   };
 }

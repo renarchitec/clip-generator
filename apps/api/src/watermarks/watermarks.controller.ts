@@ -14,7 +14,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
-import { WATERMARK_MAX_BYTES } from './watermark-helpers';
+import { WATERMARK_VIDEO_MAX_BYTES } from './watermark-helpers';
 import { WatermarksService } from './watermarks.service';
 
 /** Bentuk file dari multer memory storage (tanpa @types/multer). */
@@ -34,7 +34,7 @@ export class WatermarksController {
   @UseInterceptors(
     FileInterceptor('file', {
       // Multer default = memory storage; buffer diverifikasi lewat magic bytes di service.
-      limits: { fileSize: WATERMARK_MAX_BYTES + 1, files: 1, fields: 4 },
+      limits: { fileSize: WATERMARK_VIDEO_MAX_BYTES + 1, files: 1, fields: 4 },
     }),
   )
   upload(

@@ -15,6 +15,7 @@ import {
   CAPTION_PRESET_STYLES,
   CAPTION_POSITIONS,
   DEFAULT_CAPTION_STYLE,
+  resolveCaptionY,
   updateCaptionStyle,
   type CaptionEffect,
   type CaptionFont,
@@ -50,12 +51,23 @@ function captionEffect(style: CaptionStyle): React.CSSProperties {
 }
 
 function PreviewText({ value, sample, twoSpeakers }: { value: CaptionStyle; sample: string[]; twoSpeakers: boolean }) {
-  const placement = value.position === "top" ? "items-start pt-3" : value.position === "center" ? "items-center" : "items-end pb-3"
   const fontSize = Math.max(10, Math.min(22, value.fontSize / 4))
   const common = captionEffect(value)
-  return <div className={`absolute inset-0 flex justify-center px-4 ${placement}`}>
+  const resolvedY = resolveCaptionY(value, twoSpeakers)
+  const hasCustomY = value.positionY != null
+  const placement = value.position === "top" ? "items-start pt-3" : value.position === "center" ? "items-center" : "items-end pb-3"
+  return <div className={`absolute inset-0 flex justify-center px-4 ${hasCustomY ? "" : placement}`}>
     {twoSpeakers && <div aria-hidden="true" className="absolute left-0 right-0 top-1/2 border-t border-dashed border-white/30" />}
-    <p className="relative flex max-w-full flex-wrap justify-center gap-x-1.5 gap-y-0.5 text-center leading-none" style={{ fontFamily: `"${value.fontFamily}", sans-serif`, fontSize, fontStyle: value.italic ? "italic" : "normal", textTransform: value.uppercase ? "uppercase" : "none" }}>
+    <p
+      className={`${hasCustomY ? "absolute left-1/2 w-[92%] -translate-x-1/2 -translate-y-1/2" : "relative"} flex max-w-full flex-wrap justify-center gap-x-1.5 gap-y-0.5 text-center leading-none`}
+      style={{
+        ...(hasCustomY ? { top: `${Math.max(18, Math.min(82, resolvedY * 100))}%` } : {}),
+        fontFamily: `"${value.fontFamily}", sans-serif`,
+        fontSize,
+        fontStyle: value.italic ? "italic" : "normal",
+        textTransform: value.uppercase ? "uppercase" : "none",
+      }}
+    >
       {sample.map((word, index) => <span key={`${word}-${index}`} style={{ color: index === 1 ? value.highlightColor : value.primaryColor, ...common, ...(value.effect === "box" ? { backgroundColor: `${value.outlineColor}bf`, borderRadius: 5, padding: "3px 5px" } : {}) }}>{word}</span>)}
     </p>
   </div>
@@ -83,13 +95,36 @@ export function CaptionStyleEditor({ value, onChange, twoSpeakers = false }: { v
   const sample = t.captionPreviewSample.split(" ")
   const words = sample.length >= 3 ? sample.slice(0, 3) : ["MAKE", "MOMENTS", "POP"]
 
+  const hasCustomY = value.positionY != null
+  const customYPercent = hasCustomY ? Math.round((value.positionY as number) * 100) : null
+
   return <div className="space-y-3">
     <div className="relative aspect-[16/7] min-h-[82px] overflow-hidden rounded-md border border-white/10 bg-[radial-gradient(ellipse_at_50%_100%,#334155_0%,#171d27_48%,#0b0f16_100%)] shadow-inner">
       <div aria-hidden="true" className="absolute inset-0 opacity-[0.12]" style={{ backgroundImage: "linear-gradient(rgb(255 255 255 / 16%) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / 16%) 1px, transparent 1px)", backgroundSize: "18px 18px", maskImage: "radial-gradient(ellipse at center, black, transparent 80%)" }} />
-      <Badge variant="secondary" className="absolute right-2 top-2 z-10 h-5 bg-black/35 text-[9px] text-white/80 backdrop-blur">{{ top: t.captionPositionNames.top, center: t.captionPositionNames.center, bottom: t.captionPositionNames.bottom }[value.position]}</Badge>
+      <Badge variant="secondary" className="absolute right-2 top-2 z-10 h-5 bg-black/35 font-mono text-[9px] tabular-nums text-white/85 backdrop-blur">{hasCustomY ? `Y: ${customYPercent}%` : { top: t.captionPositionNames.top, center: t.captionPositionNames.center, bottom: t.captionPositionNames.bottom }[value.position]}</Badge>
       <PreviewText value={value} sample={words} twoSpeakers={twoSpeakers} />
       {twoSpeakers && <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-widest text-white/35">{t.twoSpeakers}</span>}
     </div>
+    {hasCustomY ? (
+      <div className="flex items-center justify-between gap-2 rounded-md border border-accent/30 bg-accent/10 px-2.5 py-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Badge variant="secondary" className="h-5 font-mono text-[10px] tabular-nums">Y: {customYPercent}%</Badge>
+          <span className="truncate text-[11px] text-muted-foreground">{t.captionPosition}</span>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 shrink-0 px-2 text-[10px]"
+          onClick={() => onChange(updateCaptionStyle(value, { positionY: undefined }))}
+        >
+          <RotateCcw aria-hidden="true" className="mr-1 size-3" />
+          {t.captionPositionReset}
+        </Button>
+      </div>
+    ) : (
+      <p className="text-[11px] leading-relaxed text-muted-foreground">{t.captionDragOnMonitorHint}</p>
+    )}
 
     <div className="grid grid-cols-3 gap-1.5">
       {CAPTION_PRESETS.filter((preset): preset is Exclude<CaptionPreset, "custom"> => preset !== "custom").map((preset) => {
@@ -116,7 +151,25 @@ export function CaptionStyleEditor({ value, onChange, twoSpeakers = false }: { v
       <Field className="gap-1.5"><FieldLabel className="text-[11px] text-muted-foreground">{t.captionEffect}</FieldLabel><ToggleGroup type="single" aria-label={t.captionEffect} value={value.effect} onValueChange={(effect) => { if (effect) update({ effect: effect as CaptionEffect }) }} className="grid w-full grid-cols-4 gap-1">{CAPTION_EFFECTS.map((effect) => <ToggleGroupItem key={effect} value={effect} className="h-7 min-w-0 rounded-sm px-1 text-[10px] data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs">{t.captionEffectNames[effect]}</ToggleGroupItem>)}</ToggleGroup></Field>
       <div className="grid grid-cols-2 gap-3">
         <Field className="gap-1.5"><FieldLabel className="text-[11px] text-muted-foreground">{t.captionFormat}</FieldLabel><div className="flex gap-1"><Button type="button" variant={value.uppercase ? "secondary" : "outline"} aria-pressed={value.uppercase} aria-label={t.captionUppercase} className="h-8 flex-1 px-2 font-mono text-xs" onClick={() => update({ uppercase: !value.uppercase })}>AA</Button><Button type="button" variant={value.italic ? "secondary" : "outline"} aria-pressed={value.italic} aria-label={t.captionItalic} className="h-8 flex-1 px-2 font-serif text-sm italic" onClick={() => update({ italic: !value.italic })}>I</Button></div></Field>
-        <Field className="gap-1.5"><FieldLabel className="text-[11px] text-muted-foreground">{t.captionPosition}</FieldLabel><ToggleGroup type="single" aria-label={t.captionPosition} value={value.position} onValueChange={(position) => { if (position) update({ position: position as CaptionPosition }) }} className="grid w-full grid-cols-3 gap-0.5 rounded-md bg-secondary/70 p-0.5">{CAPTION_POSITIONS.map((position) => <ToggleGroupItem key={position} value={position} className="h-7 min-w-0 rounded-sm px-0.5 text-[9px] data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs">{t.captionPositionNames[position]}</ToggleGroupItem>)}</ToggleGroup></Field>
+        <Field className="gap-1.5">
+          <div className="flex items-center justify-between gap-1">
+            <FieldLabel className="text-[11px] text-muted-foreground">{t.captionPosition}</FieldLabel>
+            {hasCustomY && <span className="font-mono text-[10px] tabular-nums text-accent">Y: {customYPercent}%</span>}
+          </div>
+          <ToggleGroup
+            type="single"
+            aria-label={t.captionPosition}
+            value={hasCustomY ? "" : value.position}
+            onValueChange={(position) => { if (position) update({ position: position as CaptionPosition, positionY: undefined }) }}
+            className="grid w-full grid-cols-3 gap-0.5 rounded-md bg-secondary/70 p-0.5"
+          >
+            {CAPTION_POSITIONS.map((position) => (
+              <ToggleGroupItem key={position} value={position} className="h-7 min-w-0 rounded-sm px-0.5 text-[9px] data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs">
+                {t.captionPositionNames[position]}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </Field>
       </div>
       <Field className="gap-2 rounded-md border border-border/70 bg-background/40 p-2"><FieldDescription className="text-[10px]">{t.captionColorsHint}</FieldDescription><ColorControl id="caption-primary" label={t.captionPrimaryColor} color={value.primaryColor} onChange={(primaryColor) => update({ primaryColor })}/><ColorControl id="caption-highlight" label={t.captionHighlightColor} color={value.highlightColor} onChange={(highlightColor) => update({ highlightColor })}/><ColorControl id="caption-outline" label={t.captionOutlineColor} color={value.outlineColor} onChange={(outlineColor) => update({ outlineColor })}/></Field>
     </div>}

@@ -29,6 +29,7 @@ from .models import (
     ManualRange,
     Outro,
     Watermark,
+    WatermarkChromaKey,
     job_data_from_dict,
     to_max_source_sec,
 )
@@ -701,13 +702,59 @@ def _facecam_graph(
     return graph, label
 
 
+def _probe_video_codec(path: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=codec_name", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, check=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip().lower() or None
+
+
+def _watermark_input_args(watermark_path: str, duration: float, wm: Watermark) -> list[str]:
+    if not wm.is_video:
+        return ["-loop", "1", "-t", f"{duration:.3f}", "-i", watermark_path]
+
+    decoder = []
+    if watermark_path.lower().endswith(".webm") or (wm.mime_type or "").lower() == "video/webm":
+        # Native VP8/VP9 decoders don't expose WebM's alpha channel.
+        codec = _probe_video_codec(watermark_path)
+        if codec == "vp9":
+            decoder = ["-c:v", "libvpx-vp9"]
+        elif codec == "vp8":
+            decoder = ["-c:v", "libvpx"]
+    return [*decoder, "-stream_loop", "-1", "-t", f"{duration:.3f}", "-an", "-i", watermark_path]
+
+
+def _chroma_key_filters(ck: WatermarkChromaKey) -> list[str]:
+    hex6 = ck.color.lstrip("#").upper()
+    r, g, b = (int(hex6[i:i + 2], 16) for i in (0, 2, 4))
+    mx, mn = max(r, g, b), min(r, g, b)
+    sat = (mx - mn) / mx if mx > 0 else 0.0
+    options = f"color=0x{hex6}:similarity={ck.similarity:.3f}:blend={ck.blend:.3f}"
+    if sat < 0.15:
+        return [f"colorkey={options}"]
+    filters = [f"chromakey={options}"]
+    if g > r and g > b:
+        filters.append("despill=type=green")
+    elif b > r and b > g:
+        filters.append("despill=type=blue")
+    return filters
+
+
 def _watermark_chain(width: int, height: int, wm: Watermark, input_label: str = "[1:v]") -> str:
-    """Rantai filter untuk gambar watermark: skala (lebar genap), RGBA, opacity."""
+    """Rantai filter watermark: key opsional, skala (lebar genap), RGBA, opacity."""
     wm_w = max(2, round(width * wm.scale / 2) * 2)
-    return (
-        f"{input_label}scale=w={wm_w}:h=-2,format=rgba,"
-        f"colorchannelmixer=aa={wm.opacity:.3f}[wm]"
-    )
+    steps = []
+    if wm.is_video:
+        steps.append("setpts=PTS-STARTPTS")
+    if wm.chroma_key and wm.chroma_key.enabled:
+        steps.extend(_chroma_key_filters(wm.chroma_key))
+    steps.extend((f"scale=w={wm_w}:h=-2", "format=rgba", f"colorchannelmixer=aa={wm.opacity:.3f}"))
+    return f"{input_label}{','.join(steps)}[wm]"
 
 
 def _watermark_overlay(label: str, wm: Watermark, out_label: str = "[wmout]") -> str:
@@ -1086,8 +1133,8 @@ def _render_one(
         out_path,
     ]
     wm_input = (
-        ["-loop", "1", "-t", f"{duration:.3f}", "-i", watermark_path]
-        if watermark_path
+        _watermark_input_args(watermark_path, duration, watermark)
+        if watermark_path and watermark
         else []
     )
 

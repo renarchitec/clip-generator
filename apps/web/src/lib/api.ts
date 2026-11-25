@@ -1,4 +1,5 @@
 import type { CaptionStyle } from "@/lib/caption-style"
+import type { WatermarkChromaKey } from "@/lib/watermark"
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled"
 export type Reframe = "face_tracking" | "blurred_fill" | "black_bars"
@@ -44,7 +45,7 @@ export type JobSnapshot = { id: string; url: string; mode: string; reframe: Refr
 export type User = { id: string; email: string; name: string | null }
 
 export type JobOutro = { outroId: string; filePath: string | null; durationSec: number }
-export type JobWatermark = { watermarkId: string; x: number; y: number; scale: number; opacity: number; filePath: string | null }
+export type JobWatermark = { watermarkId: string; x: number; y: number; scale: number; opacity: number; filePath: string | null; mimeType?: string; chromaKey?: WatermarkChromaKey | null }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...init?.headers } })

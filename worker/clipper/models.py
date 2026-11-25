@@ -30,6 +30,8 @@ CLIP_TRANSCRIPT_MAX = 2000
 CAPTION_FONTS = ("Anton", "Bebas Neue", "Montserrat", "Plus Jakarta Sans", "Oswald", "Bangers")
 CAPTION_EFFECTS = ("outline", "shadow", "box", "none")
 CAPTION_POSITIONS = ("bottom", "center", "top")
+CAPTION_POSITION_Y_MIN = 0.05
+CAPTION_POSITION_Y_MAX = 0.95
 CAPTION_PRESETS = ("hook", "beast", "boxed", "neon", "cinema", "custom")
 CAPTION_FONT_SIZE_MIN = 44
 CAPTION_FONT_SIZE_MAX = 120
@@ -56,9 +58,13 @@ class CaptionStyle:
     uppercase: bool
     position: str
     italic: bool
+    position_y: float | None = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"preset": self.preset, "fontFamily": self.font_family, "fontSize": self.font_size, "primaryColor": self.primary_color, "highlightColor": self.highlight_color, "outlineColor": self.outline_color, "effect": self.effect, "uppercase": self.uppercase, "position": self.position, "italic": self.italic}
+        payload = {"preset": self.preset, "fontFamily": self.font_family, "fontSize": self.font_size, "primaryColor": self.primary_color, "highlightColor": self.highlight_color, "outlineColor": self.outline_color, "effect": self.effect, "uppercase": self.uppercase, "position": self.position, "italic": self.italic}
+        if self.position_y is not None:
+            payload["positionY"] = self.position_y
+        return payload
 
     @classmethod
     def from_dict(cls, data: Any) -> Optional["CaptionStyle"]:
@@ -79,7 +85,14 @@ class CaptionStyle:
         if isinstance(data.get("italic"), bool): base["italic"] = data["italic"]
         fields = ("fontFamily", "fontSize", "primaryColor", "highlightColor", "outlineColor", "effect", "uppercase", "position", "italic")
         base["preset"] = next((name for name, style in CAPTION_PRESET_STYLES.items() if all(base[field] == style[field] for field in fields)), "custom")
-        return cls(base["preset"], base["fontFamily"], base["fontSize"], base["primaryColor"], base["highlightColor"], base["outlineColor"], base["effect"], base["uppercase"], base["position"], base["italic"])
+        position_y = _first(data, "positionY", "position_y")
+        if isinstance(position_y, (int, float)) and not isinstance(position_y, bool) and position_y == position_y and position_y not in (float("inf"), float("-inf")):
+            position_y = round(_clamp(position_y, CAPTION_POSITION_Y_MIN, CAPTION_POSITION_Y_MAX), 4)
+        else:
+            position_y = None
+        if position_y is not None:
+            base["preset"] = "custom"
+        return cls(base["preset"], base["fontFamily"], base["fontSize"], base["primaryColor"], base["highlightColor"], base["outlineColor"], base["effect"], base["uppercase"], base["position"], base["italic"], position_y)
 
 
 def to_caption_language(value: Any) -> str:
@@ -220,6 +233,11 @@ def to_max_source_sec(value: Any) -> Optional[int]:
 
 WATERMARK_DEFAULTS = {"x": 0.5, "y": 0.5, "scale": 0.25, "opacity": 1.0}
 WATERMARK_MAX_PATH_CHARS = 512
+WATERMARK_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov")
+WATERMARK_CHROMA_SIMILARITY_MIN = 0.01
+WATERMARK_CHROMA_SIMILARITY_MAX = 0.5
+WATERMARK_CHROMA_BLEND_MIN = 0.0
+WATERMARK_CHROMA_BLEND_MAX = 0.5
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -231,9 +249,36 @@ def _finite_float(value: Any, default: float) -> float:
     return parsed if parsed == parsed and parsed not in (float("inf"), float("-inf")) else default
 
 
+@dataclass(frozen=True)
+class WatermarkChromaKey:
+    enabled: bool = False
+    color: str = "#00FF00"
+    similarity: float = 0.18
+    blend: float = 0.08
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> WatermarkChromaKey | None:
+        if not isinstance(raw, dict):
+            return None
+        enabled = raw.get("enabled")
+        color = raw.get("color")
+        return cls(
+            enabled=enabled if isinstance(enabled, bool) else cls.enabled,
+            color=color.upper() if isinstance(color, str) and _CAPTION_HEX_RE.fullmatch(color) else cls.color,
+            similarity=_clamp(
+                _finite_float(raw.get("similarity"), cls.similarity),
+                WATERMARK_CHROMA_SIMILARITY_MIN, WATERMARK_CHROMA_SIMILARITY_MAX,
+            ),
+            blend=_clamp(
+                _finite_float(raw.get("blend"), cls.blend),
+                WATERMARK_CHROMA_BLEND_MIN, WATERMARK_CHROMA_BLEND_MAX,
+            ),
+        )
+
+
 @dataclass
 class Watermark:
-    """Watermark gambar. x/y = PUSAT sebagai pecahan frame output (0..1);
+    """Watermark gambar/video. x/y = PUSAT sebagai pecahan frame output (0..1);
     scale = lebar watermark sebagai pecahan lebar output; opacity 0..1."""
 
     file_path: str  # relatif terhadap CLIPS_DIR, mis. watermarks/<user>/<id>.png
@@ -241,15 +286,31 @@ class Watermark:
     y: float = 0.5
     scale: float = 0.25
     opacity: float = 1.0
+    mime_type: str | None = None
+    chroma_key: WatermarkChromaKey | None = None
+
+    @property
+    def is_video(self) -> bool:
+        return (self.mime_type or "").lower().startswith("video/") or self.file_path.lower().endswith(WATERMARK_VIDEO_EXTENSIONS)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "filePath": self.file_path,
             "x": self.x,
             "y": self.y,
             "scale": self.scale,
             "opacity": self.opacity,
         }
+        if self.mime_type is not None:
+            payload["mimeType"] = self.mime_type
+        if self.chroma_key is not None:
+            payload["chromaKey"] = {
+                "enabled": self.chroma_key.enabled,
+                "color": self.chroma_key.color,
+                "similarity": self.chroma_key.similarity,
+                "blend": self.chroma_key.blend,
+            }
+        return payload
 
     @classmethod
     def from_dict(cls, data: Any) -> Optional["Watermark"]:
@@ -268,6 +329,8 @@ class Watermark:
             y=_clamp(_finite_float(data.get("y"), d["y"]), 0.0, 1.0),
             scale=_clamp(_finite_float(data.get("scale"), d["scale"]), 0.0, 1.0),
             opacity=_clamp(_finite_float(data.get("opacity"), d["opacity"]), 0.0, 1.0),
+            mime_type=_to_text(_first(data, "mimeType", "mime_type"), WATERMARK_MAX_PATH_CHARS),
+            chroma_key=WatermarkChromaKey.from_dict(_first(data, "chromaKey", "chroma_key")),
         )
 
 

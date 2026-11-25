@@ -130,6 +130,8 @@ export class JobsService {
           y: storedWatermark.y,
           scale: storedWatermark.scale,
           opacity: storedWatermark.opacity,
+          ...(storedWatermark.mimeType !== undefined ? { mimeType: storedWatermark.mimeType } : {}),
+          ...(storedWatermark.chromaKey !== undefined ? { chromaKey: storedWatermark.chromaKey } : {}),
         }
       : null;
 
@@ -303,7 +305,18 @@ export class JobsService {
     dto.ranges = (old.ranges as ManualRange[] | null) ?? undefined;
     // maxSourceSec hanya relevan untuk mode auto; null = durasi penuh.
     dto.maxSourceSec = old.mode === 'auto' ? old.maxSourceSec : null;
-    dto.watermark = (old.watermark as StoredWatermark | null) ?? null;
+    // Strip snapshot-only fields; create rechecks ownership and resolves the current path/MIME.
+    const oldWatermark = old.watermark as StoredWatermark | null;
+    dto.watermark = oldWatermark
+      ? {
+          watermarkId: oldWatermark.watermarkId,
+          x: oldWatermark.x,
+          y: oldWatermark.y,
+          scale: oldWatermark.scale,
+          opacity: oldWatermark.opacity,
+          ...(oldWatermark.chromaKey !== undefined ? { chromaKey: oldWatermark.chromaKey } : {}),
+        }
+      : null;
     dto.outro = (old.outro as StoredOutro | null) ?? null;
 
     return this.create(dto, userId);

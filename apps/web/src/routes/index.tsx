@@ -28,7 +28,23 @@ import { WatermarkOverlay } from "@/components/watermark-overlay"
 import { BriefHistoryMenu, briefHistoryKey } from "@/components/brief-history-menu"
 import { OutroPreview, useOutroDefault, useOutroLibrary } from "@/components/outro-manager"
 import { formatOutroDuration } from "@/lib/outro"
-import { clamp, clampWatermark, defaultWatermarkSettings, WATERMARK_SCALE_MAX, WATERMARK_SCALE_MIN, type Watermark, type WatermarkSettings } from "@/lib/watermark"
+import {
+  clamp,
+  clampChromaKey,
+  clampWatermark,
+  DEFAULT_CHROMA_KEY,
+  defaultWatermarkSettings,
+  isVideoWatermark,
+  WATERMARK_CHROMA_BLEND_MAX,
+  WATERMARK_CHROMA_BLEND_MIN,
+  WATERMARK_CHROMA_SIMILARITY_MAX,
+  WATERMARK_CHROMA_SIMILARITY_MIN,
+  WATERMARK_SCALE_MAX,
+  WATERMARK_SCALE_MIN,
+  type Watermark,
+  type WatermarkChromaKey,
+  type WatermarkSettings,
+} from "@/lib/watermark"
 import { formatFrameTime, FRAME_DEFAULT_SEC, useFramePreview, type FrameErrorKind } from "@/lib/frame-preview"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
@@ -181,7 +197,7 @@ function Dashboard() {
   const firstReviewedStart = (preview.data?.candidates ?? []).reduce<number | null>((first, candidate) => first === null ? candidate.start : Math.min(first, candidate.start), null)
   const firstManualStart = formValues.ranges.map(({ start }) => Number(start)).find((start) => Number.isFinite(start) && start >= 0)
   const suggestedFrameSec = firstReviewedStart ?? (mode === "manual" ? firstManualStart : null) ?? FRAME_DEFAULT_SEC
-  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam, captions, captionStyle: captions ? captionStyle : null }, suggestedFrameSec)
+  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam }, suggestedFrameSec)
   const initializedPreview = useRef<string | null>(draft?.previewId ?? null)
   const { from, job: selectedJobId } = useSearch({ from: "/" })
   const source = useQuery({ queryKey: ["jobs", from], queryFn: () => api<JobSnapshot>(`/jobs/${from}`), enabled: !!from })
@@ -207,7 +223,7 @@ function Dashboard() {
     setCaptionLanguage(isCaptionLanguage(job.captionLanguage) ? job.captionLanguage : "auto")
     setCaptionStyle(job.captionStyle ? normalizeCaptionStyle(job.captionStyle) : { ...DEFAULT_CAPTION_STYLE })
     setCustomHashtagsInput(formatCustomHashtagsInput(job.customHashtags))
-    setWatermarkSettings(job.watermark ? clampWatermark({ watermarkId: job.watermark.watermarkId, x: job.watermark.x, y: job.watermark.y, scale: job.watermark.scale, opacity: job.watermark.opacity }) : null)
+    setWatermarkSettings(job.watermark ? clampWatermark({ watermarkId: job.watermark.watermarkId, x: job.watermark.x, y: job.watermark.y, scale: job.watermark.scale, opacity: job.watermark.opacity, ...(job.watermark.chromaKey ? { chromaKey: job.watermark.chromaKey } : {}) }) : null)
     outroPrefilled.current = true
     setOutroId(job.outro?.outroId ?? null)
     if (job.ranges?.length) form.setFieldValue("ranges", job.ranges.map(({ start, end, title, reason }) => ({ start: String(start), end: String(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}) })))
@@ -231,7 +247,20 @@ function Dashboard() {
   const watermarkDefaults = useWatermarkDefault()
   const watermarks = useQuery({ queryKey: watermarkKey, queryFn: () => api<Watermark[]>("/watermarks") })
   const chosenWatermark = watermarks.data?.find((item) => item.id === watermarkSettings?.watermarkId)
-  const appliedWatermark = watermarkSettings && chosenWatermark ? clampWatermark(watermarkSettings) : null
+  const chosenWatermarkIsVideo = isVideoWatermark(chosenWatermark)
+  const appliedWatermark = watermarkSettings && chosenWatermark
+    ? clampWatermark(chosenWatermarkIsVideo
+      ? watermarkSettings
+      : { watermarkId: watermarkSettings.watermarkId, x: watermarkSettings.x, y: watermarkSettings.y, scale: watermarkSettings.scale, opacity: watermarkSettings.opacity })
+    : null
+  const activeChromaKey: WatermarkChromaKey = watermarkSettings?.chromaKey ? clampChromaKey(watermarkSettings.chromaKey) : DEFAULT_CHROMA_KEY
+  const updateChromaKey = (patch: Partial<WatermarkChromaKey>) => {
+    setWatermarkSettings((current) => {
+      if (!current) return current
+      const base = current.chromaKey ? clampChromaKey(current.chromaKey) : DEFAULT_CHROMA_KEY
+      return clampWatermark({ ...current, chromaKey: clampChromaKey({ ...base, ...patch }) })
+    })
+  }
   const watermarkRef = useRef<WatermarkSettings | null>(appliedWatermark)
   watermarkRef.current = appliedWatermark
   const watermarkPrefilled = useRef(false)
@@ -354,7 +383,7 @@ function Dashboard() {
     expired: t.frameExpired,
   }
   const frameError = framePreview.errorKind ? frameErrorMessages[framePreview.errorKind] : ""
-  const activeFrame = framePreview.frame && watermarkSettings ? framePreview.frame : null
+  const activeFrame = framePreview.frame
   const embed = getVideoEmbed(formValues.url)
   useEffect(() => {
     setMonitorView(activeFrame ? "frame" : "video")
@@ -366,6 +395,12 @@ function Dashboard() {
     onError: () => setEnhanceError(t.enhanceBriefError),
   })
   const resultJob = selectedJob.data
+  const chromaPresets = [
+    { key: "green" as const, hex: "#00FF00" },
+    { key: "blue" as const, hex: "#0000FF" },
+    { key: "black" as const, hex: "#000000" },
+    { key: "white" as const, hex: "#FFFFFF" },
+  ]
   return <WorkspaceShell user={user}>
     <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,400px)] lg:grid-rows-[minmax(560px,calc(100vh-120px))_auto]">
     <form noValidate onSubmit={submit} className="contents">
@@ -377,6 +412,73 @@ function Dashboard() {
             <ToggleGroupItem value="frame" className="gap-1.5 px-2.5 text-xs data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"><ImageIcon className="size-3.5"/>{t.frameViewFrame}</ToggleGroupItem>
           </ToggleGroup>}
         </div>
+        <div className="shrink-0 border-b border-border bg-secondary/20 px-4 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="frame-time" className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-foreground">
+              <ImageIcon aria-hidden="true" className="size-3.5 text-muted-foreground"/>
+              <span>{t.framePreview}</span>
+            </label>
+            <Input
+              id="frame-time"
+              type="text"
+              inputMode="numeric"
+              placeholder={t.frameTimeHint}
+              aria-label={t.frameTime}
+              aria-invalid={framePreview.parsedSec === null}
+              value={framePreview.timeText}
+              onChange={(event) => framePreview.setTimeText(event.target.value)}
+              className="h-8 w-24 shrink-0 rounded-md bg-background font-mono text-xs tabular-nums"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 px-2.5 text-xs"
+              disabled={!framePreview.hasUrl || framePreview.parsedSec === null || framePreview.running}
+              onClick={() => framePreview.render()}
+            >
+              {framePreview.running ? <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/> : <ImageIcon aria-hidden="true" className="mr-1.5 size-3.5"/>}
+              {t.framePreview}
+            </Button>
+            {framePreview.lastAtSec !== null && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-8 shrink-0 px-2.5 text-xs"
+                disabled={!framePreview.hasUrl || framePreview.running}
+                onClick={() => framePreview.renderAnother()}
+              >
+                {t.frameAnother}
+              </Button>
+            )}
+            <div className="ml-auto flex min-w-0 items-center gap-2">
+              {framePreview.stale && !framePreview.running ? (
+                <span role="status" className="truncate text-[11px] font-medium text-accent">{t.frameStale}</span>
+              ) : activeFrame && !framePreview.running ? (
+                <Badge variant="secondary" className="font-mono text-[10px] tabular-nums">{t.frameViewFrame} · {formatFrameTime(activeFrame.atSec)}</Badge>
+              ) : !framePreview.hasUrl ? (
+                <span className="truncate text-[11px] text-muted-foreground">{t.frameNeedUrl}</span>
+              ) : !framePreview.running ? (
+                <span className="hidden truncate text-[11px] text-muted-foreground xl:inline">{t.framePreviewHint}</span>
+              ) : null}
+            </div>
+          </div>
+          {framePreview.parsedSec === null && <p className="mt-1.5 text-[11px] text-destructive">{t.frameTimeInvalid}</p>}
+          {framePreview.running && (
+            <div role="status" className="mt-2 flex items-center gap-2.5 rounded-md border border-border/70 bg-background px-2.5 py-1.5">
+              <Skeleton className="size-6 shrink-0 rounded-sm"/>
+              <div className="min-w-0">
+                <span className="flex items-center gap-1.5 text-xs font-medium">
+                  <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-accent motion-reduce:animate-none"/>
+                  {framePreview.queued ? t.frameQueued : t.frameRendering}
+                </span>
+                <span className="block text-[11px] text-muted-foreground">{t.frameRenderingHint}</span>
+              </div>
+            </div>
+          )}
+          {frameError && <Alert variant="destructive" className="mt-2 px-2.5 py-1.5"><AlertDescription className="text-xs">{frameError}</AlertDescription></Alert>}
+        </div>
         <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted p-4">
           <div className={`relative aspect-video w-full max-w-full overflow-hidden shadow-xl ${embed && monitorView === "video" ? "bg-black" : "border border-border bg-[radial-gradient(ellipse_at_center,var(--monitor-empty-center),var(--monitor-empty-edge))]"}`}>
             {monitorView === "frame" && activeFrame ? <>
@@ -385,11 +487,26 @@ function Dashboard() {
                 watermark={chosenWatermark}
                 settings={appliedWatermark}
                 onChange={(next) => setWatermarkSettings(clampWatermark(next))}
+                captions={captions}
+                captionStyle={captionStyle}
+                twoSpeakers={twoSpeakers}
+                onCaptionStyleChange={setCaptionStyle}
                 frame={{ imageUrl: activeFrame.imageUrl, width: activeFrame.width, height: activeFrame.height, alt: t.frameImageAlt.replace("{time}", formatFrameTime(activeFrame.atSec)), caption: `${activeFrame.width}×${activeFrame.height} · ${formatFrameTime(activeFrame.atSec)}`, busy: framePreview.running, onImageError: () => framePreview.markImageBroken(activeFrame.id) }}
               />
             </> : <>
               {embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0"/> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play className="ml-1 size-5"/></span><p className="font-display text-lg text-foreground">{t.sourceStatement}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.pasteToPreview}</p></div></div>}
-              {appliedWatermark && <WatermarkOverlay aspectRatio={aspectRatio} watermark={chosenWatermark} settings={appliedWatermark} onChange={(next) => setWatermarkSettings(clampWatermark(next))}/>}
+              {(appliedWatermark || (captions && embed)) && (
+                <WatermarkOverlay
+                  aspectRatio={aspectRatio}
+                  watermark={chosenWatermark}
+                  settings={appliedWatermark}
+                  onChange={(next) => setWatermarkSettings(clampWatermark(next))}
+                  captions={captions}
+                  captionStyle={captionStyle}
+                  twoSpeakers={twoSpeakers}
+                  onCaptionStyleChange={setCaptionStyle}
+                />
+              )}
             </>}
           </div>
         </div>
@@ -415,23 +532,86 @@ function Dashboard() {
                <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.scale * 100)}%</span></div><input id="watermark-size" type="range" min={WATERMARK_SCALE_MIN} max={WATERMARK_SCALE_MAX} step={0.01} value={watermarkSettings.scale} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, scale: clamp(Number(event.target.value), WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
                <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-opacity" className="text-xs font-normal text-muted-foreground">{t.watermarkOpacity}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(watermarkSettings.opacity * 100)}%</span></div><input id="watermark-opacity" type="range" min={0.1} max={1} step={0.05} value={watermarkSettings.opacity} onChange={(event) => setWatermarkSettings((current) => current ? { ...current, opacity: clamp(Number(event.target.value), 0.1, 1) } : current)} className="h-5 w-full cursor-pointer accent-accent"/></div>
                <p className="text-xs leading-relaxed text-muted-foreground">{t.watermarkPositionHint}</p>
-               <Field className="space-y-2 rounded-lg border border-border/70 bg-card/60 p-2.5">
-                 <div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="frame-time" className="text-xs font-medium text-foreground">{t.framePreview}</FieldLabel>{framePreview.frame && !framePreview.running && <Badge variant="secondary" className="text-[10px] font-mono tabular-nums">{t.frameViewFrame} · {formatFrameTime(framePreview.frame.atSec)}</Badge>}</div>
-                 <FieldDescription className="text-xs leading-relaxed">{t.framePreviewHint}</FieldDescription>
-                 <div className="flex items-center gap-2">
-                   <Input id="frame-time" type="text" inputMode="numeric" placeholder={t.frameTimeHint} aria-label={t.frameTime} aria-invalid={framePreview.parsedSec === null} value={framePreview.timeText} onChange={(event) => framePreview.setTimeText(event.target.value)} className="h-9 min-w-0 flex-1 rounded-md font-mono text-sm tabular-nums"/>
-                   <Button type="button" variant="outline" size="sm" className="h-9 shrink-0" disabled={!framePreview.hasUrl || framePreview.parsedSec === null || framePreview.running} onClick={() => framePreview.render()}>{framePreview.running ? <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/> : <ImageIcon aria-hidden="true" className="mr-1.5 size-3.5"/>}{t.framePreview}</Button>
-                 </div>
-                 <div className="flex items-center justify-between gap-2">
-                   <span className="text-[11px] text-muted-foreground">{t.frameTimeHint}</span>
-                   {framePreview.lastAtSec !== null && <Button type="button" variant="secondary" size="sm" className="h-7 shrink-0 px-2.5 text-xs" disabled={!framePreview.hasUrl || framePreview.running} onClick={() => framePreview.renderAnother()}>{t.frameAnother}</Button>}
-                 </div>
-                 {framePreview.parsedSec === null && <p className="text-[11px] text-destructive">{t.frameTimeInvalid}</p>}
-                 {!framePreview.hasUrl && <p className="text-[11px] text-muted-foreground">{t.frameNeedUrl}</p>}
-                 {framePreview.running && <div role="status" className="flex items-center gap-2.5 rounded-md border border-border/70 bg-background px-2.5 py-2"><Skeleton className="size-8 shrink-0 rounded-sm"/><div className="min-w-0"><span className="flex items-center gap-1.5 text-xs font-medium"><LoaderCircle aria-hidden="true" className="size-3 animate-spin text-accent motion-reduce:animate-none"/>{framePreview.queued ? t.frameQueued : t.frameRendering}</span><span className="block text-[11px] text-muted-foreground">{t.frameRenderingHint}</span></div></div>}
-                 {framePreview.stale && !framePreview.running && <p role="status" className="text-[11px] text-accent">{t.frameStale}</p>}
-                 {frameError && <Alert variant="destructive" className="px-2.5 py-2"><AlertDescription className="text-xs">{frameError}</AlertDescription></Alert>}
-               </Field>
+               {chosenWatermarkIsVideo && (
+                 <Field className="relative space-y-2.5 rounded-lg border border-border/70 bg-card/60 p-2.5">
+                   <div className="relative flex items-center justify-between gap-2">
+                     <FieldLabel htmlFor="watermark-chroma-enabled" className="text-xs font-medium text-foreground">{t.watermarkChromaKey}</FieldLabel>
+                     <Switch
+                       id="watermark-chroma-enabled"
+                       aria-label={t.watermarkChromaKey}
+                       checked={activeChromaKey.enabled}
+                       onCheckedChange={(enabled) => updateChromaKey({ enabled })}
+                     />
+                   </div>
+                   <FieldDescription className="text-[11px] leading-relaxed">{t.watermarkChromaKeyHint}</FieldDescription>
+                   {activeChromaKey.enabled && (
+                     <div className="space-y-3 border-t border-border/60 pt-2.5">
+                       <div className="flex items-center justify-between gap-2">
+                         <label htmlFor="watermark-chroma-color" className="text-xs text-muted-foreground">{t.watermarkChromaColor}</label>
+                         <div className="flex items-center gap-1.5">
+                           {chromaPresets.map((preset) => {
+                             const selected = activeChromaKey.color.toUpperCase() === preset.hex
+                             return (
+                               <button
+                                 key={preset.key}
+                                 type="button"
+                                 aria-label={`${t.watermarkChromaColor}: ${t.watermarkChromaPresets[preset.key]}`}
+                                 title={t.watermarkChromaPresets[preset.key]}
+                                 aria-pressed={selected}
+                                 onClick={() => updateChromaKey({ color: preset.hex })}
+                                 className={`size-5 rounded-full border border-black/20 transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-ring dark:border-white/20 ${selected ? "ring-2 ring-accent ring-offset-1 ring-offset-background" : ""}`}
+                                 style={{ backgroundColor: preset.hex }}
+                               />
+                             )
+                           })}
+                           <input
+                             id="watermark-chroma-color"
+                             type="color"
+                             value={activeChromaKey.color}
+                             onChange={(event) => updateChromaKey({ color: event.target.value.toUpperCase() })}
+                             aria-label={t.watermarkChromaColor}
+                             className="size-6 cursor-pointer rounded-full border-0 bg-transparent p-0"
+                           />
+                           <span className="font-mono text-[11px] tabular-nums text-foreground">{activeChromaKey.color}</span>
+                         </div>
+                       </div>
+                       <div className="space-y-1.5">
+                         <div className="flex items-center justify-between gap-2">
+                           <FieldLabel htmlFor="watermark-chroma-similarity" className="text-xs font-normal text-muted-foreground">{t.watermarkChromaSimilarity}</FieldLabel>
+                           <span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeChromaKey.similarity * 100)}%</span>
+                         </div>
+                         <input
+                           id="watermark-chroma-similarity"
+                           type="range"
+                           min={WATERMARK_CHROMA_SIMILARITY_MIN}
+                           max={WATERMARK_CHROMA_SIMILARITY_MAX}
+                           step={0.01}
+                           value={activeChromaKey.similarity}
+                           onChange={(event) => updateChromaKey({ similarity: Number(event.target.value) })}
+                           className="h-5 w-full cursor-pointer accent-accent"
+                         />
+                       </div>
+                       <div className="space-y-1.5">
+                         <div className="flex items-center justify-between gap-2">
+                           <FieldLabel htmlFor="watermark-chroma-blend" className="text-xs font-normal text-muted-foreground">{t.watermarkChromaBlend}</FieldLabel>
+                           <span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeChromaKey.blend * 100)}%</span>
+                         </div>
+                         <input
+                           id="watermark-chroma-blend"
+                           type="range"
+                           min={WATERMARK_CHROMA_BLEND_MIN}
+                           max={WATERMARK_CHROMA_BLEND_MAX}
+                           step={0.01}
+                           value={activeChromaKey.blend}
+                           onChange={(event) => updateChromaKey({ blend: Number(event.target.value) })}
+                           className="h-5 w-full cursor-pointer accent-accent"
+                         />
+                       </div>
+                     </div>
+                   )}
+                   <p className="text-[11px] leading-relaxed text-muted-foreground">{t.watermarkVideoLoopNote}</p>
+                 </Field>
+               )}
                <Button type="button" variant="outline" size="sm" className="w-full rounded-md" disabled={saveWatermarkDefault.isPending || !appliedWatermark} onClick={() => saveWatermarkDefault.mutate(appliedWatermark)}>{saveWatermarkDefault.isPending && <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/>}{t.watermarkSaveDefault}</Button>
              </div>}
              {watermarkError && <p role="alert" className="mt-2 text-xs text-destructive">{watermarkError}</p>}

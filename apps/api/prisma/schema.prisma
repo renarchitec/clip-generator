@@ -94,16 +94,17 @@ model Job {
 }
 
 model Watermark {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name      String
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
   /// relatif terhadap CLIPS_DIR, mis. watermarks/<userId>/<id>.png
-  filePath  String
-  mimeType  String
-  width     Int
-  height    Int
-  createdAt DateTime @default(now())
+  filePath    String
+  mimeType    String
+  width       Int
+  height      Int
+  durationSec Float?
+  createdAt   DateTime @default(now())
 
   @@index([userId])
   @@map("watermarks")

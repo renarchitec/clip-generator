@@ -20,8 +20,10 @@ import { LlmStatus } from "@/components/llm-status"
 import { JobAssembly } from "@/components/job-assembly"
 import { ClipCard, ClipCardGrid } from "@/components/clip-card"
 import { useWatermarkLibrary } from "@/components/watermark-manager"
+import { WatermarkMedia } from "@/components/watermark-media"
 import { useOutroLibrary } from "@/components/outro-manager"
 import { formatOutroDuration } from "@/lib/outro"
+import { isVideoWatermark } from "@/lib/watermark"
 
 export const Route = createFileRoute("/jobs/$jobId")({
   beforeLoad: async ({ location }) => {
@@ -239,7 +241,7 @@ function JobDetail() {
                     <FieldTitle>{t.captionStyle}</FieldTitle>
                     <div className="mt-2 rounded-md border border-border bg-muted/40 p-3">
                       <div className="flex items-center justify-between gap-2"><Badge variant="secondary" className="text-[10px]">{t.captionPresetNames[detectCaptionPreset(captionStyle)]}</Badge><span className="font-mono text-xs tabular-nums text-foreground">{captionStyle.fontFamily} · {captionStyle.fontSize}px</span></div>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t.captionEffect}: {t.captionEffectNames[captionStyle.effect]}</span><span>{t.captionPosition}: {t.captionPositionNames[captionStyle.position]}</span></div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t.captionEffect}: {t.captionEffectNames[captionStyle.effect]}</span><span>{t.captionPosition}: {captionStyle.positionY != null ? `Y ${Math.round(captionStyle.positionY * 100)}%` : t.captionPositionNames[captionStyle.position]}</span></div>
                       <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground"><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.primaryColor }} />{t.captionPrimaryColor}</span><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.highlightColor }} />{t.captionHighlightColor}</span></div>
                     </div>
                   </Field>
@@ -272,17 +274,35 @@ function JobDetail() {
                   <FieldDescription>{t.customHashtagsHint}</FieldDescription>
                 </Field>}
 
-                {snapshot.watermark && <Field>
-                   <FieldTitle>{t.watermark}</FieldTitle>
-                   <div className="mt-2 flex items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
-                     <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border bg-background text-xs text-muted-foreground">{watermarks.data?.find((item) => item.id === snapshot.watermark?.watermarkId) ? <img src={watermarks.data.find((item) => item.id === snapshot.watermark?.watermarkId)?.url} alt="" className="size-full object-contain"/> : "—"}</span>
-                     <div className="min-w-0 flex-1 font-mono text-xs tabular-nums text-foreground">
-                       <p>{t.watermarkPosition}: {Math.round(snapshot.watermark.x * 100)}%, {Math.round(snapshot.watermark.y * 100)}%</p>
-                       <p>{t.watermarkSize}: {Math.round(snapshot.watermark.scale * 100)}% · {t.watermarkOpacity}: {Math.round(snapshot.watermark.opacity * 100)}%</p>
-                       {snapshot.watermark.filePath && <p className="mt-0.5 truncate text-muted-foreground" title={snapshot.watermark.filePath}>{snapshot.watermark.filePath}</p>}
-                     </div>
-                   </div>
-                 </Field>}
+                {snapshot.watermark && (() => {
+                  const matchedWatermark = watermarks.data?.find((item) => item.id === snapshot.watermark?.watermarkId)
+                  const isVideo = isVideoWatermark(matchedWatermark) || !!snapshot.watermark.mimeType?.startsWith("video/")
+                  const hasChromaKey = Boolean(snapshot.watermark.chromaKey?.enabled)
+                  return <Field>
+                    <FieldTitle>{t.watermark}</FieldTitle>
+                    <div className="mt-2 flex items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
+                      <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border bg-background text-xs text-muted-foreground">
+                        {matchedWatermark ? <WatermarkMedia watermark={matchedWatermark} chromaKey={snapshot.watermark.chromaKey} compact className="size-full"/> : "—"}
+                      </span>
+                      <div className="min-w-0 flex-1 font-mono text-xs tabular-nums text-foreground">
+                        {(isVideo || hasChromaKey) && (
+                          <div className="mb-1 flex flex-wrap items-center gap-1.5 font-sans">
+                            {isVideo && <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">{t.watermarkVideoBadge}</Badge>}
+                            {hasChromaKey && snapshot.watermark.chromaKey && (
+                              <Badge variant="secondary" className="h-4 gap-1 px-1.5 text-[10px]">
+                                <span aria-hidden="true" className="size-2 rounded-full border border-black/20" style={{ backgroundColor: snapshot.watermark.chromaKey.color }} />
+                                {t.watermarkChromaKeyBadge}
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                        <p>{t.watermarkPosition}: {Math.round(snapshot.watermark.x * 100)}%, {Math.round(snapshot.watermark.y * 100)}%</p>
+                        <p>{t.watermarkSize}: {Math.round(snapshot.watermark.scale * 100)}% · {t.watermarkOpacity}: {Math.round(snapshot.watermark.opacity * 100)}%</p>
+                        {snapshot.watermark.filePath && <p className="mt-0.5 truncate text-muted-foreground" title={snapshot.watermark.filePath}>{snapshot.watermark.filePath}</p>}
+                      </div>
+                    </div>
+                  </Field>
+                })()}
 
                  {snapshot.outro && <Field>
                    <FieldTitle>{t.outro}</FieldTitle>

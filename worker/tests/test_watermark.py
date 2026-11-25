@@ -1,4 +1,4 @@
-"""Uji watermark gambar: parse payload, clamp, graph filter tiap jalur, smoke ffmpeg."""
+"""Uji watermark gambar/video: parse payload, clamp, graph filter, smoke ffmpeg."""
 
 import os
 import shutil
@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from clipper import pipeline
-from clipper.models import JobData, Watermark, job_data_from_dict
+from clipper.models import JobData, Watermark, WatermarkChromaKey, job_data_from_dict
 
 BASE = {"jobId": "abc", "url": "https://youtu.be/x"}
 MOMENT = pipeline.llm.Moment(0.0, 4.0, "t")
@@ -65,6 +65,35 @@ def test_watermark_clamps_and_defaults():
     assert (wm.x, wm.y, wm.scale, wm.opacity) == (0.5, 0.5, 0.25, 1.0)
 
 
+def test_watermark_chroma_key_defaults_and_validation():
+    parse = WatermarkChromaKey.from_dict
+    assert parse(None) is None
+    assert parse([]) is None
+    assert parse({}) == WatermarkChromaKey()
+    assert parse({"enabled": "true", "color": "#00FF00\n", "similarity": float("nan"), "blend": "bad"}) == WatermarkChromaKey()
+    assert parse({"enabled": True, "color": "#0000ff", "similarity": -1, "blend": 2}) == WatermarkChromaKey(True, "#0000FF", 0.01, 0.5)
+    assert parse({"similarity": 2, "blend": -1}) == WatermarkChromaKey(similarity=0.5, blend=0.0)
+
+
+@pytest.mark.parametrize("payload", [
+    {"filePath": "w.asset", "mimeType": "video/webm", "chromaKey": {"enabled": True}},
+    {"file_path": "w.asset", "mime_type": "video/webm", "chroma_key": {"enabled": True}},
+])
+def test_watermark_parses_video_fields(payload):
+    watermark = Watermark.from_dict(payload)
+    assert watermark == Watermark("w.asset", mime_type="video/webm", chroma_key=WatermarkChromaKey(enabled=True))
+    assert Watermark.from_dict(watermark.to_dict()) == watermark
+
+
+@pytest.mark.parametrize(("path", "mime_type", "expected"), [
+    ("w.png", "image/png", False), ("w.jpg", None, False),
+    ("w.MP4", None, True), ("w.WeBm", None, True), ("w.mov", "image/png", True),
+    ("w.asset", "VIDEO/MP4", True),
+])
+def test_watermark_is_video(path, mime_type, expected):
+    assert Watermark(path, mime_type=mime_type).is_video is expected
+
+
 # ---------- resolusi path ----------
 
 def test_resolve_path_ok_missing_and_traversal(tmp_path):
@@ -114,6 +143,43 @@ def test_watermark_chain_uses_output_width_per_ratio():
     wm = Watermark("a.png", scale=0.25)
     assert "scale=w=480:h=-2" in pipeline._watermark_chain(1920, 1080, wm)  # 16:9
     assert "scale=w=270:h=-2" in pipeline._watermark_chain(1080, 1920, wm)  # 9:16
+
+
+@pytest.mark.parametrize(("path", "mime", "codec", "decoder", "should_probe"), [
+    ("w.png", None, None, [], False),
+    ("w.mp4", None, None, [], False),
+    ("w.mov", "video/quicktime", None, [], False),
+    ("w.WEBM", None, "vp9", ["-c:v", "libvpx-vp9"], True),
+    ("w.asset", "VIDEO/WEBM", "vp8", ["-c:v", "libvpx"], True),
+    ("w.webm", None, None, [], True),
+])
+def test_watermark_input_args(path, mime, codec, decoder, should_probe):
+    wm = Watermark(path, mime_type=mime)
+    with patch.object(pipeline, "_probe_video_codec", return_value=codec) as probe:
+        args = pipeline._watermark_input_args(path, 3.5, wm)
+    if should_probe:
+        probe.assert_called_once_with(path)
+    else:
+        probe.assert_not_called()
+    if wm.is_video:
+        assert args == [*decoder, "-stream_loop", "-1", "-t", "3.500", "-an", "-i", path]
+    else:
+        assert args == ["-loop", "1", "-t", "3.500", "-i", path]
+
+
+@pytest.mark.parametrize(("path", "key_color", "expected"), [
+    ("w.mp4", None, "setpts=PTS-STARTPTS,"),
+    ("w.mp4", "#00FF00", "setpts=PTS-STARTPTS,chromakey=color=0x00FF00:similarity=0.180:blend=0.080,despill=type=green,"),
+    ("w.webm", "#0000FF", "setpts=PTS-STARTPTS,chromakey=color=0x0000FF:similarity=0.180:blend=0.080,despill=type=blue,"),
+    ("w.mov", "#000000", "setpts=PTS-STARTPTS,colorkey=color=0x000000:similarity=0.180:blend=0.080,"),
+    ("w.png", "#FFFFFF", "colorkey=color=0xFFFFFF:similarity=0.180:blend=0.080,"),
+])
+def test_watermark_chain_video_or_chroma_key(path, key_color, expected):
+    chroma_key = WatermarkChromaKey(enabled=True, color=key_color) if key_color else WatermarkChromaKey()
+    wm = Watermark(path, opacity=0.5, chroma_key=chroma_key)
+    assert pipeline._watermark_chain(1080, 1920, wm) == (
+        f"[1:v]{expected}scale=w=270:h=-2,format=rgba,colorchannelmixer=aa=0.500[wm]"
+    )
 
 
 def _capture(tmp_path, **kwargs):
@@ -422,3 +488,65 @@ def test_ffmpeg_smoke_renders_with_watermark(tmp_path, ratio):
 
     assert inside > 20, f"watermark tidak terlihat (diff={inside:.1f})"
     assert inside > outside * 5, f"watermark bocor keluar area (in={inside:.1f}, out={outside:.1f})"
+
+
+def _require_ffmpeg_encoders(*names):
+    available = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True,
+    ).stdout
+    encoders = {parts[1] for line in available.splitlines() if len(parts := line.split()) > 2}
+    missing = set(names) - encoders
+    if missing:
+        pytest.skip(f"FFmpeg encoders unavailable: {', '.join(sorted(missing))}")
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("ext", "encoder", "encode_args"), [
+    ("mp4", "libx264", ["-pix_fmt", "yuv420p"]),
+    ("webm", "libvpx-vp9", ["-pix_fmt", "yuva420p", "-auto-alt-ref", "0"]),
+    ("mov", "prores_ks", ["-profile:v", "4444", "-pix_fmt", "yuva444p10le"]),
+])
+def test_ffmpeg_smoke_video_watermark_loops_with_chroma_or_alpha(tmp_path, monkeypatch, ext, encoder, encode_args):
+    _require_ffmpeg_encoders("libx264", encoder)
+    src = tmp_path / "blue.mp4"
+    overlay = tmp_path / f"wm.{ext}"
+    options = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+    subprocess.run(
+        [*options, "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=20:d=3",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)],
+        check=True, timeout=30,
+    )
+    # Move the opaque red box halfway through the one-second video. Sampling both
+    # phases of each loop detects frozen frames as well as a truncated overlay.
+    keyed = ext == "mp4"
+    background = "lime" if keyed else "black@0.0"
+    pattern = (
+        f"color=c={background}:s=160x90:r=20:d=1,format=rgba,"
+        "drawbox=x=44:y=29:w=32:h=32:color=red:t=fill:replace=1:enable='lt(t,0.5)',"
+        "drawbox=x=84:y=29:w=32:h=32:color=red:t=fill:replace=1:enable='gte(t,0.5)'"
+    )
+    subprocess.run(
+        [*options, "-f", "lavfi", "-i", pattern, "-c:v", encoder, *encode_args, str(overlay)],
+        check=True, timeout=30,
+    )
+
+    monkeypatch.setitem(pipeline.OUTPUT_SIZES, "16:9", (320, 180))
+    watermark = Watermark(
+        overlay.name, scale=0.5,
+        chroma_key=WatermarkChromaKey(enabled=True) if keyed else None,
+    )
+    out = tmp_path / "out.mp4"
+    pipeline._render_one(
+        str(src), pipeline.llm.Moment(0.0, 3.0, "t"), [], str(tmp_path), out.name,
+        reframe="black_bars", captions=False, aspect_ratio="16:9", watermark=watermark,
+        watermark_path=str(overlay), run_timeout=30,
+    )
+    assert _probe_duration(str(out)) == pytest.approx(3.0, abs=0.05)
+    for cycle in range(3):
+        for phase, red_x, blue_x in ((0.2, 140, 180), (0.7, 180, 140)):
+            at = cycle + phase
+            frame, _, _ = _frame_rgb(str(out), at=at)
+            assert tuple(frame[90, red_x]) == pytest.approx((255, 0, 0), abs=25), (ext, at)
+            # Both samples are inside the watermark's bounds, so source blue
+            # must come from chroma keying or the preserved alpha channel.
+            assert tuple(frame[90, blue_x]) == pytest.approx((0, 0, 255), abs=25), (ext, at)

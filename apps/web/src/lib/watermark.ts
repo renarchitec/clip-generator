@@ -1,23 +1,56 @@
 import type { AspectRatio } from "@/lib/api"
 
-export type Watermark = { id: string; name: string; width: number; height: number; mimeType: string; createdAt: string; url: string }
-export type WatermarkSettings = { watermarkId: string; x: number; y: number; scale: number; opacity: number }
-export type JobWatermark = WatermarkSettings & { filePath: string | null }
+export type WatermarkKind = "image" | "video"
+export type WatermarkChromaKey = { enabled: boolean; color: string; similarity: number; blend: number }
+export const DEFAULT_CHROMA_KEY: WatermarkChromaKey = { enabled: false, color: "#00FF00", similarity: 0.18, blend: 0.08 }
+export const WATERMARK_CHROMA_SIMILARITY_MIN = 0.01
+export const WATERMARK_CHROMA_SIMILARITY_MAX = 0.5
+export const WATERMARK_CHROMA_BLEND_MIN = 0
+export const WATERMARK_CHROMA_BLEND_MAX = 0.5
+
+export type Watermark = { id: string; name: string; width: number; height: number; mimeType: string; kind?: WatermarkKind; durationSec?: number | null; createdAt: string; url: string }
+export type WatermarkSettings = { watermarkId: string; x: number; y: number; scale: number; opacity: number; chromaKey?: WatermarkChromaKey | null }
+export type JobWatermark = WatermarkSettings & { filePath: string | null; mimeType?: string }
 
 export const WATERMARK_SCALE_MIN = 0.03
 export const WATERMARK_SCALE_MAX = 1
 export const WATERMARK_OPACITY_MIN = 0.1
 
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+const VIDEO_EXT_RE = /\.(mp4|webm|mov)$/i
+
 export const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
-export function clampWatermark(settings: WatermarkSettings): WatermarkSettings {
+export function isVideoWatermark(watermark: Pick<Watermark, "mimeType" | "kind"> | undefined): boolean {
+  return watermark?.kind === "video" || !!watermark?.mimeType?.startsWith("video/")
+}
+
+export function clampChromaKey(chromaKey: WatermarkChromaKey): WatermarkChromaKey {
+  const color = typeof chromaKey.color === "string" && HEX_COLOR_RE.test(chromaKey.color.trim())
+    ? chromaKey.color.trim().toUpperCase()
+    : DEFAULT_CHROMA_KEY.color
   return {
+    enabled: Boolean(chromaKey.enabled),
+    color,
+    similarity: clamp(Number.isFinite(chromaKey.similarity) ? chromaKey.similarity : DEFAULT_CHROMA_KEY.similarity, WATERMARK_CHROMA_SIMILARITY_MIN, WATERMARK_CHROMA_SIMILARITY_MAX),
+    blend: clamp(Number.isFinite(chromaKey.blend) ? chromaKey.blend : DEFAULT_CHROMA_KEY.blend, WATERMARK_CHROMA_BLEND_MIN, WATERMARK_CHROMA_BLEND_MAX),
+  }
+}
+
+export function clampWatermark(settings: WatermarkSettings): WatermarkSettings {
+  const clamped: WatermarkSettings = {
     ...settings,
     x: clamp(settings.x, 0, 1),
     y: clamp(settings.y, 0, 1),
     scale: clamp(settings.scale, WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX),
     opacity: clamp(settings.opacity, WATERMARK_OPACITY_MIN, 1),
   }
+  if (settings.chromaKey) {
+    clamped.chromaKey = clampChromaKey(settings.chromaKey)
+  } else if (settings.chromaKey === null) {
+    clamped.chromaKey = null
+  }
+  return clamped
 }
 
 export function defaultWatermarkSettings(id: string): WatermarkSettings {
@@ -67,10 +100,17 @@ export async function trimTransparentPadding(file: File): Promise<File> {
   }
 }
 
+function isVideoUploadFile(file: File): boolean {
+  return file.type === "video/mp4" || file.type === "video/webm" || file.type === "video/quicktime" || file.type.startsWith("video/") || VIDEO_EXT_RE.test(file.name)
+}
+
 export async function uploadWatermark(file: File, name?: string): Promise<Watermark> {
   // The shared api() helper forces JSON content-type; FormData must set its own boundary.
   const body = new FormData()
-  body.append("file", await trimTransparentPadding(file))
+  const prepared = !isVideoUploadFile(file) && (file.type === "image/png" || file.type === "image/webp")
+    ? await trimTransparentPadding(file)
+    : file
+  body.append("file", prepared)
   if (name?.trim()) body.append("name", name.trim())
   const response = await fetch("/api/watermarks", { method: "POST", body, credentials: "same-origin" })
   const data: unknown = await response.json().catch(() => null)

@@ -99,6 +99,8 @@ export type CaptionPreset = (typeof CAPTION_PRESETS)[number];
 export const CAPTION_FONT_SIZE_MIN = 44;
 export const CAPTION_FONT_SIZE_MAX = 120;
 export const DEFAULT_CAPTION_FONT_SIZE = 80;
+export const CAPTION_POSITION_Y_MIN = 0.05;
+export const CAPTION_POSITION_Y_MAX = 0.95;
 
 export interface CaptionStyle {
   preset: CaptionPreset;
@@ -114,6 +116,8 @@ export interface CaptionStyle {
   effect: CaptionEffect;
   uppercase: boolean;
   position: CaptionPosition;
+  /** Posisi vertikal kustom (0.05..0.95 dari tinggi frame, dari atas); absen/null = ikuti preset position. */
+  positionY?: number | null;
   italic: boolean;
 }
 
@@ -142,9 +146,13 @@ export function normalizeCaptionStyle(raw: unknown): CaptionStyle | null {
   if (typeof value.effect === 'string' && (CAPTION_EFFECTS as readonly string[]).includes(value.effect)) result.effect = value.effect as CaptionEffect;
   if (typeof value.uppercase === 'boolean') result.uppercase = value.uppercase;
   if (typeof value.position === 'string' && (CAPTION_POSITIONS as readonly string[]).includes(value.position)) result.position = value.position as CaptionPosition;
+  if (typeof value.positionY === 'number' && Number.isFinite(value.positionY)) {
+    const clamped = Math.max(CAPTION_POSITION_Y_MIN, Math.min(CAPTION_POSITION_Y_MAX, value.positionY));
+    result.positionY = Math.round(clamped * 10000) / 10000;
+  }
   if (typeof value.italic === 'boolean') result.italic = value.italic;
   const fields: (keyof Omit<CaptionStyle, 'preset'>)[] = ['fontFamily', 'fontSize', 'primaryColor', 'highlightColor', 'outlineColor', 'effect', 'uppercase', 'position', 'italic'];
-  result.preset = (Object.keys(CAPTION_PRESET_STYLES) as Exclude<CaptionPreset, 'custom'>[]).find((preset) => fields.every((field) => result[field] === CAPTION_PRESET_STYLES[preset][field])) ?? 'custom';
+  result.preset = (Object.keys(CAPTION_PRESET_STYLES) as Exclude<CaptionPreset, 'custom'>[]).find((preset) => result.positionY === undefined && fields.every((field) => result[field] === CAPTION_PRESET_STYLES[preset][field])) ?? 'custom';
   return result;
 }
 

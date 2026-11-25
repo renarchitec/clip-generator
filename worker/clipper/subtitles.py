@@ -334,6 +334,7 @@ def write_ass(
     - two_speakers=True: Alignment 5 (tengah frame, tepat di batas panel atas/bawah),
       margin_v di-reset ke 0.
     - two_speakers=False: Alignment 2 (bawah tengah), margin_v aman >=18% tinggi frame.
+    - style.position_y mengatur pusat takarir secara eksplisit dan mengabaikan margin vertikal.
     - max_words/max_chars mengatur pemecahan baris (16:9 memakai 6 kata / 32 karakter).
     - Format teks: tiap jendela kata memancarkan satu Dialogue event non-overlapping
       berisi seluruh kata chunk dengan kata aktif berformat {\\c&H00FFFF&}...{\\c&HFFFFFF&}.
@@ -360,6 +361,10 @@ def write_ass(
             alignment, safe_margin_v = 8, max(int(margin_v), int(height * 0.12))
         else:
             alignment, safe_margin_v = 2, max(int(margin_v), int(height * 0.18))
+    pos_tag = ""
+    if style is not None and style.position_y is not None:
+        alignment, safe_margin_v = 5, 0
+        pos_tag = f"\\an5\\pos({round(width / 2)},{round(height * style.position_y)})"
     ass_style = f"Style: Default,{font_name},{int(font_size)},{primary_col},{highlight_col},{outline_col},{back_col},-1,{italic_flag},0,0,100,100,0,0,{border_style},{outline},{shadow},{alignment},80,80,{safe_margin_v},1"
 
     lines = [
@@ -383,12 +388,18 @@ def write_ass(
     ]
 
     for part in _render_cue_parts(cues, max_words, max_chars):
-        _write_cue_part(part, lines, uppercase=uppercase, primary_col=primary_col, highlight_col=highlight_col)
+        _write_cue_part(
+            part, lines, uppercase=uppercase, primary_col=primary_col,
+            highlight_col=highlight_col, pos_tag=pos_tag,
+        )
 
     return "\n".join(lines) + "\n"
 
 
-def _write_cue_part(cue: Cue, lines: List[str], uppercase: bool = True, primary_col: str = TEXT_COLOUR, highlight_col: str = HIGHLIGHT_COLOUR) -> None:
+def _write_cue_part(
+    cue: Cue, lines: List[str], uppercase: bool = True, primary_col: str = TEXT_COLOUR,
+    highlight_col: str = HIGHLIGHT_COLOUR, pos_tag: str = "",
+) -> None:
     if cue.end <= cue.start:
         return
     words = cue_to_words(cue)
@@ -416,7 +427,7 @@ def _write_cue_part(cue: Cue, lines: List[str], uppercase: bool = True, primary_
             else:
                 rendered_words.append(word_text)
 
-        text_line = " ".join(rendered_words)
+        text_line = (f"{{{pos_tag}}}" if pos_tag else "") + " ".join(rendered_words)
         lines.append(
             f"Dialogue: 0,{_timestamp(seg_start)},{_timestamp(seg_end)},Default,,0,0,0,,{text_line}"
         )

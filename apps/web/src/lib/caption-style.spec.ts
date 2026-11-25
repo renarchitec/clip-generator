@@ -2,11 +2,14 @@ import assert from "node:assert/strict"
 import {
   CAPTION_FONT_SIZE_MAX,
   CAPTION_FONT_SIZE_MIN,
+  CAPTION_POSITION_Y_MAX,
+  CAPTION_POSITION_Y_MIN,
   CAPTION_PRESET_STYLES,
   DEFAULT_CAPTION_STYLE,
   detectCaptionPreset,
   isDefaultCaptionStyle,
   normalizeCaptionStyle,
+  resolveCaptionY,
   updateCaptionStyle,
 } from "./caption-style.ts"
 
@@ -73,5 +76,35 @@ const reverted = updateCaptionStyle(customized, { fontSize: 68 })
 assert.equal(reverted.preset, "boxed")
 assert.equal(isDefaultCaptionStyle(DEFAULT_CAPTION_STYLE), true)
 assert.equal(isDefaultCaptionStyle(reverted), false)
+
+// 6. positionY clamping, rounding, omission, and custom preset detection
+const withPositionY = normalizeCaptionStyle({ ...CAPTION_PRESET_STYLES.hook, positionY: 0.623456 })
+assert.equal(withPositionY.positionY, 0.6235)
+assert.equal(withPositionY.preset, "custom")
+assert.equal(detectCaptionPreset(withPositionY), "custom")
+
+const clampedLowY = normalizeCaptionStyle({ positionY: -0.5 })
+assert.equal(clampedLowY.positionY, CAPTION_POSITION_Y_MIN)
+const clampedHighY = normalizeCaptionStyle({ positionY: 1.5 })
+assert.equal(clampedHighY.positionY, CAPTION_POSITION_Y_MAX)
+
+const nullY = normalizeCaptionStyle({ ...CAPTION_PRESET_STYLES.hook, positionY: null })
+assert.equal("positionY" in nullY, false)
+assert.deepEqual(nullY, CAPTION_PRESET_STYLES.hook)
+
+const clearedY = updateCaptionStyle(withPositionY, { position: "bottom", positionY: undefined })
+assert.equal("positionY" in clearedY, false)
+assert.equal(clearedY.preset, "hook")
+
+// 7. resolveCaptionY
+assert.equal(resolveCaptionY(withPositionY, false), 0.6235)
+assert.equal(resolveCaptionY(withPositionY, true), 0.6235)
+assert.equal(resolveCaptionY({ ...DEFAULT_CAPTION_STYLE, positionY: 0.01 }, false), CAPTION_POSITION_Y_MIN)
+assert.equal(resolveCaptionY({ ...DEFAULT_CAPTION_STYLE, positionY: 0.99 }, false), CAPTION_POSITION_Y_MAX)
+assert.equal(resolveCaptionY({ ...DEFAULT_CAPTION_STYLE, position: "top" }, false), 0.14)
+assert.equal(resolveCaptionY({ ...DEFAULT_CAPTION_STYLE, position: "center" }, false), 0.50)
+assert.equal(resolveCaptionY({ ...DEFAULT_CAPTION_STYLE, position: "bottom" }, false), 0.80)
+assert.equal(resolveCaptionY({ ...DEFAULT_CAPTION_STYLE, position: "bottom" }, true), 0.50)
+assert.equal(resolveCaptionY({ ...DEFAULT_CAPTION_STYLE, preset: "custom", position: "bottom" }, true), 0.80)
 
 console.log("caption-style self-check passed")

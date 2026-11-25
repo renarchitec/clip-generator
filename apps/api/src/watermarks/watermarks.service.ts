@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { createReadStream } from 'node:fs';
 import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,12 +8,16 @@ import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   parseWatermarkSettings,
-  readImageSize,
+  readWatermarkMediaInfo,
   sanitizeWatermarkName,
-  sniffImageMime,
+  sniffWatermarkMime,
   WATERMARK_EXT,
-  WATERMARK_MAX_BYTES,
+  WATERMARK_IMAGE_MAX_BYTES,
   WATERMARK_MAX_PER_USER,
+  WATERMARK_VIDEO_MAX_BYTES,
+  WATERMARK_VIDEO_MAX_DURATION_SEC,
+  WATERMARK_VIDEO_MIN_DURATION_SEC,
+  watermarkKind,
   watermarkUrl,
   type StoredWatermark,
   type WatermarkSettings,
@@ -29,11 +32,19 @@ export class WatermarksService {
 
   async upload(file: { buffer: Buffer; originalname: string; size: number } | undefined, rawName: unknown, userId: string) {
     if (!file) throw new BadRequestException('Field file wajib diisi.');
-    if (file.size > WATERMARK_MAX_BYTES) throw new BadRequestException('File watermark maksimal 2 MB.');
-    const mimeType = sniffImageMime(file.buffer);
-    if (!mimeType) throw new BadRequestException('File harus berupa gambar PNG, JPEG, atau WebP yang valid.');
-    const dimensions = readImageSize(file.buffer, mimeType);
-    if (!dimensions) throw new BadRequestException('Header gambar watermark tidak valid.');
+    const mimeType = sniffWatermarkMime(file.buffer);
+    if (!mimeType) throw new BadRequestException('File harus berupa gambar (PNG, JPEG, WebP) atau video (MP4, WebM, MOV) yang valid.');
+    const kind = watermarkKind(mimeType);
+    const maxBytes = kind === 'video' ? WATERMARK_VIDEO_MAX_BYTES : WATERMARK_IMAGE_MAX_BYTES;
+    if (file.size > maxBytes) {
+      throw new BadRequestException(kind === 'video' ? 'File video watermark maksimal 25 MB.' : 'File watermark maksimal 2 MB.');
+    }
+    const info = readWatermarkMediaInfo(file.buffer, mimeType);
+    if (!info) throw new BadRequestException(`Header ${kind === 'video' ? 'video' : 'gambar'} watermark tidak valid.`);
+    if (kind === 'video' && info.durationSec !== null &&
+        (info.durationSec < WATERMARK_VIDEO_MIN_DURATION_SEC || info.durationSec > WATERMARK_VIDEO_MAX_DURATION_SEC)) {
+      throw new BadRequestException('Durasi video watermark harus antara 0,2 dan 30 detik.');
+    }
 
     const count = await this.prisma.watermark.count({ where: { userId } });
     if (count >= WATERMARK_MAX_PER_USER) throw new BadRequestException('Maksimal 20 watermark per pengguna.');
@@ -53,8 +64,9 @@ export class WatermarksService {
           name: sanitizeWatermarkName(rawName, path.parse(file.originalname).name || 'Watermark'),
           filePath,
           mimeType,
-          width: dimensions.width,
-          height: dimensions.height,
+          width: info.width,
+          height: info.height,
+          durationSec: info.durationSec,
         },
       });
       return this.toResponse(watermark);
@@ -76,16 +88,29 @@ export class WatermarksService {
     try {
       const info = await stat(absolutePath);
       if (!info.isFile()) throw new Error('not a file');
-      res.setHeader('Content-Type', watermark.mimeType);
-      res.setHeader('Content-Length', info.size);
-      res.setHeader('Cache-Control', 'private, max-age=3600');
-      const file = createReadStream(absolutePath);
-      res.on('close', () => file.destroy());
-      file.on('error', () => { if (!res.headersSent) res.status(404).end(); else res.destroy(); });
-      file.pipe(res);
     } catch {
       throw new NotFoundException(`File watermark ${id} tidak tersedia.`);
     }
+    res.setHeader('Content-Type', watermark.mimeType);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Accept-Ranges', 'bytes');
+    await new Promise<void>((resolve) => {
+      res.sendFile(absolutePath, { acceptRanges: true, dotfiles: 'allow' }, (error) => {
+        if (error && !res.headersSent) {
+          const sendError = error as Error & { statusCode?: number; headers?: Record<string, string> };
+          if (sendError.statusCode === 416) {
+            const contentRange = sendError.headers?.['Content-Range'];
+            if (contentRange) res.setHeader('Content-Range', contentRange);
+            res.status(416).end();
+          } else {
+            res.status(404).end();
+          }
+        } else if (error) {
+          res.destroy();
+        }
+        resolve();
+      });
+    });
   }
 
   async remove(id: string, userId: string): Promise<void> {
@@ -125,7 +150,7 @@ export class WatermarksService {
     const parsed = parseWatermarkSettings(raw);
     if (!parsed.ok) throw new BadRequestException(parsed.message);
     const watermark = await this.findOwned(parsed.value.watermarkId, userId);
-    return { ...parsed.value, filePath: watermark.filePath };
+    return { ...parsed.value, filePath: watermark.filePath, mimeType: watermark.mimeType };
   }
 
   private async findOwned(id: string, userId: string) {
@@ -140,7 +165,12 @@ export class WatermarksService {
     return target !== root && target.startsWith(root + path.sep) ? target : null;
   }
 
-  private toResponse(watermark: { id: string; name: string; width: number; height: number; mimeType: string; createdAt: Date }) {
-    return { ...watermark, url: watermarkUrl(watermark.id) };
+  private toResponse(watermark: { id: string; name: string; width: number; height: number; mimeType: string; durationSec: number | null; createdAt: Date }) {
+    return {
+      ...watermark,
+      kind: watermarkKind(watermark.mimeType),
+      durationSec: watermark.durationSec ?? null,
+      url: watermarkUrl(watermark.id),
+    };
   }
 }

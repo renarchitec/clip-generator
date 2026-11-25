@@ -16,6 +16,8 @@ test('create-job DTO menerima watermark opsional (settings|null)', async () => {
   assert.match(dto, /watermark\?: WatermarkSettingsDto \| null;/);
   assert.match(dto, /@IsWatermarkSettings\(\)/);
   assert.match(dto, /watermarkId\?: string/);
+  assert.match(dto, /chromaKey\?: WatermarkChromaKey \| null;/);
+  assert.match(dto, /value === null \|\| parseWatermarkSettings\(value\)\.ok/);
 });
 
 test('create: validasi kepemilikan lewat WatermarksService dan simpan snapshot di DB', async () => {
@@ -26,12 +28,14 @@ test('create: validasi kepemilikan lewat WatermarksService dan simpan snapshot d
   assert.match(module, /WatermarksModule/);
 });
 
-test('payload worker memakai key watermark.filePath/x/y/scale/opacity (tanpa watermarkId)', async () => {
+test('payload worker mengirim posisi, mimeType, dan chromaKey (tanpa watermarkId)', async () => {
   const service = await read('apps/api/src/jobs/jobs.service.ts');
   const payload = service.slice(service.indexOf('const watermark: WatermarkJobPayload'), service.indexOf("await this.queue.add('clip'"));
   for (const key of ['filePath', 'x', 'y', 'scale', 'opacity']) {
     assert.ok(new RegExp(`${key}: storedWatermark\\.${key}`).test(payload), `key ${key} tidak dikirim`);
   }
+  assert.match(payload, /storedWatermark\.mimeType !== undefined \? \{ mimeType: storedWatermark\.mimeType \}/);
+  assert.match(payload, /storedWatermark\.chromaKey !== undefined \? \{ chromaKey: storedWatermark\.chromaKey \}/);
   assert.doesNotMatch(payload, /watermarkId/);
   assert.match(payload, /watermark,\n/);
   // Worker Python membaca key yang sama persis.
@@ -48,7 +52,13 @@ test('job response & SSE menyertakan watermark; retry membawa watermark lama', a
   const snapshot = await read('apps/api/src/queue/job-events.service.ts');
   assert.match(snapshot, /watermark\?: StoredWatermark \| null;/);
   const retry = service.slice(service.indexOf('async retry('), service.indexOf('async snapshot('));
-  assert.match(retry, /dto\.watermark = \(old\.watermark as StoredWatermark \| null\) \?\? null;/);
+  const settings = retry.slice(retry.indexOf('dto.watermark'), retry.indexOf('dto.outro'));
+  assert.match(settings, /watermarkId: oldWatermark\.watermarkId/);
+  assert.match(settings, /chromaKey: oldWatermark\.chromaKey/);
+  assert.doesNotMatch(settings, /filePath|mimeType/);
+  assert.match(retry, /return this\.create\(dto, userId\);/);
+  const watermarks = await read('apps/api/src/watermarks/watermarks.service.ts');
+  assert.match(watermarks, /return \{ \.\.\.parsed\.value, filePath: watermark\.filePath, mimeType: watermark\.mimeType \}/);
 });
 
 test('spec watermark terdaftar di script test api', async () => {

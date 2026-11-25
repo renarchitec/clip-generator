@@ -36,6 +36,8 @@ export const NAMED_CAPTION_PRESETS: readonly NamedCaptionPreset[] = [
 export const CAPTION_FONT_SIZE_MIN = 44
 export const CAPTION_FONT_SIZE_MAX = 120
 export const DEFAULT_CAPTION_FONT_SIZE = 80
+export const CAPTION_POSITION_Y_MIN = 0.05
+export const CAPTION_POSITION_Y_MAX = 0.95
 
 export type CaptionStyle = {
   preset: CaptionPreset
@@ -48,6 +50,7 @@ export type CaptionStyle = {
   uppercase: boolean
   position: CaptionPosition
   italic: boolean
+  positionY?: number | null
 }
 
 export const CAPTION_PRESET_STYLES: Record<NamedCaptionPreset, CaptionStyle> = {
@@ -144,7 +147,27 @@ function clampFontSize(value: unknown, fallback: number): number {
   return Math.max(CAPTION_FONT_SIZE_MIN, Math.min(CAPTION_FONT_SIZE_MAX, Math.round(value)))
 }
 
+function clampPositionY(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  const clamped = Math.max(CAPTION_POSITION_Y_MIN, Math.min(CAPTION_POSITION_Y_MAX, value))
+  return Math.round(clamped * 10000) / 10000
+}
+
+export function resolveCaptionY(style: CaptionStyle, twoSpeakers = false): number {
+  if (style.positionY != null && Number.isFinite(style.positionY)) {
+    return Math.max(CAPTION_POSITION_Y_MIN, Math.min(CAPTION_POSITION_Y_MAX, style.positionY))
+  }
+  if (style.position === "center" || (twoSpeakers && style.preset !== "custom" && style.position === "bottom")) {
+    return 0.50
+  }
+  if (style.position === "top") {
+    return 0.14
+  }
+  return 0.80
+}
+
 export function detectCaptionPreset(fields: Omit<CaptionStyle, "preset">): CaptionPreset {
+  if (fields.positionY != null) return "custom"
   for (const name of NAMED_CAPTION_PRESETS) {
     const candidate = CAPTION_PRESET_STYLES[name]
     if (
@@ -170,6 +193,7 @@ export function normalizeCaptionStyle(raw: unknown): CaptionStyle {
   }
   const input = raw as Record<string, unknown>
   const base = isNamedCaptionPreset(input.preset) ? CAPTION_PRESET_STYLES[input.preset] : DEFAULT_CAPTION_STYLE
+  const positionY = clampPositionY(input.positionY)
 
   const fields: Omit<CaptionStyle, "preset"> = {
     fontFamily: isCaptionFont(input.fontFamily) ? input.fontFamily : base.fontFamily,
@@ -181,6 +205,7 @@ export function normalizeCaptionStyle(raw: unknown): CaptionStyle {
     uppercase: typeof input.uppercase === "boolean" ? input.uppercase : base.uppercase,
     position: isCaptionPosition(input.position) ? input.position : base.position,
     italic: typeof input.italic === "boolean" ? input.italic : base.italic,
+    ...(positionY !== undefined ? { positionY } : {}),
   }
 
   return {
@@ -194,6 +219,10 @@ export function updateCaptionStyle(current: CaptionStyle, patch: Partial<Caption
   const merged: Record<string, unknown> = { ...base }
   for (const [key, value] of Object.entries(patch)) {
     if (key === "preset") continue
+    if (key === "positionY" && (value === undefined || value === null)) {
+      delete merged.positionY
+      continue
+    }
     if (value !== undefined) merged[key] = value
   }
   return normalizeCaptionStyle(merged)

@@ -33,6 +33,39 @@ Halo <c>semua</c>
 """
 
 
+@pytest.mark.parametrize(("raw", "expected"), [
+    ({"positionY": 0.123456}, 0.1235), ({"position_y": 0.4}, 0.4),
+    ({"positionY": -1}, 0.05), ({"positionY": 2}, 0.95),
+    ({}, None), ({"positionY": True}, None), ({"positionY": "0.4"}, None),
+    ({"positionY": float("nan")}, None), ({"positionY": float("inf")}, None),
+])
+def test_caption_style_parses_position_y(raw, expected):
+    style = CaptionStyle.from_dict(raw)
+    assert style.position_y == expected
+    assert CaptionStyle.from_dict(style.to_dict()) == style
+
+
+@pytest.mark.parametrize("two_speakers", [False, True])
+def test_write_ass_positions_every_dialogue_at_custom_y(two_speakers):
+    style = CaptionStyle.from_dict({"position": "top", "positionY": 0.4})
+    ass = write_ass([Cue(0, 2, "dua kata")], style=style, two_speakers=two_speakers)
+    style_fields = next(line for line in ass.splitlines() if line.startswith("Style:")).split(",")
+    assert style_fields[18:22] == ["5", "80", "80", "0"]
+    dialogue = [line.split(",", 9)[-1] for line in ass.splitlines() if line.startswith("Dialogue:")]
+    assert len(dialogue) == 2
+    assert all(text.startswith(r"{\an5\pos(540,768)}") for text in dialogue)
+    assert dialogue[0].startswith(r"{\an5\pos(540,768)}{\c")
+
+
+def test_write_ass_without_custom_y_keeps_legacy_placement():
+    style = CaptionStyle.from_dict({"position": "top"})
+    ass = write_ass([Cue(0, 2, "dua kata")], style=style)
+    style_fields = next(line for line in ass.splitlines() if line.startswith("Style:")).split(",")
+    assert style_fields[18:22] == ["8", "80", "80", "230"]
+    assert r"\pos(" not in ass
+    assert r",,{\c&H0000FFFF&}DUA{\c&H00FFFFFF&} KATA" in ass
+
+
 def test_parse_vtt_skips_header_note_style_and_tags():
     cues = parse_vtt(SAMPLE_VTT)
 
