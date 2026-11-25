@@ -1,7 +1,7 @@
 # PRD — Clipper (Generator Klip Vertikal)
 
-**Status:** aktif · **Versi:** 2.0 · **Terakhir diperbarui:** 23 November 2026
-**Dokumen terkait:** `IMPLEMENTATION_PLAN.md` (arsitektur, skema database, API contract, deployment)
+**Status:** aktif · **Versi:** 2.1 · **Terakhir diperbarui:** 26 November 2026
+**Dokumen terkait:** `IMPLEMENTATION_PLAN.md` (arsitektur, skema database, API contract, deployment, mode desktop lokal)
 
 ---
 
@@ -99,6 +99,7 @@ Dashboard memakai shell dua kolom (sidebar sempit, satu header ringkas di mobile
 | **P1** | Fondasi publikasi sosial: akun YouTube per pengguna via OAuth, token terenkripsi, caption/hashtag AI, dan model publikasi | Fase 1 selesai |
 | **P1** | Retensi otomatis terjadwal via background cron (`downloaded_at` / TTL) | Dalam antrean |
 | **P1** | Publish klip ke YouTube (resumable upload, status & progres, retry, badge kartu) | Fase 2 API selesai |
+| **P1** | Aplikasi Desktop lokal macOS Apple Silicon (`apps/desktop`: Electron + NestJS API lokal + SQLite + local queue + PyInstaller `dartclip-worker` + pure SPA `apps/web` + pengaturan LLM lokal terenkripsi + kemasan `.app`/`.dmg` unsigned) | Fase 2 selesai (publikasi sosial desktop di Fase 3) |
 | **P2** | Auto-posting ke Instagram dan TikTok | Masa depan |
 
 ## 8. Kebutuhan fungsional
@@ -228,7 +229,20 @@ Semua endpoint berawalan `/api`. Sesi diautentikasi lewat cookie `clipper_sessio
 | `/api/clips/:id/publish` | POST | Mempublikasikan klip ke 1..5 akun YouTube; membuat publikasi `queued` dan mengembalikan `PublicationResponse[]` (201) | Sesi (hanya pemilik) |
 | `/api/clips/:id/publications` | GET | Riwayat publikasi klip, terbaru dulu | Sesi (hanya pemilik) |
 | `/api/publications/:id/retry` | POST | Mengulang publikasi `failed` | Sesi (hanya pemilik) |
-| `/api/system/llm-status` | GET | Memeriksa status kesiapan LLM worker dari Redis | Sesi |
+| `/api/system/llm-status` | GET | Memeriksa status kesiapan LLM worker dari Redis (server) atau antrean lokal (desktop) | Sesi |
+| `/api/system/runtime` | GET | Informasi mode runtime (`server` vs `desktop`, `isDesktop`, `publishEnabled`, `clipsDir` di desktop) | Publik |
+| `/api/system/desktop-config` | POST | Menerima konfigurasi LLM & encoder terdekripsi secara in-memory dari proses utama Electron (header `x-dartclip-internal-token`, desktop only) | Internal Desktop |
+| `/api/system/llm-test` | POST | Menjalankan uji ping LLM nyata via worker lokal (`--task llm-check`, desktop only) | Sesi (Desktop) |
+| `/api/system/clips/:id/local-path` | GET | Mengembalikan path absolut klip di `~/DartClip` untuk aksi "Show in Finder" (desktop only) | Sesi (Desktop) |
+
+### Mode Desktop Lokal (macOS Apple Silicon — Fase 2)
+
+Selain mode server (Docker/Postgres/Redis), DartClip tersedia sebagai aplikasi desktop mandiri untuk macOS Apple Silicon (`DartClip.app` / `DartClip-arm64.dmg` unsigned, pemakaian lokal):
+
+- **Tanpa server & tanpa login:** Electron menjalankan API NestJS lokal pada port loopback acak (`127.0.0.1`), menyajikan UI web yang sama dalam mode SPA murni (`apps/web/dist-desktop`), memakai SQLite lokal di `~/DartClip/dartclip.db`, antrean lokal pengganti Redis/BullMQ (maks 1 render bersamaan) dengan bundel `dartclip-worker`, dan autentikasi otomatis satu pengguna lokal (`local@dartclip.desktop`). Seluruh file proyek, aset, log, dan klip tersimpan di `~/DartClip`.
+- **Fitur lokal yang aktif:** pembuatan job otomatis (LLM) dan manual (pilih momen), pratinjau frame, watermark, outro, peningkatan brief & riwayat brief, regenerasi caption (termasuk panel caption/hashtag langsung di pemutar klip), hashtag kustom, daftar job/klip, hapus klip/job, unduh, serta **Tampilkan di Finder** (*Show in Finder*).
+- **Pengaturan LLM lokal (`/settings`):** halaman Settings mengganti Social Accounts dengan formulir pengaturan LLM lokal (9router sebagai primary: Base URL, API key, model; fallback Gemini dan OpenAI; pilihan encoder `h264_videotoolbox`/`libx264`; lokasi folder penyimpanan; tombol uji koneksi). Kredensial disimpan terenkripsi menggunakan macOS Keychain (`safeStorage`) di `~/DartClip/desktop-settings.json` (mode `0600`) dan dikirim ke API secara in-memory per sesi — tidak pernah ditulis plaintext maupun masuk repositori. Saat runtime, worker mencoba primary (9router) terlebih dahulu dan otomatis jatuh ke fallback bila gagal atau timeout.
+- **Ruang lingkup Fase 3:** tombol Publish ke YouTube/TikTok/Instagram dan UI Social Accounts disembunyikan di mode desktop sampai integrasi publikasi lokal/hybrid di Fase 3.
 
 ## 11. Kebutuhan Non-Fungsional
 

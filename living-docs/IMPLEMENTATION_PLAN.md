@@ -21,7 +21,7 @@ Platform dibangun dalam monorepo yang memisahkan aplikasi API, web front-end, pa
 ```text
 clipper/
 ├─ apps/
-│  ├─ desktop/                # Spike Electron (macOS arm64, pribadi): jalankan worker bundel sebagai child process
+│  ├─ desktop/                # Aplikasi Desktop Electron (macOS Apple Silicon): API lokal, SQLite, static SPA server, safeStorage, kemasan .app/.dmg unsigned
 │  ├─ api/                    # NestJS API
 │  │  ├─ prisma/
 │  │  │  ├─ schema.prisma     # Skema database
@@ -54,7 +54,7 @@ clipper/
 │  │  ├─ snap.py              # Snap deterministik batas momen ke cue/kalimat terdekat (murni)
 │  │  ├─ reframe.py           # face_tracking / active speaker (FaceMesh), dua pembicara (2-means), crop filters
 │  │  ├─ subtitles.py         # Parser VTT, deduplikasi rolling, takarir hook ASS per kata
-│  │  ├─ local_cli.py         # Entrypoint lokal tanpa Redis (desktop spike), event JSON per baris di stdout
+│  │  ├─ local_cli.py         # Entrypoint lokal tanpa Redis (`--task job|preview|frame|caption|brief|reference|llm-check`), event JSON per baris di stdout
 │  │  └─ models.py            # Definisi dataclass & konversi data job
 │  ├─ tests/                  # Pytest unit & integration tests
 │  ├─ desktop/                # PyInstaller spec + build-mac.sh (bundel worker + ffmpeg statis arm64)
@@ -326,14 +326,28 @@ Akses jaringan publik dilindungi menggunakan **Cloudflare Tunnel** yang mengarah
 | `VT_QUALITY` | Worker | Opsional; kualitas VideoToolbox 1–100 (default 65, 75 untuk transcode sumber) |
 | `FONTS_DIR` | Worker | Opsional; folder font untuk filter `subtitles` (`fontsdir`). Kosong di Docker (font terpasang via fontconfig); diisi otomatis oleh bundel desktop |
 
-## Desktop spike (macOS Apple Silicon, pemakaian pribadi)
+## Aplikasi Desktop Lokal (macOS Apple Silicon — Fase 2)
 
-Bukti konsep, bukan produk: tanpa signing/notarization, tanpa API/DB lokal. Jalur Docker/BullMQ tidak berubah.
+Mode desktop (`DARTCLIP_MODE=desktop`) menjalankan seluruh stack DartClip secara lokal di macOS Apple Silicon (`.app` + `.dmg` unsigned / ad-hoc signed, tanpa signing/notarization Apple Developer) tanpa mengubah jalur server (Docker/Postgres/Redis).
 
-- **Worker lokal:** `python -m clipper.local_cli --url URL [--range 120-170 ...] [--encoder h264_videotoolbox] [--out ~/DartClip/clips]` memanggil `pipeline.run_job` langsung (tanpa Redis). Tanpa `--range` = mode auto (butuh LLM). stdout = satu event JSON per baris (`start`/`progress`/`done`/`error`), log ke stderr.
-- **LLM:** dipilih dari env, tanpa key di kode: `LLM_BASE_URL`+`LLM_API_KEY` bila di-set; lalu 9router (`NINEROUTER_API_KEY`, URL `DARTCLIP_9ROUTER_URL`, default `https://9router.rencraft.site/v1`, dicek terjangkau lewat `GET /models`); lalu Gemini (`GEMINI_API_KEY`, endpoint OpenAI-compatible) atau OpenAI (`OPENAI_API_KEY`). Tanpa LLM, mode manual tetap jalan dan caption sosial dilewati.
-- **Bundel:** `worker/desktop/build-mac.sh` → PyInstaller onedir `worker/desktop/dist/dartclip-worker/` (~357 MB, tgz ~164 MB) + ffmpeg/ffprobe statis arm64 dari martin-riedl.de di `bin/`. Saat frozen, `local_cli` menaruh shim `yt-dlp` (memanggil binary yang sama dengan `--yt-dlp`) dan `bin/` di PATH, `FONTS_DIR` = font bundel, `SSL_CERT_FILE=/etc/ssl/cert.pem` (OpenSSL ffmpeg statis tidak membaca keychain macOS; tanpa ini unduhan section gagal dan jatuh ke unduh video penuh), dan `MPLCONFIGDIR` tetap di `~/Library/Caches/DartClip` (kalau tidak, cache font matplotlib dibangun ulang tiap job).
-- **Shell:** `apps/desktop` (Electron) memuat satu jendela (URL, rentang, encoder, tombol Render), menjalankan binary bundel lewat `spawn`, menampilkan progress/log, dan menautkan file hasil. Binary dicari di `DARTCLIP_WORKER_BIN`, `resources/dartclip-worker/`, lalu `worker/desktop/dist/`.
+- **API lokal + SQLite (`apps/api`):**
+  - `apps/api/scripts/generate-sqlite-schema.cjs` menghasilkan `prisma/schema.sqlite.prisma`, `prisma/sqlite-init.sql` (DDL idempoten), serta Prisma client SQLite terpisah di `apps/api/node_modules/.prisma/sqlite-client` agar `@prisma/client` PostgreSQL server tidak tertimpa.
+  - `PrismaService` memuat SQLite client secara dinamis saat `DARTCLIP_MODE=desktop` dengan Proxy yang menerjemahkan sentinel `Prisma.DbNull`/`JsonNull`/`AnyNull` serta menjalankan `sqlite-init.sql` + `PRAGMA journal_mode = WAL` saat boot ke `~/DartClip/dartclip.db`.
+  - `LocalQueueBackend` (`apps/api/src/queue/local-queue.backend.ts`) menggantikan Redis/BullMQ secara bersyarat di `QueueModule` (`clip-jobs`/`reference-jobs` concurrency 1; `previews`/`clip-frames`/`captions` concurrency 2) dengan menjalankan `dartclip-worker --task ... --payload-file ...`.
+  - `AuthService` + `AuthGuard` mengaktifkan autentikasi otomatis satu pengguna lokal (`local@dartclip.desktop`) di mode desktop tanpa halaman login.
+  - `LlmStatusController` menyediakan `GET /api/system/runtime`, `POST /api/system/desktop-config` (otentikasi token per-launch `DARTCLIP_INTERNAL_TOKEN` untuk menerima kredensial terdekripsi in-memory), `POST /api/system/llm-test` (menjalankan `dartclip-worker --task llm-check`), dan `GET /api/system/clips/:id/local-path` untuk Finder reveal.
+  - Saat `PORT=0`, `apps/api/src/main.ts` memancarkan baris JSON `{"event":"ready","host":"127.0.0.1","port":<port>}` ke stdout dan mengaktifkan CORS loopback untuk renderer desktop.
+- **Worker lokal & fallback LLM (`worker/`):**
+  - `worker/clipper/local_cli.py` mendukung mode `--task job|preview|frame|caption|brief|reference|llm-check`, `--payload-file`, `--clips-dir`, `--temp-dir`, dan `--cancel-file` dengan event JSONL di stdout (`start`, `progress`, `result`, `done`, `error`, `llm_status`). `--task llm-check` melakukan ping `_complete` nyata ke provider aktif.
+  - `resolve_llm_env` menyusun primary (9router) dan rantai fallback (Gemini / OpenAI) ke `LLM_FALLBACK_JSON`; `worker/clipper/llm.py._complete()` mencoba primary dulu (timeout default 45 detik) dan otomatis beralih ke fallback saat runtime error/timeout.
+  - `worker/desktop/build-mac.sh` membangun bundel PyInstaller onedir `worker/desktop/dist/dartclip-worker/` (termasuk seluruh submodule `clipper` + `openai` + `yt_dlp` + MediaPipe + `ffmpeg`/`ffprobe` statis arm64 di `bin/`). Saat frozen, `local_cli` menyiapkan shim `yt-dlp`, `bin/` di PATH, `FONTS_DIR`, `SSL_CERT_FILE=/etc/ssl/cert.pem`, dan `MPLCONFIGDIR` di `~/Library/Caches/DartClip`.
+- **Web SPA murni (`apps/web`):**
+  - `apps/web/vite.config.desktop.ts` + `desktop.html` + `src/desktop/*` membangun SPA klien murni ke `apps/web/dist-desktop/` (`pnpm --filter web build:desktop`) tanpa `@tanstack/react-start`, tanpa SSR, dan tanpa proxy `/api/$`.
+  - Seluruh panggilan API, SSE, streaming, unduhan, watermark, outro, dan frame memakai helper `apiUrl()` (`src/lib/desktop.ts`) yang langsung mengarah ke `window.dartclipDesktop.apiBaseUrl`.
+  - Di mode desktop: Publish sosial, Social Accounts, dan Sign Out disembunyikan; `SettingsPage` menampilkan `DesktopSettings` (`@tanstack/react-form`) untuk 9router primary, fallback Gemini/OpenAI, encoder, dan uji koneksi; `ClipCard` + `ClipPlayerDialog` menambahkan tombol **Show in Finder** dan panel Caption/Hashtag + Regenerate inline.
+- **Shell Electron & kemasan macOS (`apps/desktop`):**
+  - `main.js` + `preload.js` + `api-process.js` + `static-server.js` + `settings-store.js`: mengunci single instance, menjalankan NestJS API via `ELECTRON_RUN_AS_NODE=1` pada port acak, membaca/menyimpan pengaturan terenkripsi `safeStorage` di `~/DartClip/desktop-settings.json` (`0600`), mendorong kredensial terdekripsi secara in-memory ke `POST /api/system/desktop-config`, menyajikan `dist-desktop` lewat static HTTP server loopback dengan SPA fallback, dan mengekspos bridge `window.dartclipDesktop`.
+  - `apps/desktop/scripts/package-mac.mjs` (`pnpm --filter desktop package:mac` / `package:mac:full`): men-stage API standalone (`pnpm --filter api deploy --prod --legacy`, menyalin `dist`, `prisma/sqlite-init.sql`, `.prisma/sqlite-client`, dan `@clipper/shared` tertranspilasi CJS, serta membersihkan symlink keluar bundel), menyusun `AppIcon.icns` dari `apps/web/public/app-icon-1024.png`, membundel `Resources/{app,web,api,dartclip-worker}`, menerapkan ad-hoc signature (`codesign --force --deep --sign -`), dan membangun `apps/desktop/release/DartClip.app` serta `apps/desktop/release/DartClip-arm64.dmg`.
 
 ## Testing
 
