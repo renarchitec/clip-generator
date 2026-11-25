@@ -1,4 +1,7 @@
 import type { CaptionStyle } from "@/lib/caption-style"
+import { apiUrl } from "@/lib/desktop"
+
+export { apiUrl } from "@/lib/desktop"
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled"
 export type Reframe = "face_tracking" | "blurred_fill" | "black_bars"
@@ -47,7 +50,7 @@ export type JobOutro = { outroId: string; filePath: string | null; durationSec: 
 export type JobWatermark = { watermarkId: string; x: number; y: number; scale: number; opacity: number; filePath: string | null }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...init?.headers } })
+  const response = await fetch(apiUrl(path), { ...init, headers: { "content-type": "application/json", ...init?.headers } })
   if (!response.ok) {
     const error = new Error(response.statusText || "Request failed") as Error & { status: number }
     error.status = response.status

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#18181b" />
+    <title>DartClip</title>
+    <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
+    <script>
+      ;(() => {
+        try {
+          const c =
+            document.cookie
+              .split("; ")
+              .find((x) => x.startsWith("clipper_theme="))
+              ?.split("=")[1] || "system"
+          const d =
+            c === "dark" ||
+            (c === "system" &&
+              matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.classList.toggle("dark", d)
+        } catch {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/desktop/main.tsx"></script>
+  </body>
+</html>

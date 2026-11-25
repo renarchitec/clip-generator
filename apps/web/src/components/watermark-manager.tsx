@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api } from "@/lib/api"
+import { api, apiUrl } from "@/lib/api"
 import { useT } from "@/lib/i18n"
 import { uploadWatermark, type Watermark, type WatermarkSettings } from "@/lib/watermark"
 
@@ -77,7 +77,7 @@ export function WatermarkManager({ selectedId, onSelect, compact = false }: Prop
       : library.isError ? <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-2"><span>{t.watermarkLibraryFailed}</span><Button size="sm" variant="outline" onClick={() => void library.refetch()}>{t.retry}</Button></AlertDescription></Alert>
         : watermarks.length === 0 ? <p className="rounded-lg border border-dashed border-border bg-secondary/20 px-3 py-4 text-center text-xs text-muted-foreground">{t.watermarkEmpty}</p>
           : <div className={`grid max-h-64 gap-2 overflow-y-auto rounded-lg border border-border/70 bg-secondary/20 p-2 ${compact ? "grid-cols-3" : "grid-cols-[repeat(auto-fill,minmax(112px,128px))]"}`}>{watermarks.map((watermark) => <div key={watermark.id} className={`group relative min-w-0 overflow-hidden rounded-lg border bg-card transition-colors ${selectedId === watermark.id ? "border-accent ring-1 ring-accent" : "border-border hover:border-accent/50"}`}>
-            <button type="button" aria-pressed={selectedId === watermark.id} aria-label={watermark.name} title={watermark.name} onClick={() => onSelect(watermark)} className="block aspect-square w-full cursor-pointer bg-[linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%),linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%)] bg-[length:12px_12px] bg-[position:0_0,6px_6px] outline-none focus-visible:ring-2 focus-visible:ring-ring"><img src={watermark.url} alt="" className="size-full object-contain"/></button>
+            <button type="button" aria-pressed={selectedId === watermark.id} aria-label={watermark.name} title={watermark.name} onClick={() => onSelect(watermark)} className="block aspect-square w-full cursor-pointer bg-[linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%),linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%)] bg-[length:12px_12px] bg-[position:0_0,6px_6px] outline-none focus-visible:ring-2 focus-visible:ring-ring"><img src={apiUrl(watermark.url)} alt="" className="size-full object-contain"/></button>
             <span className="block truncate px-1.5 py-1 text-[10px] text-muted-foreground">{watermark.name}</span>
             <AlertDialog>
               <AlertDialogTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`${t.watermarkDelete} ${watermark.name}`} className="absolute right-0.5 top-0.5 size-6 bg-background/80 text-muted-foreground opacity-100 transition-opacity hover:text-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"><Trash2 className="size-3"/></Button></AlertDialogTrigger>

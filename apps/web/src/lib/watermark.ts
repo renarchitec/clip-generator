@@ -1,4 +1,4 @@
-import type { AspectRatio } from "@/lib/api"
+import { apiUrl, type AspectRatio } from "@/lib/api"
 
 export type Watermark = { id: string; name: string; width: number; height: number; mimeType: string; createdAt: string; url: string }
 export type WatermarkSettings = { watermarkId: string; x: number; y: number; scale: number; opacity: number }
@@ -72,7 +72,7 @@ export async function uploadWatermark(file: File, name?: string): Promise<Waterm
   const body = new FormData()
   body.append("file", await trimTransparentPadding(file))
   if (name?.trim()) body.append("name", name.trim())
-  const response = await fetch("/api/watermarks", { method: "POST", body, credentials: "same-origin" })
+  const response = await fetch(apiUrl("/watermarks"), { method: "POST", body, credentials: "same-origin" })
   const data: unknown = await response.json().catch(() => null)
   if (!response.ok) throw new Error((data && typeof data === "object" && "message" in data && typeof data.message === "string" ? data.message : null) || `Upload failed (${response.status})`)
   return data as Watermark

@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react"
 import { LoaderCircle } from "lucide-react"
-import type { AspectRatio } from "@/lib/api"
+import { apiUrl, type AspectRatio } from "@/lib/api"
 import { useT } from "@/lib/i18n"
 import { clamp, clampWatermark, watermarkFrameSize, type Watermark, type WatermarkSettings } from "@/lib/watermark"
 
@@ -73,11 +73,11 @@ export function WatermarkOverlay({ aspectRatio, watermark, settings, onChange, f
 
   return <div className={`absolute inset-0 z-10 grid place-items-center p-3 ${frame ? "bg-zinc-950" : "pointer-events-none"}`} aria-hidden={!active && !frame}>
     <div ref={frameRef} data-testid={frame ? "watermark-frame-image" : "watermark-frame-guide"} className={`relative max-h-full max-w-full overflow-hidden rounded-sm ${frame ? "shadow-2xl ring-1 ring-white/15" : "border border-dashed border-accent/60 shadow-[0_0_0_9999px_rgba(0,0,0,.16)]"}`} style={frameStyle}>
-      {frame && <img src={frame.imageUrl} alt={frame.alt} draggable={false} onError={frame.onImageError} className="absolute inset-0 size-full select-none object-fill"/>}
+      {frame && <img src={apiUrl(frame.imageUrl)} alt={frame.alt} draggable={false} onError={frame.onImageError} className="absolute inset-0 size-full select-none object-fill"/>}
       <span className="absolute left-1.5 top-1.5 rounded-sm bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-white">{frame ? frame.caption : aspectRatio}</span>
       {frame?.busy && <div role="status" className="absolute inset-0 grid place-items-center bg-black/40"><LoaderCircle aria-hidden="true" className="size-6 animate-spin text-white motion-reduce:animate-none"/><span className="sr-only">{t.frameRendering}</span></div>}
       {active && watermark && <button type="button" aria-label={t.watermarkDragHint} title={t.watermarkDragHint} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag} onKeyDown={onKeyDown} className={`pointer-events-auto absolute grid touch-none place-items-center rounded-[2px] outline-none ring-offset-0 focus-visible:ring-2 focus-visible:ring-accent ${dragging ? "cursor-grabbing" : "cursor-grab"}`} style={{ width: `${width * 100}%`, height: `${height * 100}%`, left: `${(active.x - width / 2) * 100}%`, top: `${(active.y - height / 2) * 100}%`, opacity: active.opacity }}>
-        <img src={watermark.url} alt="" draggable={false} className={`size-full select-none object-contain ${frame ? "" : "drop-shadow-[0_1px_3px_rgba(0,0,0,.8)]"}`}/>
+        <img src={apiUrl(watermark.url)} alt="" draggable={false} className={`size-full select-none object-contain ${frame ? "" : "drop-shadow-[0_1px_3px_rgba(0,0,0,.8)]"}`}/>
       </button>}
     </div>
   </div>

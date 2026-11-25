@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldTitle } from "@/components/ui/field"
 import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, type Job, type JobSnapshot, type User } from "@/lib/api"
+import { api, apiUrl, type Job, type JobSnapshot, type User } from "@/lib/api"
 import { DEFAULT_CAPTION_STYLE, detectCaptionPreset, normalizeCaptionStyle } from "@/lib/caption-style"
 import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
@@ -106,7 +106,7 @@ function JobDetail() {
 
   useEffect(() => {
     if (terminal) return
-    const source = new EventSource(`/api/jobs/${jobId}/events`)
+    const source = new EventSource(apiUrl(`/jobs/${jobId}/events`))
     source.onmessage = (event) => {
       try {
         const snapshot = JSON.parse(event.data) as JobSnapshot
@@ -275,7 +275,7 @@ function JobDetail() {
                 {snapshot.watermark && <Field>
                    <FieldTitle>{t.watermark}</FieldTitle>
                    <div className="mt-2 flex items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
-                     <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border bg-background text-xs text-muted-foreground">{watermarks.data?.find((item) => item.id === snapshot.watermark?.watermarkId) ? <img src={watermarks.data.find((item) => item.id === snapshot.watermark?.watermarkId)?.url} alt="" className="size-full object-contain"/> : "—"}</span>
+                     <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border bg-background text-xs text-muted-foreground">{watermarks.data?.find((item) => item.id === snapshot.watermark?.watermarkId) ? <img src={apiUrl(watermarks.data.find((item) => item.id === snapshot.watermark?.watermarkId)?.url ?? "")} alt="" className="size-full object-contain"/> : "—"}</span>
                      <div className="min-w-0 flex-1 font-mono text-xs tabular-nums text-foreground">
                        <p>{t.watermarkPosition}: {Math.round(snapshot.watermark.x * 100)}%, {Math.round(snapshot.watermark.y * 100)}%</p>
                        <p>{t.watermarkSize}: {Math.round(snapshot.watermark.scale * 100)}% · {t.watermarkOpacity}: {Math.round(snapshot.watermark.opacity * 100)}%</p>

@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
-import { api, type AspectRatio, type Reframe } from "@/lib/api"
+import { api, apiUrl, type AspectRatio, type Reframe } from "@/lib/api"
 import type { CaptionStyle } from "@/lib/caption-style"
 
 export const FRAME_DEFAULT_SEC = 30
@@ -68,7 +68,7 @@ export function useFramePreview(params: FrameParams, suggestedSec: number) {
   const stale = !!request && request.key !== key
 
   const current: RenderedFrame | null = request && !stale && data?.status === "done" && data.imageUrl && data.width && data.height
-    ? { id: request.id, imageUrl: data.imageUrl, width: data.width, height: data.height, atSec: data.atSec ?? request.atSec }
+    ? { id: request.id, imageUrl: apiUrl(data.imageUrl), width: data.width, height: data.height, atSec: data.atSec ?? request.atSec }
     : null
   useEffect(() => { if (current) setKept({ ...current, key }) }, [current?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   // Keep showing the previous frame while "Another frame" renders, but never one made with different settings.

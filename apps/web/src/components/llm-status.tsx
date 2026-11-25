@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { AlertTriangle, CheckCircle2, CircleHelp, Cpu, LoaderCircle } from "lucide-react"
@@ -5,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { api } from "@/lib/api"
+import { isDesktopApp } from "@/lib/desktop"
 import { useLanguage, useT } from "@/lib/i18n"
 
 type LlmStatusData = {
@@ -63,9 +65,12 @@ export function LlmStatus({ jobStatus, compact = false, prominent = false }: { j
   const detail = state === "failed" ? <span>{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</span> : state === "ready" ? <span>{t.llmLastSuccess} {successAt}</span> : state === "untested" ? <span>{t.llmNotTested}</span> : state === "unavailable" ? <span>{t.apiError}</span> : null
 
   if (state === "offline" || state === "unconfigured" || state === "failed") {
-    if (compact && !prominent) return <p role="status" className="flex items-center gap-2 text-xs text-destructive"><span className="shrink-0">{icon}</span><span className="font-medium">{labels[state]}</span>{state === "failed" && <span className="min-w-0 truncate text-muted-foreground">{errorText} · {failedAt}</span>}</p>
-    if (prominent) return <Alert variant="destructive" className="rounded-md py-2"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <span className="truncate">{errorText} · {failedAt}</span>}</AlertDescription></Alert>
-    return <Alert variant="destructive" className="rounded-lg py-2.5"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <Tooltip><TooltipTrigger aria-label={`${t.llmFailed}: ${errorText}, ${t.llmFailureTime.toLowerCase()} ${failedAt}`} className="max-w-full cursor-help truncate rounded-sm text-left text-xs underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipContent></Tooltip>}</AlertDescription></Alert>
+    const settingsCta = isDesktopApp() && (state === "unconfigured" || state === "failed")
+      ? <Link to="/settings" className="ml-1 font-medium underline underline-offset-4 hover:opacity-80">{t.desktop.configureLlmLink}</Link>
+      : null
+    if (compact && !prominent) return <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-destructive"><span className="shrink-0">{icon}</span><span className="font-medium">{labels[state]}</span>{state === "failed" && <span className="min-w-0 truncate text-muted-foreground">{errorText} · {failedAt}</span>}{settingsCta}</p>
+    if (prominent) return <Alert variant="destructive" className="rounded-md py-2"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <span className="truncate">{errorText} · {failedAt}</span>}{settingsCta}</AlertDescription></Alert>
+    return <Alert variant="destructive" className="rounded-lg py-2.5"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <Tooltip><TooltipTrigger aria-label={`${t.llmFailed}: ${errorText}, ${t.llmFailureTime.toLowerCase()} ${failedAt}`} className="max-w-full cursor-help truncate rounded-sm text-left text-xs underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipContent></Tooltip>}{settingsCta}</AlertDescription></Alert>
   }
 
   if (compact) return <Tooltip><TooltipTrigger aria-label={`${labels[state]}${detail ? `, ${state === "ready" ? t.llmLastSuccess : ""} ${state === "ready" ? successAt : ""}` : ""}`} className="inline-flex min-h-8 max-w-full cursor-help items-center gap-1.5 text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className={state === "ready" ? "text-accent" : undefined}>{icon}</span><span className="truncate">{state === "ready" ? t.llmReady : labels[state]}</span></TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{detail ?? labels[state]}</TooltipContent></Tooltip>

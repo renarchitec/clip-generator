@@ -10,3 +10,7 @@ __pycache__/
 .pytest_cache/
 apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
+dist-desktop/
+apps/desktop/release/
+apps/desktop/stage/
+apps/desktop/build/

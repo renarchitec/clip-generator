@@ -34,7 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { WorkspaceShell } from "@/components/chrome"
-import { api, type AspectRatio, type Reframe, type User } from "@/lib/api"
+import { api, apiUrl, type AspectRatio, type Reframe, type User } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { getVideoEmbed } from "@/lib/embed"
 import { relativeAge, sourceLabel } from "@/lib/format"
@@ -152,7 +152,7 @@ function isAllowedVideoFile(file: File) {
 async function uploadReferenceVideo(file: File): Promise<ReferenceFootageItem> {
   const formData = new FormData()
   formData.append("file", file)
-  const response = await fetch("/api/reference-jobs/upload", {
+  const response = await fetch(apiUrl("/reference-jobs/upload"), {
     method: "POST",
     body: formData,
   })
@@ -251,7 +251,7 @@ function ReferenceEditPage() {
 
   useEffect(() => {
     if (!selectedJobId || isTerminal) return
-    const source = new EventSource(`/api/reference-jobs/${selectedJobId}/events`)
+    const source = new EventSource(apiUrl(`/reference-jobs/${selectedJobId}/events`))
     source.onmessage = (event) => {
       try {
         const snapshot = JSON.parse(event.data) as ReferenceJobResponse
@@ -994,7 +994,7 @@ function ReferenceEditPage() {
                           </p>
                         </div>
                         <Button asChild className="min-h-11">
-                          <a href={`/api/reference-jobs/${activeJob.id}/download`} download>
+                          <a href={apiUrl(`/reference-jobs/${activeJob.id}/download`)} download>
                             <Download aria-hidden="true" className="mr-1.5 size-4" />
                             {t.reference.downloadResult}
                           </a>
@@ -1007,7 +1007,7 @@ function ReferenceEditPage() {
                         >
                           <video
                             key={activeJob.id}
-                            src={`/api/reference-jobs/${activeJob.id}/stream`}
+                            src={apiUrl(`/reference-jobs/${activeJob.id}/stream`)}
                             controls
                             playsInline
                             preload="metadata"
