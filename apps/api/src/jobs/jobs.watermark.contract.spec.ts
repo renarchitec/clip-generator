@@ -16,7 +16,7 @@ test('create-job DTO menerima watermark opsional (settings|null)', async () => {
   assert.match(dto, /watermark\?: WatermarkSettingsDto \| null;/);
   assert.match(dto, /@IsWatermarkSettings\(\)/);
   assert.match(dto, /watermarkId\?: string/);
-  assert.match(dto, /chromaKey\?: WatermarkChromaKey \| null;/);
+  assert.match(dto, /chromaKey\?: WatermarkChromaKeyDto \| null;/);
   assert.match(dto, /value === null \|\| parseWatermarkSettings\(value\)\.ok/);
 });
 

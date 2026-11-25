@@ -28,7 +28,7 @@ import {
   REFRAME_MODES,
   normalizeCaptionStyle,
 } from '@clipper/shared';
-import { parseWatermarkSettings, type WatermarkChromaKey } from '../../watermarks/watermark-helpers';
+import { parseWatermarkSettings } from '../../watermarks/watermark-helpers';
 
 export class ManualRangeDto {
   @IsNumber()
@@ -170,14 +170,40 @@ export function IsOutroSettings(validationOptions?: ValidationOptions) {
   };
 }
 
+/** Pengaturan chroma key (greenscreen) untuk video watermark. */
+export class WatermarkChromaKeyDto {
+  @IsOptional()
+  enabled?: boolean;
+
+  @IsOptional()
+  color?: string;
+
+  @IsOptional()
+  similarity?: number;
+
+  @IsOptional()
+  blend?: number;
+}
+
 /** Objek pengaturan watermark; prop didefinisikan agar tidak dihapus ValidationPipe(whitelist). */
 export class WatermarkSettingsDto {
+  @IsOptional()
   watermarkId?: string;
+
+  @IsOptional()
   x?: number;
+
+  @IsOptional()
   y?: number;
+
+  @IsOptional()
   scale?: number;
+
+  @IsOptional()
   opacity?: number;
-  chromaKey?: WatermarkChromaKey | null;
+
+  @IsOptional()
+  chromaKey?: WatermarkChromaKeyDto | null;
 }
 
 /** Izinkan null atau pengaturan watermark yang lolos skema zod. */
