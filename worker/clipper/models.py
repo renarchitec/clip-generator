@@ -89,6 +89,46 @@ def to_caption_language(value: Any) -> str:
     lowered = value.strip().lower()
     return lowered if lowered in CAPTION_LANGUAGES else DEFAULT_CAPTION_LANGUAGE
 
+
+# Batas hashtag kustom per job; harus sama dengan CUSTOM_HASHTAGS_MAX /
+# CUSTOM_HASHTAG_MAX_LENGTH di packages/shared/src/index.ts.
+CUSTOM_HASHTAGS_MAX = 15
+CUSTOM_HASHTAG_MAX_LENGTH = 50
+_CUSTOM_HASHTAG_SPLIT_RE = re.compile(r"[\s,#]+")
+_CUSTOM_HASHTAG_STRIP_RE = re.compile(r"[^\w]", re.UNICODE)
+
+
+def to_custom_hashtags(value: Any) -> List[str]:
+    """Parse toleran hashtag kustom: str atau list/tuple str; selain itu -> [].
+
+    Pecah per spasi/koma/'#', buang karakter selain huruf/angka/underscore,
+    potong 50 karakter, dedupe case-insensitive (simpan penulisan pertama),
+    maksimal 15 item. Cermin normalizeCustomHashtags di packages/shared.
+    """
+    if isinstance(value, str):
+        items: List[str] = [value]
+    elif isinstance(value, (list, tuple)):
+        items = [item for item in value if isinstance(item, str)]
+    else:
+        return []
+
+    result: List[str] = []
+    seen = set()
+    for item in items:
+        for part in _CUSTOM_HASHTAG_SPLIT_RE.split(item):
+            tag = _CUSTOM_HASHTAG_STRIP_RE.sub("", part)[:CUSTOM_HASHTAG_MAX_LENGTH]
+            if not tag:
+                continue
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(tag)
+            if len(result) >= CUSTOM_HASHTAGS_MAX:
+                return result
+    return result
+
+
 # Kunci Redis sinyal pembatalan; harus sama dengan cancelKey() di
 # apps/api/src/queue/queue.constants.ts.
 CANCEL_KEY = "cancel:{}"
@@ -323,6 +363,8 @@ class JobData:
     aspect_ratio: AspectRatio = DEFAULT_ASPECT
     # Bahasa caption sosial: auto (ikut transkrip) / id / en.
     caption_language: CaptionLanguage = DEFAULT_CAPTION_LANGUAGE  # type: ignore[assignment]
+    # Hashtag kustom; bila tidak kosong, di-inject ke caption klip dan LLM tidak membuat hashtag.
+    custom_hashtags: List[str] = field(default_factory=list)
     # Batas pemindaian sumber (detik); None = durasi penuh. Dipakai mode auto
     # dan preview; mode manual mengabaikannya (rentang sudah eksplisit).
     max_source_sec: Optional[int] = None
@@ -350,6 +392,7 @@ class JobData:
             "facecam": self.facecam,
             "aspectRatio": self.aspect_ratio,
             "captionLanguage": self.caption_language,
+            "customHashtags": list(self.custom_hashtags),
             "maxSourceSec": self.max_source_sec,
             "description": self.description,
             "params": self.params.to_dict(),
@@ -421,6 +464,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         caption_language=to_caption_language(
             _first(data, "captionLanguage", "caption_language")
         ),  # type: ignore[arg-type]
+        custom_hashtags=to_custom_hashtags(_first(data, "customHashtags", "custom_hashtags")),
         max_source_sec=max_source_sec,
         description=description,
         params=JobParams.from_dict(_first(data, "params", default={}) or {}),

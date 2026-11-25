@@ -7,14 +7,40 @@ export type MaxSourceSec = number | null
 export type CaptionLanguage = "auto" | "id" | "en"
 export const CAPTION_LANGUAGES: CaptionLanguage[] = ["auto", "id", "en"]
 export const isCaptionLanguage = (value: unknown): value is CaptionLanguage => value === "auto" || value === "id" || value === "en"
+export const CUSTOM_HASHTAGS_MAX = 15
+export const CUSTOM_HASHTAG_MAX_LENGTH = 50
+
+export function parseCustomHashtags(raw: unknown): string[] {
+  const items = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : []
+  const result: string[] = []
+  const seen = new Set<string>()
+  for (const item of items) {
+    for (const part of item.split(/[\s,#]+/)) {
+      const tag = part.replace(/[^\p{L}\p{N}_]/gu, "").slice(0, CUSTOM_HASHTAG_MAX_LENGTH)
+      if (!tag) continue
+      const key = tag.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      result.push(tag)
+      if (result.length >= CUSTOM_HASHTAGS_MAX) return result
+    }
+  }
+  return result
+}
+
+export function formatCustomHashtagsInput(tags: string[] | null | undefined): string {
+  const parsed = parseCustomHashtags(tags)
+  return parsed.map((tag) => `#${tag}`).join(" ")
+}
+
 export type JobPreview = { id: string; url: string; status: "queued" | "running" | "done" | "failed"; error: string | null; candidates: { start: number; end: number; title: string; reason: string }[] | null; cues: { start: number; end: number; text: string }[] | null }
-export type Job = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount: number; targetDurationSec: number; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; status: JobStatus; stage: "download" | "transcribe" | "select" | "render" | "save" | null; progress: number; message: string | null; error: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null; clipsCount: number }
+export type Job = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount: number; targetDurationSec: number; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; status: JobStatus; stage: "download" | "transcribe" | "select" | "render" | "save" | null; progress: number; message: string | null; error: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null; clipsCount: number }
 export type PublishMode = "direct" | "inbox"
 export type TikTokCreatorInfo = { nickname: string; username: string; avatarUrl: string | null; privacyLevelOptions: string[]; commentDisabled: boolean; duetDisabled: boolean; stitchDisabled: boolean; maxVideoPostDurationSec: number }
 export type ClipPublicationSummary = { platform: "youtube" | "instagram" | "tiktok"; status: "queued" | "uploading" | "processing" | "published" | "failed"; externalUrl: string | null; mode?: PublishMode }
 export type Clip = { id: string; title: string; startSec: number; endSec: number; downloadedAt: string | null; deletedAt: string | null; caption?: string | null; hashtags?: string[]; publications?: ClipPublicationSummary[] }
 export type RecentClip = { id: string; title: string; startSec: number; endSec: number; createdAt: string; caption?: string | null; hashtags?: string[]; publications?: ClipPublicationSummary[]; job: { id: string; url: string; aspectRatio: AspectRatio } }
-export type JobSnapshot = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount?: number; targetDurationSec?: number; ranges?: { start: number; end: number; title?: string; reason?: string }[] | null; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; watermark?: JobWatermark | null; outro?: JobOutro | null; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
+export type JobSnapshot = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount?: number; targetDurationSec?: number; ranges?: { start: number; end: number; title?: string; reason?: string }[] | null; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; watermark?: JobWatermark | null; outro?: JobOutro | null; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
 export type User = { id: string; email: string; name: string | null }
 
 export type JobOutro = { outroId: string; filePath: string | null; durationSec: number }

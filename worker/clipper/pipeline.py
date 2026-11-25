@@ -1477,11 +1477,18 @@ async def run_job(
                 job.description,
                 None,
                 job.caption_language,
+                job.custom_hashtags,
             )
             for clip, social_caption in zip(clips, social_captions):
                 if social_caption is not None:
                     clip.caption = social_caption.caption
-                    clip.hashtags = list(social_caption.hashtags)
+                    clip.hashtags = (
+                        list(job.custom_hashtags)
+                        if job.custom_hashtags
+                        else list(social_caption.hashtags)
+                    )
+                elif job.custom_hashtags:
+                    clip.hashtags = list(job.custom_hashtags)
         except Exception as exc:
             # Caption bersifat opsional; jangan pernah menggagalkan klip yang sudah dirender.
             log.warning(
@@ -1489,6 +1496,9 @@ async def run_job(
                 job.job_id,
                 exc.__class__.__name__,
             )
+            if job.custom_hashtags:
+                for clip in clips:
+                    clip.hashtags = list(job.custom_hashtags)
         result = JobResult(clips=clips)
         await save(result, clips_dir, job.job_id, on_progress)
         log.info("job %s selesai, %s clip", job.job_id, len(clips))

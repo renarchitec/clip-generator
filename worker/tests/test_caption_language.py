@@ -186,3 +186,89 @@ def test_handle_caption_job_maps_failures(monkeypatch):
     monkeypatch.setattr(llm, "regenerate_caption", bad)
     with pytest.raises(RuntimeError, match="caption_unavailable"):
         asyncio.run(worker.handle_caption_job(FakeJob()))
+
+
+# --- Hashtag kustom -------------------------------------------------------
+
+
+def test_to_custom_hashtags_normalizes_and_is_tolerant():
+    assert models.to_custom_hashtags("#Viral, #Viral  fyp_id #Tag!") == ["Viral", "fyp_id", "Tag"]
+    assert models.to_custom_hashtags(["#A b", "a", 5, None, "##", "边栏"]) == ["A", "b", "边栏"]
+    assert models.to_custom_hashtags(("x", "X", "y")) == ["x", "y"]
+    assert models.to_custom_hashtags(None) == []
+    assert models.to_custom_hashtags(42) == []
+    assert models.to_custom_hashtags({"a": 1}) == []
+    assert models.to_custom_hashtags("") == []
+    assert models.to_custom_hashtags("a" * 80) == ["a" * models.CUSTOM_HASHTAG_MAX_LENGTH]
+    many = models.to_custom_hashtags([f"t{i}" for i in range(30)])
+    assert len(many) == models.CUSTOM_HASHTAGS_MAX == 15
+    assert many[-1] == "t14"
+
+
+def test_job_data_custom_hashtags_defaults_and_parses():
+    base = {"jobId": "abc", "url": "https://x"}
+    assert job_data_from_dict(base).custom_hashtags == []
+    assert job_data_from_dict({**base, "customHashtags": ["#A", "b c", "a"]}).custom_hashtags == ["A", "b", "c"]
+    assert job_data_from_dict({**base, "custom_hashtags": "x, y"}).custom_hashtags == ["x", "y"]
+    assert job_data_from_dict({**base, "customHashtags": 7}).custom_hashtags == []
+    assert job_data_from_dict({**base, "customHashtags": ["Foo"]}).to_dict()["customHashtags"] == ["Foo"]
+    assert job_data_from_dict(base).to_dict()["customHashtags"] == []
+
+
+def test_caption_prompt_with_custom_hashtags_disables_auto_hashtags():
+    prompt = llm._caption_prompt(_moments(), _cues(), None, "id", ["Viral", "FYP"])
+    assert "JANGAN buat hashtag otomatis" in prompt
+    assert '"hashtags": []' in prompt
+    assert "3-8 string" not in prompt
+
+    default = llm._caption_prompt(_moments(), _cues(), None, "id")
+    assert "JANGAN buat hashtag otomatis" not in default
+    assert "3-8 string" in default
+    assert '"hashtags": ["..."]' in default
+    assert llm._caption_prompt(_moments(), _cues(), None, "id", []) == default
+
+
+def test_generate_captions_with_custom_hashtags_overrides_llm(monkeypatch):
+    prompts = []
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        prompts.append(prompt)
+        return '[{"index": 0, "caption": "Hook #AI seru #viral banget", "hashtags": ["llm", "auto"]}]'
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    captions = llm.generate_captions(
+        _moments(), _cues(), env=ENV_LLM, custom_hashtags=["Podcast", "Fyp"]
+    )
+    assert "JANGAN buat hashtag otomatis" in prompts[0]
+    assert captions[0] is not None
+    assert captions[0].caption == "Hook seru banget"
+    assert captions[0].hashtags == ["Podcast", "Fyp"]
+
+
+def test_strip_inline_hashtags_keeps_original_when_empty():
+    assert llm._strip_inline_hashtags("Halo   #a  dunia #b") == "Halo dunia"
+    assert llm._strip_inline_hashtags("#a #b") == "#a #b"
+
+
+def test_caption_request_parses_custom_hashtags():
+    assert llm.CaptionRequest.from_dict({"title": "T", "customHashtags": ["#A", "b"]}).custom_hashtags == ["A", "b"]
+    assert llm.CaptionRequest.from_dict({"title": "T", "custom_hashtags": "x y"}).custom_hashtags == ["x", "y"]
+    assert llm.CaptionRequest.from_dict({"title": "T", "customHashtags": 5}).custom_hashtags == []
+    assert llm.CaptionRequest.from_dict(None).custom_hashtags == []
+
+
+def test_regenerate_caption_with_custom_hashtags(monkeypatch):
+    prompts = []
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        prompts.append(prompt)
+        return '{"caption": "New hook #lagi", "hashtags": ["llm"]}'
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    caption = llm.regenerate_caption(
+        {"title": "T", "currentCaption": "Lama", "language": "en", "customHashtags": ["Brand", "Fyp"]},
+        env=ENV_LLM,
+    )
+    assert "JANGAN buat hashtag otomatis" in prompts[0]
+    assert caption.caption == "New hook"
+    assert caption.hashtags == ["Brand", "Fyp"]

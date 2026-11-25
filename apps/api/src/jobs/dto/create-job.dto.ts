@@ -110,6 +110,11 @@ export class CreateJobDto {
   @IsIn(CAPTION_LANGUAGES)
   captionLanguage: CaptionLanguage = DEFAULT_CAPTION_LANGUAGE;
 
+  /** Hashtag kustom per job (string dipisah spasi/koma atau array string). */
+  @IsOptional()
+  @IsCustomHashtags()
+  customHashtags?: string[] | string | null;
+
   /**
    * Batas pemindaian sumber dalam detik (60–36000); null/absent = durasi penuh.
    * Hanya berlaku untuk mode auto & preview; mode manual mengabaikannya.
@@ -207,6 +212,34 @@ export function IsCaptionStyle(validationOptions?: ValidationOptions) {
     registerDecorator({ name: 'isCaptionStyle', target: object.constructor, propertyName, options: validationOptions,
       validator: { validate(value: unknown) { return value === null || normalizeCaptionStyle(value) !== null; },
         defaultMessage() { return 'captionStyle harus null atau objek gaya subtitle yang valid.'; } },
+    });
+  };
+}
+
+/** Izinkan null, undefined, string (<= 500 chars), atau array string (<= 30 item, masing-masing <= 100 chars). */
+export function IsCustomHashtags(validationOptions?: ValidationOptions) {
+  return function (object: object, propertyName: string): void {
+    registerDecorator({
+      name: 'isCustomHashtags',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown) {
+          if (value === null || value === undefined) return true;
+          if (typeof value === 'string') return value.length <= 500;
+          if (Array.isArray(value)) {
+            return (
+              value.length <= 30 &&
+              value.every((item) => typeof item === 'string' && item.length <= 100)
+            );
+          }
+          return false;
+        },
+        defaultMessage() {
+          return 'customHashtags harus string (maks 500 karakter) atau array string (maks 30 item, maks 100 karakter per item).';
+        },
+      },
     });
   };
 }

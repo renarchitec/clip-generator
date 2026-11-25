@@ -22,6 +22,7 @@ import {
   DEFAULT_CAPTION_LANGUAGE,
   DEFAULT_REFRAME,
   normalizeCaptionStyle,
+  normalizeCustomHashtags,
 } from '@clipper/shared';
 import { BriefHistoryService } from '../briefs/brief-history.service';
 import { resolveClipPath } from '../clips/clip-path';
@@ -71,6 +72,7 @@ export class JobsService {
     const captionStyle = captions ? normalizeCaptionStyle(dto.captionStyle) : null;
     const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
     const captionLanguage = dto.captionLanguage ?? DEFAULT_CAPTION_LANGUAGE;
+    const customHashtags = normalizeCustomHashtags(dto.customHashtags);
     // twoSpeakers hanya berlaku untuk 9:16; dinormalisasi false untuk 1:1/16:9.
     const twoSpeakers = aspectRatio === '9:16' ? (dto.twoSpeakers ?? false) : false;
     // facecam eksklusif dengan twoSpeakers; hanya berlaku untuk 9:16.
@@ -97,6 +99,7 @@ export class JobsService {
         maxSourceSec,
         facecam,
         captionLanguage,
+        customHashtags,
         captionStyle: captionStyle ? (captionStyle as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         ranges: ranges as unknown as Prisma.InputJsonValue,
         watermark: storedWatermark
@@ -148,6 +151,7 @@ export class JobsService {
       aspectRatio,
       description,
       captionLanguage,
+      customHashtags,
       captionStyle,
       maxSourceSec,
       params: {
@@ -293,6 +297,7 @@ export class JobsService {
     dto.facecam = old.facecam;
     dto.aspectRatio = old.aspectRatio as AspectRatio;
     dto.captionLanguage = old.captionLanguage as CaptionLanguage;
+    dto.customHashtags = old.customHashtags;
     dto.captionStyle = normalizeCaptionStyle(old.captionStyle);
     dto.description = old.description ?? undefined;
     dto.ranges = (old.ranges as ManualRange[] | null) ?? undefined;
@@ -395,6 +400,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     facecam: job.facecam,
     aspectRatio: job.aspectRatio,
     captionLanguage: job.captionLanguage,
+    customHashtags: job.customHashtags,
     clipCount: job.clipCount,
     targetDurationSec: job.targetDurationSec,
     maxSourceSec: job.maxSourceSec ?? null,

@@ -350,6 +350,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       facecam: job.facecam,
       aspectRatio: job.aspectRatio,
       captionLanguage: job.captionLanguage,
+      customHashtags: job.customHashtags,
       captionStyle: normalizeCaptionStyle(job.captionStyle),
       clipCount: job.clipCount,
       targetDurationSec: job.targetDurationSec,

@@ -9,6 +9,7 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue, QueueEvents } from 'bullmq';
 import type { CaptionJobData, CaptionLanguage } from '@clipper/shared';
+import { normalizeCustomHashtags } from '@clipper/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseCaptionResult, RegeneratedCaption } from '../queue/clip-social';
 import {
@@ -49,10 +50,12 @@ export class ClipCaptionsService implements OnApplicationShutdown {
         title: true,
         caption: true,
         transcript: true,
-        job: { select: { description: true } },
+        job: { select: { description: true, customHashtags: true } },
       },
     });
     if (!clip) throw new NotFoundException(`Clip ${id} tidak ditemukan.`);
+
+    const customHashtags = normalizeCustomHashtags(clip.job.customHashtags);
 
     const data: CaptionJobData = {
       clipId: clip.id,
@@ -61,6 +64,7 @@ export class ClipCaptionsService implements OnApplicationShutdown {
       currentCaption: clip.caption ?? null,
       description: clip.job.description ?? null,
       language,
+      customHashtags,
     };
 
     let result: RegeneratedCaption | null = null;
@@ -72,6 +76,9 @@ export class ClipCaptionsService implements OnApplicationShutdown {
       });
       const value = await job.waitUntilFinished(this.events, CAPTION_WAIT_TIMEOUT_MS);
       result = parseCaptionResult(value);
+      if (result && customHashtags.length > 0) {
+        result = { caption: result.caption, hashtags: customHashtags };
+      }
     } catch (error) {
       this.logger.warn(
         `caption ${id}: ${error instanceof Error ? error.message : String(error)}`,

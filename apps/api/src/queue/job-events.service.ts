@@ -16,6 +16,8 @@ export interface JobSnapshot {
   aspectRatio: string;
   /** Bahasa caption sosial: auto | id | en. */
   captionLanguage: string;
+  /** Hashtag kustom job; bila diisi, caption klip memakainya tanpa hashtag otomatis. */
+  customHashtags?: string[];
   captionStyle?: CaptionStyle | null;
   clipCount?: number;
   targetDurationSec?: number;

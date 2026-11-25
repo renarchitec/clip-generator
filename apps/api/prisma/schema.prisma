@@ -64,6 +64,7 @@ model Job {
   facecam           Boolean   @default(false)
   aspectRatio       String    @default("9:16")
   captionLanguage   String    @default("auto")
+  customHashtags    String[]  @default([])
   /// Gaya subtitle kustom/template: CaptionStyle | null
   captionStyle      Json?
   clipCount         Int

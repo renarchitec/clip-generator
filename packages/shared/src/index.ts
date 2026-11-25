@@ -37,6 +37,38 @@ export const CAPTION_LANGUAGES = ['auto', 'id', 'en'] as const;
 export type CaptionLanguage = (typeof CAPTION_LANGUAGES)[number];
 export const DEFAULT_CAPTION_LANGUAGE: CaptionLanguage = 'auto';
 
+/** Batas jumlah dan panjang hashtag kustom per job. */
+export const CUSTOM_HASHTAGS_MAX = 15;
+export const CUSTOM_HASHTAG_MAX_LENGTH = 50;
+
+/**
+ * Normalisasi daftar/teks hashtag kustom: pecah per spasi/koma/'#', buang
+ * karakter selain huruf/angka Unicode dan underscore, potong 50 karakter,
+ * deduplikasi case-insensitive (simpan penulisan pertama), maksimal 15 item.
+ */
+export function normalizeCustomHashtags(raw: unknown): string[] {
+  const items =
+    typeof raw === 'string'
+      ? [raw]
+      : Array.isArray(raw)
+        ? raw.filter((item): item is string => typeof item === 'string')
+        : [];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    for (const part of item.split(/[\s,#]+/)) {
+      const tag = part.replace(/[^\p{L}\p{N}_]/gu, '').slice(0, CUSTOM_HASHTAG_MAX_LENGTH);
+      if (!tag) continue;
+      const key = tag.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(tag);
+      if (result.length >= CUSTOM_HASHTAGS_MAX) return result;
+    }
+  }
+  return result;
+}
+
 /** Batas panjang cuplikan transkrip per klip yang disimpan. */
 export const CLIP_TRANSCRIPT_MAX = 2000;
 
@@ -147,6 +179,8 @@ export interface JobData {
   aspectRatio: AspectRatio;
   /** bahasa caption sosial; default 'auto' (worker memakai 'auto' bila absent) */
   captionLanguage: CaptionLanguage;
+  /** hashtag kustom per job; bila diisi, worker tidak membuat hashtag otomatis */
+  customHashtags?: string[];
   captionStyle?: CaptionStyle | null;
   /** preferensi konten dari pengguna untuk pemilihan momen; null bila kosong */
   description?: string | null;
@@ -198,6 +232,8 @@ export interface CaptionJobData {
   currentCaption: string | null;
   description: string | null;
   language: CaptionLanguage;
+  /** hashtag kustom job; bila diisi, worker tidak membuat hashtag otomatis */
+  customHashtags?: string[];
 }
 
 /** Hasil job antrean `captions`; juga body respons POST /api/clips/:id/caption. */

@@ -264,6 +264,14 @@ function JobDetail() {
                   <FieldDescription>{t.captionLanguageHint}</FieldDescription>
                 </Field>
 
+                {snapshot.customHashtags && snapshot.customHashtags.length > 0 && <Field>
+                  <FieldTitle>{t.customHashtags}</FieldTitle>
+                  <div className="mt-2 flex flex-wrap gap-1.5 rounded-md border border-border bg-muted/40 p-2.5">
+                    {snapshot.customHashtags.map((tag) => <Badge key={tag} variant="secondary" className="font-mono text-xs font-normal">#{tag}</Badge>)}
+                  </div>
+                  <FieldDescription>{t.customHashtagsHint}</FieldDescription>
+                </Field>}
+
                 {snapshot.watermark && <Field>
                    <FieldTitle>{t.watermark}</FieldTitle>
                    <div className="mt-2 flex items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
