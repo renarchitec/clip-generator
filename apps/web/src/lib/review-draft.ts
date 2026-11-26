@@ -1,4 +1,4 @@
-import type { AspectRatio, CaptionLanguage, MaxSourceSec, Reframe } from "@/lib/api"
+import type { AspectRatio, CaptionLanguage, MaxSourceSec, Reframe, TranscriptSource } from "@/lib/api"
 import type { CaptionStyle } from "@/lib/caption-style"
 
 export type ReviewDraft = {
@@ -16,6 +16,7 @@ export type ReviewDraft = {
   duration: number
   description: string
   captionLanguage?: CaptionLanguage
+  transcriptSource?: TranscriptSource
   captionStyle?: CaptionStyle
   customHashtags?: string
   ranges: { start: string; end: string; title?: string; reason?: string; hookText?: string }[]
@@ -50,6 +51,7 @@ export function loadReviewDraft(): ReviewDraft | null {
       aspectRatio: ["9:16", "1:1", "16:9"].includes(d.aspectRatio ?? "") ? d.aspectRatio as AspectRatio : "9:16",
       maxSourceSec: d.maxSourceSec === null || d.maxSourceSec === undefined ? null : Number.isInteger(d.maxSourceSec) && d.maxSourceSec >= 60 && d.maxSourceSec <= 36000 ? d.maxSourceSec : null,
       captionLanguage: d.captionLanguage === "id" || d.captionLanguage === "en" ? d.captionLanguage : "auto",
+      transcriptSource: d.transcriptSource === "youtube" || d.transcriptSource === "auto" || d.transcriptSource === "live_chat_stt" ? d.transcriptSource : "youtube",
       customHashtags: typeof d.customHashtags === "string" ? d.customHashtags.slice(0, 500) : "",
       selectedCandidates: Array.isArray(d.selectedCandidates) ? d.selectedCandidates.filter((i) => Number.isInteger(i)) : [],
     }

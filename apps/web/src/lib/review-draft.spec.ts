@@ -24,6 +24,7 @@ const sample: ReviewDraft = {
   duration: 45,
   description: "highlights",
   captionLanguage: "id",
+  transcriptSource: "live_chat_stt",
   customHashtags: "",
   ranges: [{ start: "", end: "" }],
   reviewFirst: true,
@@ -43,8 +44,9 @@ assert.equal(loadReviewDraft()?.twoSpeakers, false)
 assert.equal(loadReviewDraft()?.facecam, false)
 assert.equal(loadReviewDraft()?.aspectRatio, "9:16")
 assert.equal(loadReviewDraft()?.maxSourceSec, null)
-store.set("clipper-review-draft", JSON.stringify({ ...sample, captionLanguage: "fr" }))
+store.set("clipper-review-draft", JSON.stringify({ ...sample, captionLanguage: "fr", transcriptSource: "invalid" }))
 assert.equal(loadReviewDraft()?.captionLanguage, "auto")
+assert.equal(loadReviewDraft()?.transcriptSource, "youtube")
 
 // 2. Clear
 clearReviewDraft()

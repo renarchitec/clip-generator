@@ -37,6 +37,10 @@ export const CAPTION_LANGUAGES = ['auto', 'id', 'en'] as const;
 export type CaptionLanguage = (typeof CAPTION_LANGUAGES)[number];
 export const DEFAULT_CAPTION_LANGUAGE: CaptionLanguage = 'auto';
 
+export const TRANSCRIPT_SOURCES = ['youtube', 'auto', 'live_chat_stt'] as const;
+export type TranscriptSource = (typeof TRANSCRIPT_SOURCES)[number];
+export const DEFAULT_TRANSCRIPT_SOURCE: TranscriptSource = 'youtube';
+
 /** Batas jumlah dan panjang hashtag kustom per job. */
 export const CUSTOM_HASHTAGS_MAX = 15;
 export const CUSTOM_HASHTAG_MAX_LENGTH = 50;
@@ -192,6 +196,7 @@ export interface JobData {
   aspectRatio: AspectRatio;
   /** bahasa caption sosial; default 'auto' (worker memakai 'auto' bila absent) */
   captionLanguage: CaptionLanguage;
+  transcriptSource?: TranscriptSource;
   /** hashtag kustom per job; bila diisi, worker tidak membuat hashtag otomatis */
   customHashtags?: string[];
   captionStyle?: CaptionStyle | null;
@@ -295,6 +300,7 @@ export type PreviewStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface PreviewJobData {
   url: string;
+  transcriptSource?: TranscriptSource;
   userId: string;
   description?: string | null;
   clipCount: number;
@@ -329,6 +335,7 @@ export type FrameStatus = 'queued' | 'running' | 'done' | 'failed';
 export interface PreviewResponse {
   id: string;
   url: string;
+  transcriptSource?: TranscriptSource;
   status: PreviewStatus;
   error: string | null;
   candidates: PreviewCandidate[] | null;

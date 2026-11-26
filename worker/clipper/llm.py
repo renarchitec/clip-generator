@@ -110,18 +110,20 @@ def _loads(candidate: str) -> Any:
         return None
 
 
-def _unwrap_list(data: Any) -> Optional[list]:
+def _unwrap_list(data: Any, list_keys: Sequence[str]) -> Optional[list]:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in _LIST_KEYS:
+        for key in list_keys:
             value = data.get(key)
             if isinstance(value, list):
                 return value
     return None
 
 
-def parse_llm_json(raw: str) -> List[dict]:
+def parse_llm_json(
+    raw: str, *, list_keys: Sequence[str] = _LIST_KEYS, allow_empty: bool = False,
+) -> List[dict]:
     """Ambil JSON list dari jawaban LLM, toleran fence/prosa/trailing comma."""
     if not raw or not isinstance(raw, str):
         raise ValueError("jawaban LLM kosong, tidak ada JSON list")
@@ -142,7 +144,7 @@ def parse_llm_json(raw: str) -> List[dict]:
         data = _loads(candidate)
         if data is None:
             continue
-        unwrapped = _unwrap_list(data)
+        unwrapped = _unwrap_list(data, list_keys)
         if unwrapped is None:
             continue
         payload = unwrapped
@@ -152,7 +154,7 @@ def parse_llm_json(raw: str) -> List[dict]:
         raise ValueError("tidak ada JSON list yang valid di jawaban LLM")
 
     items = [item for item in payload if isinstance(item, dict)]
-    if not items:
+    if not items and not (allow_empty and not payload):
         raise ValueError("JSON list jawaban LLM tidak berisi object")
     return items
 

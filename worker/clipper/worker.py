@@ -11,11 +11,12 @@ import logging
 import os
 import signal
 from datetime import datetime, timezone
+from typing import Mapping
 
 import redis.asyncio as redis
 from bullmq import Worker
 
-from . import llm, models, pipeline
+from . import llm, models, pipeline, stt
 
 log = logging.getLogger("clipper.worker")
 
@@ -44,15 +45,19 @@ LLM_STATUS_TTL = 90
 LLM_STATUS_INTERVAL = 30
 
 
-def build_llm_status_payload() -> dict:
-    base_url = (os.getenv("LLM_BASE_URL") or "").strip()
-    api_key = (os.getenv("LLM_API_KEY") or "").strip()
-    model = (os.getenv("LLM_MODEL") or "").strip()
+def build_llm_status_payload(env: Mapping[str, str] | None = None) -> dict:
+    env = os.environ if env is None else env
+    base_url = env.get("LLM_BASE_URL", "").strip()
+    api_key = env.get("LLM_API_KEY", "").strip()
+    model = env.get("LLM_MODEL", "").strip()
     configured = bool(base_url and api_key and model)
+    stt_configured = stt.is_stt_configured(env)
 
     return {
         "configured": configured,
         "model": model or None,
+        "sttConfigured": stt_configured,
+        "sttModel": stt.stt_config(env).model if stt_configured else None,
         "lastCall": llm.last_llm_call(),
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -122,10 +127,18 @@ async def handle_job(job, token: str | None = None, redis_client: redis.Redis | 
 async def handle_preview_job(job, token: str | None = None, redis_client: redis.Redis | None = None):
     job_id = getattr(job, "id", None) or getattr(job, "jobId", None) or "preview"
     log.info("preview job %s mulai", job_id)
+
+    async def on_progress(stage: str, percent: float, message: str = "") -> None:
+        try:
+            await job.updateProgress(models.JobProgress(stage=stage, percent=percent, message=message).to_dict())
+        except Exception as exc:
+            log.warning("preview %s: gagal kirim progress: %s", job_id, exc)
+
     try:
         result = await pipeline.run_preview(
             job.data or {},
             temp_root=os.getenv("TEMP_ROOT") or None,
+            on_progress=on_progress,
         )
         log.info(
             "preview job %s selesai: %s kandidat, %s cue",

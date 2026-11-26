@@ -15,7 +15,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import type { AspectRatio, CaptionLanguage, CaptionStyle, JobMode, ReframeMode } from '@clipper/shared';
+import type { AspectRatio, CaptionLanguage, CaptionStyle, JobMode, ReframeMode, TranscriptSource } from '@clipper/shared';
 import {
   ASPECT_RATIOS,
   CAPTION_LANGUAGES,
@@ -27,6 +27,7 @@ import {
   MAX_SOURCE_SEC,
   MIN_SOURCE_SEC,
   REFRAME_MODES,
+  TRANSCRIPT_SOURCES,
   normalizeCaptionStyle,
 } from '@clipper/shared';
 import { parseWatermarkList } from '../../watermarks/watermark-helpers';
@@ -163,6 +164,10 @@ export class CreateJobDto {
   @IsOptional()
   @IsIn(CAPTION_LANGUAGES)
   captionLanguage: CaptionLanguage = DEFAULT_CAPTION_LANGUAGE;
+
+  @IsOptional()
+  @IsIn(TRANSCRIPT_SOURCES)
+  transcriptSource?: TranscriptSource;
 
   /** Hashtag kustom per job (string dipisah spasi/koma atau array string). */
   @IsOptional()

@@ -4,16 +4,8 @@ import { AlertTriangle, CheckCircle2, CircleHelp, Cpu, LoaderCircle } from "luci
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { api } from "@/lib/api"
+import { api, type LlmStatus as LlmStatusData } from "@/lib/api"
 import { useLanguage, useT } from "@/lib/i18n"
-
-type LlmStatusData = {
-  workerOnline: boolean
-  configured: boolean
-  model: string | null
-  lastCall: null | { ok: boolean; at: string; error?: string }
-  updatedAt: string | null
-}
 
 type StatusState = "offline" | "unconfigured" | "failed" | "ready" | "untested" | "unavailable"
 

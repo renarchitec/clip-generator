@@ -24,3 +24,8 @@ def test_worker_import_initializes_default_clips_dir(monkeypatch):
     spec.loader.exec_module(worker)
 
     assert worker.DEFAULT_CLIPS_DIR == worker.clips_dir()
+    assert worker.build_llm_status_payload({})["sttModel"] is None
+    status = worker.build_llm_status_payload({"LLM_BASE_URL": "https://router.test/v1", "LLM_API_KEY": "test"})
+    assert status["configured"] is False
+    assert status["sttConfigured"] is True
+    assert status["sttModel"] == "groq/whisper-large-v3-turbo"

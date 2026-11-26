@@ -23,6 +23,9 @@ FRAME_QUEUE_NAME = "clip-frames"
 CAPTION_LANGUAGES = ("auto", "id", "en")
 DEFAULT_CAPTION_LANGUAGE = "auto"
 CaptionLanguage = Literal["auto", "id", "en"]
+TRANSCRIPT_SOURCES = ("youtube", "auto", "live_chat_stt")
+DEFAULT_TRANSCRIPT_SOURCE: Literal["youtube"] = "youtube"
+TranscriptSource = Literal["youtube", "auto", "live_chat_stt"]
 # Batas cuplikan transkrip per klip; harus sama dengan CLIP_TRANSCRIPT_MAX.
 CLIP_TRANSCRIPT_MAX = 2000
 
@@ -103,6 +106,15 @@ def to_caption_language(value: Any) -> str:
         return DEFAULT_CAPTION_LANGUAGE
     lowered = value.strip().lower()
     return lowered if lowered in CAPTION_LANGUAGES else DEFAULT_CAPTION_LANGUAGE
+
+
+def to_transcript_source(value: Any) -> TranscriptSource:
+    """Parse toleran: nilai tidak dikenal/hilang -> 'youtube'."""
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in TRANSCRIPT_SOURCES:
+            return lowered  # type: ignore[return-value]
+    return DEFAULT_TRANSCRIPT_SOURCE
 
 
 # Batas hashtag kustom per job; harus sama dengan CUSTOM_HASHTAGS_MAX /
@@ -453,6 +465,7 @@ class JobData:
     watermarks: List[Watermark] = field(default_factory=list)
     hook_banner: bool = False
     normalize_audio: bool = True
+    transcript_source: TranscriptSource = DEFAULT_TRANSCRIPT_SOURCE
 
     def __post_init__(self) -> None:
         if self.watermarks:
@@ -479,6 +492,7 @@ class JobData:
             "facecam": self.facecam,
             "aspectRatio": self.aspect_ratio,
             "captionLanguage": self.caption_language,
+            "transcriptSource": self.transcript_source,
             "customHashtags": list(self.custom_hashtags),
             "maxSourceSec": self.max_source_sec,
             "description": self.description,
@@ -572,6 +586,7 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         caption_language=to_caption_language(
             _first(data, "captionLanguage", "caption_language")
         ),  # type: ignore[arg-type]
+        transcript_source=to_transcript_source(_first(data, "transcriptSource", "transcript_source")),
         custom_hashtags=to_custom_hashtags(_first(data, "customHashtags", "custom_hashtags")),
         max_source_sec=max_source_sec,
         description=description,

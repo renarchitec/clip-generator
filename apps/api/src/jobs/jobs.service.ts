@@ -17,11 +17,13 @@ import type {
   JobData,
   ManualRange,
   ReframeMode,
+  TranscriptSource,
 } from '@clipper/shared';
 import {
   DEFAULT_ASPECT,
   DEFAULT_CAPTION_LANGUAGE,
   DEFAULT_REFRAME,
+  DEFAULT_TRANSCRIPT_SOURCE,
   normalizeCaptionStyle,
   normalizeCustomHashtags,
 } from '@clipper/shared';
@@ -80,6 +82,7 @@ export class JobsService {
     const captionStyle = captions ? normalizeCaptionStyle(dto.captionStyle) : null;
     const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
     const captionLanguage = dto.captionLanguage ?? DEFAULT_CAPTION_LANGUAGE;
+    const transcriptSource = dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE;
     const customHashtags = normalizeCustomHashtags(dto.customHashtags);
     // twoSpeakers hanya berlaku untuk 9:16; dinormalisasi false untuk 1:1/16:9.
     const twoSpeakers = aspectRatio === '9:16' ? (dto.twoSpeakers ?? false) : false;
@@ -110,6 +113,7 @@ export class JobsService {
         hookBanner,
         normalizeAudio,
         captionLanguage,
+        transcriptSource,
         customHashtags,
         captionStyle: captionStyle ? (captionStyle as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         ranges: ranges as unknown as Prisma.InputJsonValue,
@@ -164,6 +168,7 @@ export class JobsService {
       aspectRatio,
       description,
       captionLanguage,
+      transcriptSource,
       customHashtags,
       captionStyle,
       maxSourceSec,
@@ -315,6 +320,7 @@ export class JobsService {
     dto.facecam = old.facecam;
     dto.aspectRatio = old.aspectRatio as AspectRatio;
     dto.captionLanguage = old.captionLanguage as CaptionLanguage;
+    dto.transcriptSource = (old.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE) as TranscriptSource;
     dto.customHashtags = old.customHashtags;
     dto.captionStyle = normalizeCaptionStyle(old.captionStyle);
     dto.description = old.description ?? undefined;
@@ -428,6 +434,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     facecam: job.facecam,
     aspectRatio: job.aspectRatio,
     captionLanguage: job.captionLanguage,
+    transcriptSource: (job.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE) as TranscriptSource,
     customHashtags: job.customHashtags,
     captionStyle: normalizeCaptionStyle(job.captionStyle),
     clipCount: job.clipCount,
