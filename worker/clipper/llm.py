@@ -121,68 +121,6 @@ def _unwrap_list(data: Any) -> Optional[list]:
     return None
 
 
-DEFAULT_VISION_MODEL = "clipper-vision"
-
-
-def vision_model_from_env(env: Optional[Mapping[str, str]] = None) -> str:
-    """Vision model dedicated to Reference Edit; blank values use the safe default."""
-    values = env if env is not None else os.environ
-    return (values.get("LLM_VISION_MODEL") or "").strip() or DEFAULT_VISION_MODEL
-
-
-def complete_vision(
-    system: str,
-    prompt: str,
-    images_b64: Sequence[str],
-    *,
-    base_url: str,
-    api_key: str,
-    model: str,
-    temperature: float = 0.1,
-) -> str:
-    """Make one OpenAI-compatible multimodal completion and record its status."""
-    try:
-        from openai import OpenAI
-
-        content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
-        content.extend(
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}
-            for image in images_b64
-        )
-        client = OpenAI(base_url=base_url, api_key=api_key, timeout=180.0, max_retries=0)
-        response = client.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": content},
-            ],
-        )
-        text = response.choices[0].message.content or ""
-        _record_call(True)
-        return text
-    except Exception as exc:
-        detail = _short_error(exc).replace(api_key, "***")[:200] if api_key else _short_error(exc)
-        _record_call(False, detail)
-        raise
-
-
-def parse_llm_object(raw: str) -> Dict[str, Any]:
-    """Extract a JSON object from prose/fences, tolerating trailing commas."""
-    if not isinstance(raw, str) or not raw.strip():
-        raise ValueError("jawaban LLM kosong, tidak ada JSON object")
-    text = raw.strip()
-    candidates: List[str] = [match.strip() for match in _FENCE_RE.findall(text)] + [text]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        data = _loads(candidate)
-        if isinstance(data, dict):
-            return dict(data)
-    raise ValueError("tidak ada JSON object yang valid di jawaban LLM")
-
-
 def parse_llm_json(raw: str) -> List[dict]:
     """Ambil JSON list dari jawaban LLM, toleran fence/prosa/trailing comma."""
     if not raw or not isinstance(raw, str):

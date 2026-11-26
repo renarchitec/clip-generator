@@ -37,7 +37,6 @@ model User {
   watermarks     Watermark[]
   outros         Outro[]
   briefHistory   BriefHistory[]
-  referenceJobs  ReferenceJob[]
 
   @@map("users")
 }
@@ -143,43 +142,6 @@ model BriefHistory {
   @@unique([userId, text])
   @@index([userId, lastUsedAt])
   @@map("brief_history")
-}
-
-model ReferenceJob {
-  id                   String    @id @default(uuid())
-  userId               String
-  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title                String    @default("")
-  brief                String?
-  aspectRatio          String    @default("9:16")
-  reframe              String    @default("face_tracking")
-  captions             Boolean   @default(true)
-  beatSync             Boolean   @default(true)
-  referenceUrl         String?
-  /// relatif terhadap CLIPS_DIR, mis. reference/uploads/<userId>/<id>.mp4
-  referenceFilePath    String?
-  referenceDurationSec Float?
-  /// ReferenceFootageItem[]
-  footage              Json      @default("[]")
-  status               JobStatus @default(queued)
-  stage                String?
-  progress             Int       @default(0)
-  message              String?
-  error                String?
-  /// ReferenceTemplateSlot[] | null
-  templateSlots        Json?
-  /// ReferencePlanSlot[] | null
-  planSlots            Json?
-  outputFilePath       String?
-  outputDurationSec    Float?
-  caption              String?
-  hashtags             String[]  @default([])
-  createdAt            DateTime  @default(now())
-  startedAt            DateTime?
-  finishedAt           DateTime?
-
-  @@index([userId, createdAt])
-  @@map("reference_jobs")
 }
 
 model Clip {

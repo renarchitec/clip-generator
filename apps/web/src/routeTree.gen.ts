@@ -13,7 +13,6 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClipsRouteImport } from './routes/clips'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PrivacyRouteImport } from './routes/privacy'
-import { Route as ReferenceRouteImport } from './routes/reference'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TermsRouteImport } from './routes/terms'
@@ -39,11 +38,6 @@ const LoginRoute = LoginRouteImport.update({
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ReferenceRoute = ReferenceRouteImport.update({
-  id: '/reference',
-  path: '/reference',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RegisterRoute = RegisterRouteImport.update({
@@ -82,7 +76,6 @@ export interface FileRoutesByFullPath {
   '/clips': typeof ClipsRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
-  '/reference': typeof ReferenceRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
   '/terms': typeof TermsRoute
@@ -95,7 +88,6 @@ export interface FileRoutesByTo {
   '/clips': typeof ClipsRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
-  '/reference': typeof ReferenceRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
   '/terms': typeof TermsRoute
@@ -109,7 +101,6 @@ export interface FileRoutesById {
   '/clips': typeof ClipsRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
-  '/reference': typeof ReferenceRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRoute
   '/terms': typeof TermsRoute
@@ -124,7 +115,6 @@ export interface FileRouteTypes {
     | '/clips'
     | '/login'
     | '/privacy'
-    | '/reference'
     | '/register'
     | '/settings'
     | '/terms'
@@ -137,7 +127,6 @@ export interface FileRouteTypes {
     | '/clips'
     | '/login'
     | '/privacy'
-    | '/reference'
     | '/register'
     | '/settings'
     | '/terms'
@@ -150,7 +139,6 @@ export interface FileRouteTypes {
     | '/clips'
     | '/login'
     | '/privacy'
-    | '/reference'
     | '/register'
     | '/settings'
     | '/terms'
@@ -164,7 +152,6 @@ export interface RootRouteChildren {
   ClipsRoute: typeof ClipsRoute
   LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
-  ReferenceRoute: typeof ReferenceRoute
   RegisterRoute: typeof RegisterRoute
   SettingsRoute: typeof SettingsRoute
   TermsRoute: typeof TermsRoute
@@ -201,13 +188,6 @@ declare module '@tanstack/react-router' {
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof PrivacyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reference': {
-      id: '/reference'
-      path: '/reference'
-      fullPath: '/reference'
-      preLoaderRoute: typeof ReferenceRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/register': {
@@ -260,7 +240,6 @@ const rootRouteChildren: RootRouteChildren = {
   ClipsRoute: ClipsRoute,
   LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
-  ReferenceRoute: ReferenceRoute,
   RegisterRoute: RegisterRoute,
   SettingsRoute: SettingsRoute,
   TermsRoute: TermsRoute,
