@@ -202,6 +202,8 @@ function Dashboard() {
   const [outroId, setOutroId] = useState<string | null>(null)
   const [monitorView, setMonitorView] = useState<"video" | "frame">("video")
   const [showSafeZone, setShowSafeZone] = useState(false)
+  const [showHookPreview, setShowHookPreview] = useState(false)
+  const [hookPreviewText, setHookPreviewText] = useState("")
   const [error, setError] = useState("")
   /** True while a new job must not be started (see `blockingJob` below). Read inside submit handlers. */
   const generationLocked = useRef(false)
@@ -590,6 +592,25 @@ function Dashboard() {
   useEffect(() => {
     setMonitorView(activeFrame ? "frame" : "video")
   }, [activeFrame?.id ?? null])
+  useEffect(() => {
+    if (!hookBanner) setShowHookPreview(false)
+  }, [hookBanner])
+  const derivedHookSample = useMemo(() => {
+    if (mode === "manual") {
+      const firstRange = formValues.ranges[0]
+      const manualHook = firstRange?.hookText?.trim() || firstRange?.title?.trim()
+      if (manualHook) return manualHook
+    }
+    if (previewId && preview.data?.candidates?.length) {
+      const firstSelectedIndex = selectedCandidates[0]
+      const selectedCandidate =
+        firstSelectedIndex !== undefined ? preview.data.candidates[firstSelectedIndex] : undefined
+      const candidateHook = selectedCandidate?.hookText?.trim() || selectedCandidate?.title?.trim()
+      if (candidateHook) return candidateHook
+    }
+    return t.hookPreviewSample
+  }, [mode, formValues.ranges, previewId, preview.data?.candidates, selectedCandidates, t.hookPreviewSample])
+  const effectiveHookPreviewText = hookPreviewText.trim() || derivedHookSample
   const retryJob = useMutation({ mutationFn: () => api<JobSnapshot>(`/jobs/${selectedJobId}/retry`, { method: "POST" }), onSuccess: (next) => { void client.invalidateQueries({ queryKey: ["jobs"] }); void navigate({ to: "/", search: (previous) => ({ ...previous, job: next.id }) }) } })
   const enhanceBrief = useMutation({
     mutationFn: (brief: string) => api<{ brief: string }>("/briefs/expand", { method: "POST", body: JSON.stringify({ brief }) }),
@@ -616,6 +637,24 @@ function Dashboard() {
         <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border px-4 text-sm text-muted-foreground">
           <span className="min-w-0 truncate">{formValues.url.trim() ? sourceLabel(formValues.url.trim()) : t.noSource}</span>
           <div className="flex shrink-0 items-center gap-2">
+            {hookBanner && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={showHookPreview ? "secondary" : "outline"}
+                    size="sm"
+                    aria-pressed={showHookPreview}
+                    onClick={() => setShowHookPreview((value) => !value)}
+                    className={`h-8 gap-1.5 px-2.5 text-xs ${showHookPreview ? "border-amber-400/50 bg-amber-500/12 text-amber-700 hover:bg-amber-500/18 dark:text-amber-300" : ""}`}
+                  >
+                    <PanelTop aria-hidden="true" className="size-3.5" />
+                    {t.hookPreviewButton}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t.hookPreviewTooltip}</TooltipContent>
+              </Tooltip>
+            )}
             {aspectRatio === "9:16" && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -721,11 +760,13 @@ function Dashboard() {
                 twoSpeakers={twoSpeakers}
                 onCaptionStyleChange={setCaptionStyle}
                 showSafeZone={showSafeZone && aspectRatio === "9:16"}
+                showHookPreview={showHookPreview && hookBanner}
+                hookPreviewText={effectiveHookPreviewText}
                 frame={{ imageUrl: activeFrame.imageUrl, width: activeFrame.width, height: activeFrame.height, alt: t.frameImageAlt.replace("{time}", formatFrameTime(activeFrame.atSec)), caption: `${activeFrame.width}×${activeFrame.height} · ${formatFrameTime(activeFrame.atSec)}`, busy: framePreview.running, onImageError: () => framePreview.markImageBroken(activeFrame.id) }}
               />
             </> : <>
               {embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0"/> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play className="ml-1 size-5"/></span><p className="font-display text-lg text-foreground">{t.sourceStatement}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.pasteToPreview}</p></div></div>}
-              {(appliedWatermarkLayers.length > 0 || (captions && embed) || (showSafeZone && aspectRatio === "9:16")) && (
+              {(appliedWatermarkLayers.length > 0 || (captions && embed) || (showSafeZone && aspectRatio === "9:16") || (showHookPreview && hookBanner)) && (
                 <WatermarkOverlay
                   aspectRatio={aspectRatio}
                   layers={appliedWatermarkLayers}
@@ -737,6 +778,8 @@ function Dashboard() {
                   twoSpeakers={twoSpeakers}
                   onCaptionStyleChange={setCaptionStyle}
                   showSafeZone={showSafeZone && aspectRatio === "9:16"}
+                  showHookPreview={showHookPreview && hookBanner}
+                  hookPreviewText={effectiveHookPreviewText}
                 />
               )}
             </>}
@@ -825,24 +868,63 @@ function Dashboard() {
                       }]
                     : []),
                 ].map(({ key, icon: Icon, label, hint, checked, unavailable, onChange }) => (
-                  <label
-                    key={key}
-                    htmlFor={`opt-${key}`}
-                    className={`relative flex min-h-12 w-full items-center gap-3 py-2.5 text-left transition-colors ${unavailable ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-secondary/40"}`}
-                  >
-                    <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-medium">{label}</span>
-                      <span className="block text-xs leading-relaxed text-muted-foreground">{hint}</span>
-                    </span>
-                    <Switch
-                      id={`opt-${key}`}
-                      aria-label={label}
-                      checked={checked}
-                      disabled={unavailable}
-                      onCheckedChange={onChange}
-                    />
-                  </label>
+                  <div key={key} className="relative">
+                    <label
+                      htmlFor={`opt-${key}`}
+                      className={`relative flex min-h-12 w-full items-center gap-3 py-2.5 text-left transition-colors ${unavailable ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-secondary/40"}`}
+                    >
+                      <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">{label}</span>
+                        <span className="block text-xs leading-relaxed text-muted-foreground">{hint}</span>
+                      </span>
+                      <Switch
+                        id={`opt-${key}`}
+                        aria-label={label}
+                        checked={checked}
+                        disabled={unavailable}
+                        onCheckedChange={onChange}
+                      />
+                    </label>
+                    {key === "hook-banner" && hookBanner && (
+                      <div className="relative mb-3 space-y-1.5 rounded-lg border border-border/70 bg-secondary/30 p-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <label htmlFor="hook-preview-text" className="text-[11px] font-medium text-foreground">
+                            {t.hookPreviewInputLabel}
+                          </label>
+                          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                            {hookPreviewText.length}/80
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            id="hook-preview-text"
+                            type="text"
+                            maxLength={80}
+                            value={hookPreviewText}
+                            placeholder={derivedHookSample}
+                            onChange={(event) => setHookPreviewText(event.target.value)}
+                            aria-describedby="hook-preview-hint"
+                            className="h-8 min-w-0 flex-1 rounded-md bg-background px-2.5 text-xs"
+                          />
+                          <Button
+                            type="button"
+                            variant={showHookPreview ? "secondary" : "outline"}
+                            size="sm"
+                            aria-pressed={showHookPreview}
+                            onClick={() => setShowHookPreview((value) => !value)}
+                            className={`h-8 shrink-0 gap-1 px-2.5 text-xs ${showHookPreview ? "border-amber-400/50 bg-amber-500/12 text-amber-700 hover:bg-amber-500/18 dark:text-amber-300" : ""}`}
+                          >
+                            <PanelTop aria-hidden="true" className="size-3.5" />
+                            {showHookPreview ? t.hookPreviewHide : t.hookPreviewShow}
+                          </Button>
+                        </div>
+                        <p id="hook-preview-hint" className="text-[11px] leading-relaxed text-muted-foreground">
+                          {t.hookPreviewInputHint}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </Field>

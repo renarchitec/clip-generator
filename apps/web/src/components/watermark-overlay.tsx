@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react"
 import { LoaderCircle } from "lucide-react"
+import { HookThumbnailOverlay } from "@/components/hook-thumbnail-overlay"
 import { SubtitleOverlay } from "@/components/subtitle-overlay"
 import { WatermarkMedia } from "@/components/watermark-media"
 import type { AspectRatio } from "@/lib/api"
@@ -36,6 +37,8 @@ type Props = {
   twoSpeakers?: boolean
   onCaptionStyleChange?: (next: CaptionStyle) => void
   showSafeZone?: boolean
+  showHookPreview?: boolean
+  hookPreviewText?: string
 }
 
 /**
@@ -54,12 +57,16 @@ export function WatermarkOverlay({
   twoSpeakers = false,
   onCaptionStyleChange,
   showSafeZone = false,
+  showHookPreview = false,
+  hookPreviewText = "",
 }: Props) {
   const t = useT()
   const frameRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ layerId: string; pointerId: number; offsetX: number; offsetY: number } | null>(null)
   const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null)
-  const [frameHeightPx, setFrameHeightPx] = useState(0)
+  const [frameSizePx, setFrameSizePx] = useState({ width: 0, height: 0 })
+  const frameWidthPx = frameSizePx.width
+  const frameHeightPx = frameSizePx.height
 
   const hasLayers = layers.length > 0
   const multiLayer = layers.length > 1
@@ -81,15 +88,23 @@ export function WatermarkOverlay({
   useEffect(() => {
     const el = frameRef.current
     if (!el) return
+    const commitSize = (width: number, height: number) => {
+      if (width <= 0 || height <= 0) return
+      setFrameSizePx((prev) =>
+        Math.abs(prev.width - width) < 0.5 && Math.abs(prev.height - height) < 0.5
+          ? prev
+          : { width, height },
+      )
+    }
     const update = () => {
-      const next = el.getBoundingClientRect().height
-      if (next > 0) setFrameHeightPx(next)
+      const rect = el.getBoundingClientRect()
+      commitSize(rect.width, rect.height)
     }
     update()
     if (typeof ResizeObserver === "undefined") return
     const observer = new ResizeObserver((entries) => {
-      const next = entries[0]?.contentRect.height
-      if (next && next > 0) setFrameHeightPx(next)
+      const rect = entries[0]?.contentRect
+      if (rect) commitSize(rect.width, rect.height)
     })
     observer.observe(el)
     return () => observer.disconnect()
@@ -168,7 +183,7 @@ export function WatermarkOverlay({
   return (
     <div
       className={`absolute inset-0 z-10 grid place-items-center p-3 ${frame ? "bg-zinc-950" : "pointer-events-none"}`}
-      aria-hidden={!hasLayers && !frame && !showSubtitle && !safeZoneVisible}
+      aria-hidden={!hasLayers && !frame && !showSubtitle && !safeZoneVisible && !showHookPreview}
     >
       <div
         ref={frameRef}
@@ -177,6 +192,15 @@ export function WatermarkOverlay({
         style={frameStyle}
       >
         {frame && <img src={frame.imageUrl} alt={frame.alt} draggable={false} onError={frame.onImageError} className="absolute inset-0 size-full select-none object-fill" />}
+        {showHookPreview && (
+          <HookThumbnailOverlay
+            aspectRatio={aspectRatio}
+            text={hookPreviewText}
+            frameWidthPx={frameWidthPx}
+            frameHeightPx={frameHeightPx}
+            hasFrame={Boolean(frame)}
+          />
+        )}
         {safeZoneVisible && (
           <div
             data-testid="safe-zone-overlay"
@@ -204,7 +228,7 @@ export function WatermarkOverlay({
             <span className="sr-only">{t.frameRendering}</span>
           </div>
         )}
-        {layers.map((item, index) => {
+        {!showHookPreview && layers.map((item, index) => {
           const { layer, watermark } = item
           const { width, height } = getLayerSize(watermark, layer.scale)
           const leftFrac = layer.x - width / 2
@@ -273,7 +297,7 @@ export function WatermarkOverlay({
             </button>
           )
         })}
-        {showSubtitle && captionStyle && onCaptionStyleChange && frameHeightPx > 0 && (
+        {!showHookPreview && showSubtitle && captionStyle && onCaptionStyleChange && frameHeightPx > 0 && (
           <SubtitleOverlay
             style={captionStyle}
             twoSpeakers={twoSpeakers}
