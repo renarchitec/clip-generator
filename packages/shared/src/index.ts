@@ -442,6 +442,11 @@ export interface PublicationResponse {
   createdAt: string;
   updatedAt: string;
   publishedAt: string | null;
+  viewCount: number | null;
+  likeCount: number | null;
+  commentCount: number | null;
+  metricsUpdatedAt: string | null;
+  metricsError: string | null;
 }
 
 /** Ringkasan publikasi untuk badge kartu klip (terbaru per akun). */
@@ -449,16 +454,31 @@ export interface ClipPublicationSummary {
   platform: SocialPlatform;
   status: PublicationStatus;
   externalUrl: string | null;
+  mode?: PublishMode;
+  viewCount?: number | null;
+  likeCount?: number | null;
+  commentCount?: number | null;
+  metricsUpdatedAt?: string | null;
+  metricsError?: string | null;
+}
+
+export interface RefreshMetricsResponse {
+  publications: PublicationResponse[];
+  refreshed: number;
+  skipped: number;
+  nextAllowedAt: string | null;
+}
+
+export interface BulkRefreshMetricsResponse {
+  refreshed: number;
+  skipped: number;
+  nextAllowedAt: string | null;
 }
 
 /** Payload job BullMQ antrean `publish`. */
-export interface PublishJobData {
-  publicationId: string;
-  /** 'upload' = unggah file; 'check' = cek status pemrosesan YouTube. */
-  kind: 'upload' | 'check';
-  /** jumlah pengecekan status yang sudah dilakukan (kind=check) */
-  checks?: number;
-}
+export type PublishJobData =
+  | { publicationId: string; kind: 'upload' | 'check'; checks?: number }
+  | { kind: 'sync-metrics' };
 
 /** Antrean BullMQ modul Reference Edit (analisis referensi + footage + rencana edit + render). */
 export const REFERENCE_QUEUE_NAME = 'reference-jobs';

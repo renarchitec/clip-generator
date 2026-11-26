@@ -21,6 +21,7 @@ import {
   composeInstagramCaption,
   validateInstagramReel,
 } from './instagram-helpers';
+import { PublicationMetricsService } from './publication-metrics.service';
 import { InstagramUploader } from './instagram-uploader';
 import {
   MAX_PROCESSING_CHECKS,
@@ -53,6 +54,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
     private readonly tiktokUploader: TiktokUploader,
     private readonly instagramUploader: InstagramUploader,
     private readonly publish: PublishService,
+    private readonly metricsService: PublicationMetricsService,
     @InjectQueue(PUBLISH_QUEUE_NAME)
     private readonly queue: Queue<PublishJobData>,
   ) {
@@ -60,6 +62,10 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
   }
 
   async process(job: Job<PublishJobData>): Promise<void> {
+    if (job.data.kind === 'sync-metrics') {
+      await this.metricsService.syncStalePublications();
+      return;
+    }
     const { publicationId, kind } = job.data;
     try {
       if (kind === 'check') {
@@ -77,6 +83,19 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       await this.recover();
     } catch (error) {
       this.logger.error(`recovery publish: ${describe(error)}`);
+    }
+    try {
+      await this.queue.upsertJobScheduler(
+        'sync-metrics-periodic',
+        { every: this.config.metricsSyncIntervalMs },
+        {
+          name: 'sync-metrics',
+          data: { kind: 'sync-metrics' },
+          opts: { removeOnComplete: true, removeOnFail: 20 },
+        },
+      );
+    } catch (error) {
+      this.logger.warn(`schedule metrics sync: ${describe(error)}`);
     }
   }
 
@@ -629,11 +648,12 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       'delayed',
       'prioritized',
     ]);
-    const tracked = new Set(
-      pending
-        .filter((job) => job?.data?.publicationId)
-        .map((job) => job.data.publicationId),
-    );
+    const tracked = new Set<string>();
+    for (const job of pending) {
+      if (job?.data && job.data.kind !== 'sync-metrics') {
+        tracked.add(job.data.publicationId);
+      }
+    }
 
     for (const publication of stuck) {
       if (tracked.has(publication.id)) continue;

@@ -307,5 +307,10 @@ export function toPublicationResponse(
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     publishedAt: row.publishedAt?.toISOString() ?? null,
+    viewCount: row.viewCount,
+    likeCount: row.likeCount,
+    commentCount: row.commentCount,
+    metricsUpdatedAt: row.metricsUpdatedAt?.toISOString() ?? null,
+    metricsError: row.metricsError,
   };
 }

@@ -15,6 +15,8 @@ export class AppConfig {
   readonly googleClientSecret: string | undefined;
   readonly tiktokClientKey: string | undefined;
   readonly tiktokClientSecret: string | undefined;
+  readonly tiktokEnableVideoList: boolean;
+  readonly metricsSyncIntervalMs: number;
   readonly instagramClientId: string | undefined;
   readonly instagramClientSecret: string | undefined;
   readonly instagramConfigId: string | undefined;
@@ -31,6 +33,13 @@ export class AppConfig {
     this.googleClientId = config.get<string>('GOOGLE_CLIENT_ID') || undefined;
     this.googleClientSecret =
       config.get<string>('GOOGLE_CLIENT_SECRET') || undefined;
+    this.tiktokEnableVideoList = process.env.TIKTOK_ENABLE_VIDEO_LIST === 'true';
+    const defaultMetricsInterval = 6 * 60 * 60 * 1000;
+    const metricsInterval = Number(config.get<string>('METRICS_SYNC_INTERVAL_MS')?.trim() || defaultMetricsInterval);
+    this.metricsSyncIntervalMs = Math.max(
+      15 * 60 * 1000,
+      Number.isSafeInteger(metricsInterval) ? metricsInterval : defaultMetricsInterval,
+    );
     this.tiktokClientKey = config.get<string>('TIKTOK_CLIENT_KEY') || undefined;
     this.tiktokClientSecret =
       config.get<string>('TIKTOK_CLIENT_SECRET') || undefined;

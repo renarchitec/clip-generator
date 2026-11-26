@@ -104,6 +104,13 @@ test('authorization URL TikTok memakai scope comma-separated dan tanpa PKCE', ()
   assert.equal(url.searchParams.get('state'), 'state-acak');
   assert.equal(url.searchParams.get('code_challenge'), null);
   assert.equal(url.searchParams.get('code_challenge_method'), null);
+  const displayApiUrl = new URL(buildTiktokAuthorizationUrl({
+    clientKey: 'tt-key',
+    redirectUri: 'https://clipper.test/api/social/tiktok/callback',
+    state: 'state-acak',
+    enableVideoList: true,
+  }));
+  assert.equal(displayApiUrl.searchParams.get('scope'), [...TIKTOK_SCOPES, 'video.list'].join(','));
   assert.equal(
     socialCallbackUrl('https://clipper.test/', 'tiktok'),
     'https://clipper.test/api/social/tiktok/callback',

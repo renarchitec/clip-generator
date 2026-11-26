@@ -16,12 +16,14 @@ export const TIKTOK_SCOPES = [
 export const INSTAGRAM_SCOPES = [
   'instagram_business_basic',
   'instagram_business_content_publish',
+  'instagram_business_manage_insights',
 ] as const;
 
 /** Scope Instagram API with Unified Login (Facebook Login for Business). */
 export const INSTAGRAM_UNIFIED_SCOPES = [
   'instagram_basic',
   'instagram_content_publish',
+  'instagram_manage_insights',
 ] as const;
 
 export interface OAuthStatePayload {
@@ -74,10 +76,12 @@ export function buildTiktokAuthorizationUrl(input: {
   clientKey: string;
   redirectUri: string;
   state: string;
+  enableVideoList?: boolean;
 }): string {
   const url = new URL('https://www.tiktok.com/v2/auth/authorize/');
   url.searchParams.set('client_key', input.clientKey);
-  url.searchParams.set('scope', TIKTOK_SCOPES.join(','));
+  const scopes = input.enableVideoList ? [...TIKTOK_SCOPES, 'video.list'] : TIKTOK_SCOPES;
+  url.searchParams.set('scope', scopes.join(','));
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('redirect_uri', input.redirectUri);
   url.searchParams.set('state', input.state);

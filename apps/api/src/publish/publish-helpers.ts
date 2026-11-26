@@ -393,12 +393,35 @@ export function interpretVideoStatus(item: unknown): VideoStatusOutcome {
   return { state: 'pending' };
 }
 
+type PublicationBadgeRow = {
+  socialAccountId: string;
+  platform: string;
+  status: string;
+  externalUrl: string | null;
+  mode?: string;
+  viewCount?: number | null;
+  likeCount?: number | null;
+  commentCount?: number | null;
+  metricsUpdatedAt?: Date | null;
+  metricsError?: string | null;
+};
+
+type PublicationBadge<T extends PublicationBadgeRow> = {
+  platform: T['platform'];
+  status: T['status'];
+  externalUrl: string | null;
+  mode?: 'direct' | 'inbox';
+  viewCount: number | null;
+  likeCount: number | null;
+  commentCount: number | null;
+  metricsUpdatedAt: string | null;
+  metricsError: string | null;
+};
+
 /** Pilih publikasi terbaru per akun (input harus urut terbaru dulu). */
-export function latestPerAccount<
-  T extends { socialAccountId: string; platform: string; status: string; externalUrl: string | null },
->(publications: T[]): { platform: T['platform']; status: T['status']; externalUrl: string | null }[] {
+export function latestPerAccount<T extends PublicationBadgeRow>(publications: T[]): PublicationBadge<T>[] {
   const seen = new Set<string>();
-  const result: { platform: T['platform']; status: T['status']; externalUrl: string | null }[] = [];
+  const result: PublicationBadge<T>[] = [];
   for (const publication of publications) {
     if (seen.has(publication.socialAccountId)) continue;
     seen.add(publication.socialAccountId);
@@ -406,6 +429,12 @@ export function latestPerAccount<
       platform: publication.platform,
       status: publication.status,
       externalUrl: publication.externalUrl,
+      ...(publication.mode === 'direct' || publication.mode === 'inbox' ? { mode: publication.mode } : {}),
+      viewCount: publication.viewCount ?? null,
+      likeCount: publication.likeCount ?? null,
+      commentCount: publication.commentCount ?? null,
+      metricsUpdatedAt: publication.metricsUpdatedAt?.toISOString() ?? null,
+      metricsError: publication.metricsError ?? null,
     });
   }
   return result;

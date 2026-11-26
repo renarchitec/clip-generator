@@ -38,7 +38,22 @@ export type JobPreview = { id: string; url: string; status: "queued" | "running"
 export type Job = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount: number; targetDurationSec: number; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; watermark?: JobWatermarkValue; status: JobStatus; stage: "download" | "transcribe" | "select" | "render" | "save" | null; progress: number; message: string | null; error: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null; clipsCount: number }
 export type PublishMode = "direct" | "inbox"
 export type TikTokCreatorInfo = { nickname: string; username: string; avatarUrl: string | null; privacyLevelOptions: string[]; commentDisabled: boolean; duetDisabled: boolean; stitchDisabled: boolean; maxVideoPostDurationSec: number }
-export type ClipPublicationSummary = { platform: "youtube" | "instagram" | "tiktok"; status: "queued" | "uploading" | "processing" | "published" | "failed"; externalUrl: string | null; mode?: PublishMode }
+export interface ClipPublicationSummary {
+  platform: "youtube" | "instagram" | "tiktok"
+  status: "queued" | "uploading" | "processing" | "published" | "failed"
+  externalUrl: string | null
+  mode?: PublishMode
+  viewCount?: number | null
+  likeCount?: number | null
+  commentCount?: number | null
+  metricsUpdatedAt?: string | null
+  metricsError?: string | null
+}
+export interface BulkRefreshMetricsResponse {
+  refreshed: number
+  skipped: number
+  nextAllowedAt: string | null
+}
 export type Clip = { id: string; title: string; startSec: number; endSec: number; downloadedAt: string | null; deletedAt: string | null; caption?: string | null; hashtags?: string[]; publications?: ClipPublicationSummary[] }
 export type RecentClip = { id: string; title: string; startSec: number; endSec: number; createdAt: string; caption?: string | null; hashtags?: string[]; publications?: ClipPublicationSummary[]; job: { id: string; url: string; aspectRatio: AspectRatio } }
 export type JobSnapshot = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount?: number; targetDurationSec?: number; ranges?: { start: number; end: number; title?: string; reason?: string }[] | null; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; watermark?: JobWatermarkValue; outro?: JobOutro | null; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
@@ -56,6 +71,13 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+export function refreshBulkPublicationMetrics(clipIds?: string[]) {
+  return api<BulkRefreshMetricsResponse>("/publications/refresh-metrics", {
+    method: "POST",
+    body: JSON.stringify(clipIds ? { clipIds } : {}),
+  })
 }
 
 export function safeRedirectTarget(value: unknown): string | undefined {

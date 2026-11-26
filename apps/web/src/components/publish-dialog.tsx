@@ -1,28 +1,81 @@
 import { useForm, useStore } from "@tanstack/react-form"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Check, CircleAlert, ExternalLink, LoaderCircle, RotateCcw, Send, Sparkles, TriangleAlert, X } from "lucide-react"
+import { Check, CircleAlert, ExternalLink, Eye, Heart, Info, LoaderCircle, MessageCircle, RefreshCw, RotateCcw, Send, Sparkles, TriangleAlert, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { YouTubeMark, TikTokMark, InstagramMark, type SocialAccount, type SocialPlatform } from "@/components/social-accounts"
 import { api, CAPTION_LANGUAGES, isCaptionLanguage, type CaptionLanguage, type TikTokCreatorInfo } from "@/lib/api"
 import { relativeAge } from "@/lib/format"
+import { formatCompactCount, formatExactCount, summarizeClipViews } from "@/lib/format-views"
 import { useLanguage, useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 export type Privacy = "public" | "unlisted" | "private"
 export type PublicationStatus = "queued" | "uploading" | "processing" | "published" | "failed"
-export type ClipPublication = { platform: SocialPlatform; status: PublicationStatus; externalUrl: string | null; mode?: "direct" | "inbox" }
-export type PublicationResponse = { id: string; clipId: string; platform: SocialPlatform; accountId: string; accountName: string; title: string; caption: string; privacy: string; mode: "direct" | "inbox"; status: PublicationStatus; progress: number; externalId: string | null; externalUrl: string | null; error: string | null; createdAt: string; updatedAt: string; publishedAt: string | null }
+export type ClipPublication = {
+  platform: SocialPlatform
+  status: PublicationStatus
+  externalUrl: string | null
+  mode?: "direct" | "inbox"
+  viewCount?: number | null
+  likeCount?: number | null
+  commentCount?: number | null
+  metricsUpdatedAt?: string | null
+  metricsError?: string | null
+}
+export type PublicationResponse = {
+  id: string
+  clipId: string
+  platform: SocialPlatform
+  accountId: string
+  accountName: string
+  title: string
+  caption: string
+  privacy: string
+  mode: "direct" | "inbox"
+  status: PublicationStatus
+  progress: number
+  externalId: string | null
+  externalUrl: string | null
+  error: string | null
+  createdAt: string
+  updatedAt: string
+  publishedAt: string | null
+  viewCount: number | null
+  likeCount: number | null
+  commentCount: number | null
+  metricsUpdatedAt: string | null
+  metricsError: string | null
+}
+export interface RefreshMetricsResponse {
+  publications: PublicationResponse[]
+  refreshed: number
+  skipped: number
+  nextAllowedAt: string | null
+}
+export function refreshClipPublicationMetrics(clipId: string) {
+  return api<RefreshMetricsResponse>(`/clips/${clipId}/publications/refresh-metrics`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
+}
+export function metricsErrorMessage(code: string | null | undefined, t: ReturnType<typeof useT>): string {
+  if (!code) return t.metricsErrorUnknown
+  return t.metricsErrors[code as keyof typeof t.metricsErrors] ?? t.metricsErrorUnknown
+}
 export type PublishableClip = { id: string; title: string; caption?: string | null; hashtags?: string[]; startSec?: number; endSec?: number }
 const TITLE_MAX = 100
 const CAPTION_MAX = 5000
@@ -136,15 +189,157 @@ function AccountAvatar({ account }: { account: SocialAccount }) {
 }
 function PublicationList({ title, items, clipId, live = false }: { title: string; items: PublicationResponse[]; clipId: string; live?: boolean }) {
   const t = useT()
-  return <section aria-label={title}><h3 className="mb-2 text-xs font-medium uppercase tracking-[.08em] text-muted-foreground">{title}</h3>{items.length ? <ul aria-live={live ? "polite" : undefined} className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-background">{items.map((item) => <PublicationRow key={item.id} item={item} clipId={clipId}/>)}</ul> : live ? <div className="space-y-2 rounded-lg border border-border p-3"><Skeleton className="h-4 w-1/2"/><Skeleton className="h-1 w-full"/></div> : <p className="text-sm text-muted-foreground">{t.publishHistoryEmpty}</p>}</section>
+  const { language } = useLanguage()
+  const client = useQueryClient()
+  const summary = summarizeClipViews(items)
+  const refreshMetrics = useMutation({
+    mutationFn: () => refreshClipPublicationMetrics(clipId),
+    onSuccess: (result) => {
+      client.setQueryData<PublicationResponse[]>(publicationsKey(clipId), result.publications)
+      void client.invalidateQueries({ queryKey: ["clips", "recent"] })
+      void client.invalidateQueries({ queryKey: ["jobs"] })
+      if (result.refreshed > 0) {
+        toast.success(result.refreshed === 1 ? t.statsRefreshedOne : t.statsRefreshed.replace("{count}", String(result.refreshed)))
+      } else {
+        toast.info(t.statsUpToDate)
+      }
+    },
+    onError: () => toast.error(t.statsRefreshFailed),
+  })
+
+  return <section aria-label={title}>
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
+        <h3 className="text-xs font-medium uppercase tracking-[.08em] text-muted-foreground">{title}</h3>
+        {summary.hasPublished && summary.totalViews !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="secondary" className="h-5 gap-1 px-1.5 font-mono text-[11px] font-medium tabular-nums">
+                <Eye aria-hidden="true" className="size-3 text-muted-foreground" />
+                {formatCompactCount(summary.totalViews)}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <span>{t.totalViews}:</span>
+              <span className="font-mono font-semibold tabular-nums">{formatExactCount(summary.totalViews, language)}</span>
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      {summary.hasPublished && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+          disabled={refreshMetrics.isPending}
+          onClick={() => refreshMetrics.mutate()}
+        >
+          <RefreshCw aria-hidden="true" className={cn("size-3.5", refreshMetrics.isPending && "animate-spin")} />
+          {refreshMetrics.isPending ? t.refreshingStats : t.refreshStats}
+        </Button>
+      )}
+    </div>
+    {items.length ? <ul aria-live={live ? "polite" : undefined} className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-background">{items.map((item) => <PublicationRow key={item.id} item={item} clipId={clipId}/>)}</ul> : live ? <div className="space-y-2 rounded-lg border border-border p-3"><Skeleton className="h-4 w-1/2"/><Skeleton className="h-1 w-full"/></div> : <p className="text-sm text-muted-foreground">{t.publishHistoryEmpty}</p>}
+  </section>
 }
 function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: string }) {
-  const t = useT(), locale = useLanguage().language === "id" ? "id-ID" : "en-US", client = useQueryClient()
+  const t = useT()
+  const { language } = useLanguage()
+  const locale = language === "id" ? "id-ID" : "en-US"
+  const client = useQueryClient()
   const retry = useMutation({ mutationFn: () => api<PublicationResponse>(`/publications/${item.id}/retry`, { method: "POST" }), onSuccess: (next) => { if (next?.id) client.setQueryData<PublicationResponse[]>(publicationsKey(clipId), (previous = []) => previous.map((row) => row.id === next.id ? next : row)); void client.invalidateQueries({ queryKey: publicationsKey(clipId) }) }, onError: () => toast.error(t.retryUploadFailed) })
   const progress = Math.max(0, Math.min(100, Math.round(item.progress))), when = item.publishedAt ?? item.updatedAt ?? item.createdAt
   const statusText = item.platform === "tiktok" && item.mode === "inbox" && item.status === "published" ? t.publishSentToInbox : item.status === "processing" && item.platform === "tiktok" ? t.publishProcessingTikTok : item.status === "processing" && item.platform === "instagram" ? t.publishProcessingInstagram : t.publishStatus[item.status]
   const privacyLabel = item.platform === "tiktok" ? (t.tiktokPrivacy[item.privacy as keyof typeof t.tiktokPrivacy] ?? item.privacy) : item.platform === "instagram" ? t.instagramPrivacyLabel : (t.privacyOptions[item.privacy as keyof typeof t.privacyOptions] ?? item.privacy)
-  return <li className="px-3 py-3"><div className="flex items-center gap-3"><StatusIcon status={item.status}/><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.accountName}</p><p className="truncate text-xs text-muted-foreground"><span className={cn(item.status === "failed" && "text-destructive", item.status === "published" && "text-foreground")}>{statusText}{item.status === "uploading" && <span className="tabular-nums"> · {progress}%</span>}</span> · {privacyLabel} · {relativeAge(when, locale)}</p></div>{item.status === "published" && item.externalUrl && <a href={item.externalUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted">{item.platform === "tiktok" ? t.openOnTikTok : item.platform === "instagram" ? t.openOnInstagram : t.openOnYouTube}<ExternalLink aria-hidden="true" className="size-3.5"/></a>}{item.status === "failed" && <Button type="button" variant="outline" className="h-9 shrink-0 px-3" disabled={retry.isPending} onClick={() => retry.mutate()}>{retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin"/> : <RotateCcw aria-hidden="true" className="size-3.5"/>}{t.retryUpload}</Button>}</div>{item.status === "uploading" && <Progress value={progress} aria-label={`${t.publishStatus.uploading} ${progress}%`} className="mt-2.5 h-1.5"/>}{(item.status === "queued" || item.status === "processing") && <div aria-hidden="true" className="publish-indeterminate mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full w-1/3 rounded-full bg-primary/60"/></div>}{item.status === "failed" && item.error && <p className="mt-2 rounded-md bg-destructive/5 px-2.5 py-2 text-xs leading-5 text-destructive">{item.error}</p>}</li>
+  const PlatformIcon = item.platform === "tiktok" ? TikTokMark : item.platform === "instagram" ? InstagramMark : YouTubeMark
+  const hasMetrics = item.viewCount !== null || item.likeCount !== null || item.commentCount !== null
+  const errorHint = item.metricsError ? metricsErrorMessage(item.metricsError, t) : null
+
+  return <li className="px-3 py-3">
+    <div className="flex items-center gap-3">
+      <StatusIcon status={item.status}/>
+      <div className="min-w-0 flex-1">
+        <p className="flex items-center gap-1.5 truncate text-sm font-medium">
+          <PlatformIcon className="size-3.5 shrink-0"/>
+          <span className="truncate">{item.accountName}</span>
+        </p>
+        <p className="truncate text-xs text-muted-foreground">
+          <span className={cn(item.status === "failed" && "text-destructive", item.status === "published" && "text-foreground")}>{statusText}{item.status === "uploading" && <span className="tabular-nums"> · {progress}%</span>}</span> · {privacyLabel} · {relativeAge(when, locale)}
+        </p>
+      </div>
+      {item.status === "published" && item.externalUrl && <a href={item.externalUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted">{item.platform === "tiktok" ? t.openOnTikTok : item.platform === "instagram" ? t.openOnInstagram : t.openOnYouTube}<ExternalLink aria-hidden="true" className="size-3.5"/></a>}
+      {item.status === "failed" && <Button type="button" variant="outline" className="h-9 shrink-0 px-3" disabled={retry.isPending} onClick={() => retry.mutate()}>{retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin"/> : <RotateCcw aria-hidden="true" className="size-3.5"/>}{t.retryUpload}</Button>}
+    </div>
+    {item.status === "published" && hasMetrics && (
+      <div className="mt-2 ml-11 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        {item.viewCount !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex items-center gap-1 font-mono font-medium tabular-nums text-foreground">
+                <Eye aria-hidden="true" className="size-3.5 text-muted-foreground"/>
+                {formatCompactCount(item.viewCount)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <span className="font-mono tabular-nums">{formatExactCount(item.viewCount, language)}</span>
+              <span>{t.views}</span>
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {item.likeCount !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex items-center gap-1 font-mono tabular-nums">
+                <Heart aria-hidden="true" className="size-3.5"/>
+                {formatCompactCount(item.likeCount)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <span className="font-mono tabular-nums">{formatExactCount(item.likeCount, language)}</span>
+              <span>{t.likes}</span>
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {item.commentCount !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex items-center gap-1 font-mono tabular-nums">
+                <MessageCircle aria-hidden="true" className="size-3.5"/>
+                {formatCompactCount(item.commentCount)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <span className="font-mono tabular-nums">{formatExactCount(item.commentCount, language)}</span>
+              <span>{t.comments}</span>
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {item.metricsUpdatedAt && (
+          <>
+            <Separator orientation="vertical" className="h-3"/>
+            <span className="text-[11px] text-muted-foreground/80">{t.statsUpdatedAgo.replace("{age}", relativeAge(item.metricsUpdatedAt, locale))}</span>
+          </>
+        )}
+      </div>
+    )}
+    {item.status === "published" && item.viewCount === null && errorHint && (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <p className="mt-2 ml-11 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Info aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/80"/>
+            <span className="truncate">{errorHint}</span>
+          </p>
+        </TooltipTrigger>
+        <TooltipContent side="top" align="start">
+          {errorHint}
+        </TooltipContent>
+      </Tooltip>
+    )}
+    {item.status === "uploading" && <Progress value={progress} aria-label={`${t.publishStatus.uploading} ${progress}%`} className="mt-2.5 h-1.5"/>}
+    {(item.status === "queued" || item.status === "processing") && <div aria-hidden="true" className="publish-indeterminate mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full w-1/3 rounded-full bg-primary/60"/></div>}
+    {item.status === "failed" && item.error && <p className="mt-2 rounded-md bg-destructive/5 px-2.5 py-2 text-xs leading-5 text-destructive">{item.error}</p>}
+  </li>
 }
 function StatusIcon({ status }: { status: PublicationStatus }) {
   if (status === "published") return <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent/15 text-accent"><Check aria-hidden="true" className="size-4" strokeWidth={2.5}/></span>

@@ -1,17 +1,20 @@
-import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Copy, ExternalLink, LoaderCircle, Play, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
+import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Copy, ExternalLink, Eye, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 import { Children, createContext, isValidElement, useContext, useEffect, useRef, useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { sourceLabel } from "@/lib/format"
-import { useT } from "@/lib/i18n"
-import { isActivePublication, PublishDialog, type ClipPublication } from "@/components/publish-dialog"
-import { InstagramMark, TikTokMark, YouTubeMark } from "@/components/social-accounts"
+import { formatCompactCount, formatExactCount, summarizeClipViews } from "@/lib/format-views"
+import { useLanguage, useT } from "@/lib/i18n"
+import { cn } from "@/lib/utils"
+import { isActivePublication, metricsErrorMessage, publicationsKey, PublishDialog, refreshClipPublicationMetrics, type ClipPublication, type PublicationResponse } from "@/components/publish-dialog"
+import { InstagramMark, TikTokMark, YouTubeMark, type SocialPlatform } from "@/components/social-accounts"
 
 export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
 
@@ -65,6 +68,7 @@ export function ClipCardGrid({ aspectRatio, children, className = "", ...props }
 
 export function ClipCard({ clip, meta, downloaded = false, index, frame }: { clip: ClipCardData; meta: string; downloaded?: boolean; index?: number; /** Force one media frame (e.g. mixed-ratio library) */ frame?: "uniform" }) {
   const t = useT()
+  const { language } = useLanguage()
   const [playerOpen, setPlayerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
@@ -82,13 +86,53 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
   })
   const title = clip.title || `${t.clip} ${index === undefined ? "" : index + 1}`.trim()
   const duration = Math.max(0, clip.endSec - clip.startSec)
+  const viewsSummary = summarizeClipViews(clip.publications)
   return <article className={`clip-card group relative isolate min-w-0 overflow-hidden rounded-lg border border-border bg-card ${frame === "uniform" ? "aspect-[9/16]" : clipAspectClass(clip.job.aspectRatio)}`}>
     <video src={`/api/clips/${clip.id}/stream`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" className="absolute inset-0 size-full bg-black object-contain"/>
     <button type="button" onClick={() => setPlayerOpen(true)} aria-label={`${t.playClip}: ${title}`} className="absolute inset-0 z-[1] grid size-full place-items-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
       <span className="clip-card-play grid size-11 place-items-center rounded-full border border-accent/60 bg-background/75 text-primary shadow-lg backdrop-blur-sm transition duration-150 group-hover:scale-105 group-hover:ring-4 group-hover:ring-accent/20"><Play className="ml-0.5 size-[18px] fill-current"/></span>
       <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent px-3 pb-3 pt-16 text-left text-white"><span className="line-clamp-2 block min-h-10 text-xs font-semibold leading-5 sm:text-sm">{title}</span><span className="mt-1 line-clamp-2 block text-[10px] leading-4 text-white/80 sm:text-xs">{meta}</span></span>
     </button>
-    <span className="pointer-events-none absolute left-2 top-2 z-[2] flex items-center gap-1"><span className="rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span><PublishBadge publications={clip.publications}/></span>
+    <div className="pointer-events-none absolute left-2 top-2 z-[2] flex flex-col items-start gap-1.5">
+      <span className="flex items-center gap-1"><span className="rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span><PublishBadge publications={clip.publications}/></span>
+      {viewsSummary.totalViews !== null && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                setPlayerOpen(true)
+              }}
+              aria-label={`${t.totalViews}: ${formatExactCount(viewsSummary.totalViews, language)}`}
+              className="pointer-events-auto inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 px-2 font-mono text-[10px] font-semibold tabular-nums text-white shadow-sm backdrop-blur-sm transition-colors hover:border-white/30 hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <Eye aria-hidden="true" className="size-3 text-white/85"/>
+              {formatCompactCount(viewsSummary.totalViews)}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="start" className="flex-col items-stretch gap-1.5 p-2.5">
+            <div className="flex items-center justify-between gap-4 border-b border-background/15 pb-1.5">
+              <span className="text-[11px] font-medium opacity-80">{t.totalViews}</span>
+              <span className="font-mono text-xs font-semibold tabular-nums">{formatExactCount(viewsSummary.totalViews, language)}</span>
+            </div>
+            <div className="space-y-1">
+              {viewsSummary.byPlatform.map((entry) => (
+                <div key={entry.platform} className="flex items-center justify-between gap-4 text-[11px]">
+                  <span className="flex items-center gap-1.5">
+                    <PlatformMark platform={entry.platform} className="size-3.5 shrink-0 [&_.fill-foreground]:fill-background"/>
+                    <span>{t.socialPlatforms[entry.platform]}</span>
+                  </span>
+                  <span className="font-mono tabular-nums opacity-90">
+                    {entry.viewCount !== null ? formatExactCount(entry.viewCount, language) : "—"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </div>
     {(downloaded || clip.downloadedAt) && <span title={t.downloaded} className="absolute right-2 top-2 z-[2] transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0 [@media(hover:none)]:hidden inline-flex size-7 items-center justify-center rounded-full border border-accent/40 bg-background/85 text-primary shadow-sm"><CircleCheck aria-hidden="true" className="size-4"/><span className="sr-only">{t.downloaded}</span></span>}
     <div className="clip-card-actions absolute right-2 top-2 z-[3] flex -translate-y-1 items-center gap-1 rounded-md border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100">
       <a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-3.5"/></a>
@@ -111,6 +155,7 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
 
 export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onPublish }: { clip: ClipCardData | null; open: boolean; onOpenChange: (open: boolean) => void; meta?: string; onDelete?: () => void; onPublish?: () => void }) {
   const t = useT()
+  const { language } = useLanguage()
   const client = useQueryClient()
   const feed = useContext(ClipFeedContext)
   const [activeClipId, setActiveClipId] = useState(clip?.id ?? "")
@@ -146,6 +191,30 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
   const tags = (activeClip?.hashtags ?? []).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean)
   const hasCaption = Boolean(captionText || tags.length)
   const canExpandCaption = captionText.length + tags.join(" ").length > 75 || captionText.includes("\n")
+
+  const cachedPublications = useQuery({
+    queryKey: publicationsKey(activeClip?.id ?? ""),
+    queryFn: () => api<PublicationResponse[]>(`/clips/${activeClip!.id}/publications`),
+    enabled: false,
+  })
+  const activePublications = cachedPublications.data ?? activeClip?.publications
+  const viewsSummary = summarizeClipViews(activePublications)
+
+  const refreshMetrics = useMutation({
+    mutationFn: (id: string) => refreshClipPublicationMetrics(id),
+    onSuccess: (result, id) => {
+      client.setQueryData<PublicationResponse[]>(publicationsKey(id), result.publications)
+      void client.invalidateQueries({ queryKey: ["clips", "recent"] })
+      void client.invalidateQueries({ queryKey: ["jobs"] })
+      void client.invalidateQueries({ queryKey: publicationsKey(id) })
+      if (result.refreshed > 0) {
+        toast.success(result.refreshed === 1 ? t.statsRefreshedOne : t.statsRefreshed.replace("{count}", String(result.refreshed)))
+      } else {
+        toast.info(t.statsUpToDate)
+      }
+    },
+    onError: () => toast.error(t.statsRefreshFailed),
+  })
 
   function playWithFallback(video: HTMLVideoElement) {
     video.muted = muted
@@ -339,10 +408,82 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
 
           <div className="pointer-events-none absolute inset-x-0 top-0 z-30 bg-gradient-to-b from-black/80 via-black/35 to-transparent pb-12 pl-3 pr-2 pt-3">
             <div className="flex items-start justify-between gap-2">
-              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                <span className="inline-flex h-6 items-center rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-sm">{shortDuration(fallbackDuration)}</span>
-                {canNavigate && position !== undefined && <Badge variant="outline" className="h-6 border-white/15 bg-black/55 px-2 font-mono text-[10px] tabular-nums text-white backdrop-blur-sm">{position} / {feed.length}</Badge>}
-                <PublishBadge publications={activeClip.publications}/>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex h-6 items-center rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-sm">{shortDuration(fallbackDuration)}</span>
+                  {canNavigate && position !== undefined && <Badge variant="outline" className="h-6 border-white/15 bg-black/55 px-2 font-mono text-[10px] tabular-nums text-white backdrop-blur-sm">{position} / {feed.length}</Badge>}
+                  <PublishBadge publications={activePublications}/>
+                </div>
+                {viewsSummary.hasPublished && (
+                  <div
+                    onClick={(event) => event.stopPropagation()}
+                    className="pointer-events-auto mt-1.5 flex flex-wrap items-center gap-1.5"
+                  >
+                    {viewsSummary.totalViews !== null && viewsSummary.byPlatform.length > 1 && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            tabIndex={0}
+                            className="inline-flex h-6 items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                          >
+                            <Eye aria-hidden="true" className="size-3 text-accent"/>
+                            {formatCompactCount(viewsSummary.totalViews)}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" align="start">
+                          <span>{t.totalViews}:</span>
+                          <span className="font-mono font-semibold tabular-nums">{formatExactCount(viewsSummary.totalViews, language)}</span>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                    {viewsSummary.byPlatform.map((entry) => (
+                      <Tooltip key={entry.platform}>
+                        <TooltipTrigger asChild>
+                          <span
+                            tabIndex={0}
+                            className="inline-flex h-6 items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-medium tabular-nums text-white/95 backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                          >
+                            <PlatformMark platform={entry.platform} className="size-3.5 shrink-0 [&_.fill-foreground]:fill-white"/>
+                            {entry.viewCount !== null ? <span>{formatCompactCount(entry.viewCount)}</span> : <span className="text-white/55">—</span>}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" align="start" className="flex-col items-start gap-1 p-2">
+                          <span className="font-medium">{t.socialPlatforms[entry.platform]}</span>
+                          {entry.viewCount !== null ? (
+                            <div className="flex flex-wrap items-center gap-2.5 font-mono text-[11px] tabular-nums opacity-90">
+                              <span className="inline-flex items-center gap-1"><Eye aria-hidden="true" className="size-3"/>{formatExactCount(entry.viewCount, language)}</span>
+                              {entry.likeCount !== null && <span className="inline-flex items-center gap-1"><Heart aria-hidden="true" className="size-3"/>{formatExactCount(entry.likeCount, language)}</span>}
+                              {entry.commentCount !== null && <span className="inline-flex items-center gap-1"><MessageCircle aria-hidden="true" className="size-3"/>{formatExactCount(entry.commentCount, language)}</span>}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] opacity-80">{entry.metricsError ? metricsErrorMessage(entry.metricsError, t) : t.statsPending}</span>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    ))}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          disabled={refreshMetrics.isPending}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            refreshMetrics.mutate(activeClip.id)
+                          }}
+                          aria-label={refreshMetrics.isPending ? t.refreshingStats : t.refreshStats}
+                          className="size-6 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70"
+                        >
+                          <RefreshCw aria-hidden="true" className={cn("size-3", refreshMetrics.isPending && "animate-spin")}/>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {refreshMetrics.isPending ? t.refreshingStats : t.refreshStats}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                )}
               </div>
               <div className="pointer-events-auto flex shrink-0 items-center gap-1">
                 <Button type="button" variant="ghost" size="icon-sm" onClick={toggleMute} aria-label={muted ? t.unmuteClip : t.muteClip} title={muted ? t.unmuteClip : t.muteClip} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70">{muted ? <VolumeX className="size-4"/> : <Volume2 className="size-4"/>}</Button>
@@ -440,6 +581,12 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
   </>
 }
 
+function PlatformMark({ platform, className }: { platform: SocialPlatform; className?: string }) {
+  if (platform === "tiktok") return <TikTokMark className={className}/>
+  if (platform === "instagram") return <InstagramMark className={className}/>
+  return <YouTubeMark className={className}/>
+}
+
 function PublishBadge({ publications }: { publications?: ClipPublication[] }) {
   const t = useT()
   if (!publications?.length) return null
@@ -452,6 +599,6 @@ function PublishBadge({ publications }: { publications?: ClipPublication[] }) {
   const single = platforms.length === 1 ? t.socialPlatforms[platforms[0]] : null
   const label = single ? (busy ? t.publishingTo : t.publishedOn).replace("{platform}", single) : busy ? t.publishingBadge : t.publishedBadge
   return <span title={label} className="inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 pl-1 pr-1.5 text-white shadow-sm backdrop-blur-sm sm:bottom-20">
-    {hasYouTube && <YouTubeMark className="size-3.5"/>}{hasTikTok && <TikTokMark className="size-3.5"/>}{hasInstagram && <InstagramMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
+    {hasYouTube && <YouTubeMark className="size-3.5"/>}{hasTikTok && <TikTokMark className="size-3.5 [&_.fill-foreground]:fill-white"/>}{hasInstagram && <InstagramMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
   </span>
 }

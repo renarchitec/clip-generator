@@ -82,7 +82,7 @@ test('URL otorisasi dan redirect URI Instagram', () => {
   assert.equal(url.searchParams.get('state'), 'st');
   assert.equal(
     url.searchParams.get('scope'),
-    'instagram_business_basic,instagram_business_content_publish',
+    'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights',
   );
   assert.equal(url.searchParams.get('redirect_uri'), redirectUri);
   assert.equal(url.searchParams.has('code_challenge'), false);
@@ -150,7 +150,7 @@ test('Unified Login: config_id memakai facebook dialog/oauth, tanpa config_id te
     assert.equal(legacy.searchParams.has('config_id'), false);
     assert.equal(
       legacy.searchParams.get('scope'),
-      'instagram_business_basic,instagram_business_content_publish',
+      'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights',
     );
   }
 });

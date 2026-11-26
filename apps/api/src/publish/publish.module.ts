@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { PUBLISH_QUEUE_NAME } from '../queue/queue.constants';
 import { QueueModule } from '../queue/queue.module';
 import { SocialModule } from '../social/social.module';
+import { PublicationMetricsService } from './publication-metrics.service';
 import { PublishController } from './publish.controller';
 import { PublishProcessor } from './publish.processor';
 import { PublishService } from './publish.service';
@@ -20,6 +21,7 @@ import { YoutubeUploader } from './youtube-uploader';
   controllers: [PublishController],
   providers: [
     PublishService,
+    PublicationMetricsService,
     PublishProcessor,
     YoutubeUploader,
     TiktokUploader,

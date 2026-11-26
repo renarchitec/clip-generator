@@ -134,6 +134,7 @@ export class SocialService {
       // TikTok web: tanpa PKCE; state tetap dikonsumsi sekali pakai.
       return buildTiktokAuthorizationUrl({
         clientKey: this.config.tiktokClientKey!,
+        enableVideoList: this.config.tiktokEnableVideoList,
         redirectUri,
         state: pending.state,
       });

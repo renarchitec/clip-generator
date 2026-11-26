@@ -11,6 +11,8 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   TIKTOK_CLIENT_KEY: z.string().optional(),
   TIKTOK_CLIENT_SECRET: z.string().optional(),
+  TIKTOK_ENABLE_VIDEO_LIST: z.string().optional(),
+  METRICS_SYNC_INTERVAL_MS: z.string().optional(),
   INSTAGRAM_CLIENT_ID: z.string().optional(),
   INSTAGRAM_CLIENT_SECRET: z.string().optional(),
   INSTAGRAM_CONFIG_ID: z.string().optional(),

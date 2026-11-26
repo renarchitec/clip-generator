@@ -11,5 +11,11 @@ export const CLIP_PUBLICATION_SELECT = {
     platform: true,
     status: true,
     externalUrl: true,
+    mode: true,
+    viewCount: true,
+    likeCount: true,
+    commentCount: true,
+    metricsUpdatedAt: true,
+    metricsError: true,
   },
 } as const satisfies Prisma.Clip$publicationsArgs;

@@ -153,13 +153,25 @@ test('tafsir status video YouTube', () => {
 });
 
 test('ringkasan publikasi terbaru per akun', () => {
+  const metricsUpdatedAt = new Date('2026-02-02T12:00:00Z');
   const summary = latestPerAccount([
-    { socialAccountId: 'a', platform: 'youtube', status: 'published', externalUrl: 'u2' },
-    { socialAccountId: 'b', platform: 'youtube', status: 'failed', externalUrl: null },
-    { socialAccountId: 'a', platform: 'youtube', status: 'failed', externalUrl: null },
+    {
+      socialAccountId: 'a', platform: 'youtube', status: 'published', externalUrl: 'u2',
+      mode: 'direct', viewCount: 100, likeCount: 0, commentCount: 1,
+      metricsUpdatedAt, metricsError: 'fetch_failed',
+    },
+    { socialAccountId: 'b', platform: 'tiktok', status: 'failed', externalUrl: null, mode: 'inbox' },
+    { socialAccountId: 'a', platform: 'youtube', status: 'failed', externalUrl: null, viewCount: 9 },
   ]);
   assert.deepEqual(summary, [
-    { platform: 'youtube', status: 'published', externalUrl: 'u2' },
-    { platform: 'youtube', status: 'failed', externalUrl: null },
+    {
+      platform: 'youtube', status: 'published', externalUrl: 'u2', mode: 'direct',
+      viewCount: 100, likeCount: 0, commentCount: 1,
+      metricsUpdatedAt: metricsUpdatedAt.toISOString(), metricsError: 'fetch_failed',
+    },
+    {
+      platform: 'tiktok', status: 'failed', externalUrl: null, mode: 'inbox',
+      viewCount: null, likeCount: null, commentCount: null, metricsUpdatedAt: null, metricsError: null,
+    },
   ]);
 });

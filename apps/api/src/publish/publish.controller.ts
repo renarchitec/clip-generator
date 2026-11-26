@@ -1,12 +1,17 @@
 import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
-import type { PublicationResponse } from '@clipper/shared';
+import type { BulkRefreshMetricsResponse, PublicationResponse, RefreshMetricsResponse } from '@clipper/shared';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { PublishClipDto } from './dto/publish-clip.dto';
+import { RefreshMetricsDto } from './dto/refresh-metrics.dto';
+import { PublicationMetricsService } from './publication-metrics.service';
 import { PublishService } from './publish.service';
 
 @Controller()
 export class PublishController {
-  constructor(private readonly publish: PublishService) {}
+  constructor(
+    private readonly publish: PublishService,
+    private readonly metrics: PublicationMetricsService,
+  ) {}
 
   @Post('clips/:id/publish')
   @HttpCode(201)
@@ -24,6 +29,24 @@ export class PublishController {
     @CurrentUser() user: { id: string },
   ): Promise<PublicationResponse[]> {
     return this.publish.listForClip(id, user.id);
+  }
+
+  @Post('clips/:id/publications/refresh-metrics')
+  @HttpCode(200)
+  refreshForClip(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+  ): Promise<RefreshMetricsResponse> {
+    return this.metrics.refreshClipMetrics(user.id, id);
+  }
+
+  @Post('publications/refresh-metrics')
+  @HttpCode(200)
+  refreshForUser(
+    @CurrentUser() user: { id: string },
+    @Body() body?: RefreshMetricsDto,
+  ): Promise<BulkRefreshMetricsResponse> {
+    return this.metrics.refreshUserMetrics(user.id, body?.clipIds);
   }
 
   @Post('publications/:id/retry')
