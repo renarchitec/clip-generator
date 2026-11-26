@@ -7,10 +7,18 @@ import test from 'node:test';
 import settingsModule from '../settings-store.js';
 import staticModule from '../static-server.js';
 import apiModule from '../api-process.js';
+import windowOptionsModule from '../window-options.js';
 
 const { SettingsStore, maskSecret } = settingsModule;
 const { startStaticServer } = staticModule;
 const { resolveDesktopPaths } = apiModule;
+const {
+  THEME_BACKGROUND,
+  themeBackgroundColor,
+  normalizeThemeSource,
+  buildMenuTemplate,
+  buildWindowOptions,
+} = windowOptionsModule;
 
 async function temporaryDir(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dartclip-desktop-test-'));
@@ -167,4 +175,46 @@ test('desktop paths point to workspace builds in dev and Resources when packaged
   }
   assert.equal(resolveDesktopPaths({ isPackaged: true, resourcesPath, workerBin: './custom-worker' }).workerBin,
     path.resolve('custom-worker'));
+});
+
+test('window options sync theme background, defer initial show, and keep native fullscreen', () => {
+  assert.equal(themeBackgroundColor(true), THEME_BACKGROUND.dark);
+  assert.equal(themeBackgroundColor(false), THEME_BACKGROUND.light);
+  assert.equal(normalizeThemeSource('dark'), 'dark');
+  assert.equal(normalizeThemeSource('light'), 'light');
+  assert.equal(normalizeThemeSource('system'), 'system');
+  assert.equal(normalizeThemeSource('invalid'), 'system');
+  assert.equal(normalizeThemeSource(undefined), 'system');
+
+  const normal = buildWindowOptions({
+    shouldUseDarkColors: true,
+    bootError: undefined,
+    preloadPath: '/app/preload.js',
+    apiBaseUrl: 'http://127.0.0.1:4321',
+    dataDir: '/Users/test/DartClip',
+  });
+  assert.equal(normal.backgroundColor, '#09090b');
+  assert.equal(normal.show, false);
+  assert.equal(normal.fullscreenable, true);
+  assert.equal('simpleFullscreen' in normal, false);
+  assert.equal(normal.webPreferences.preload, '/app/preload.js');
+  assert.deepEqual(normal.webPreferences.additionalArguments, [
+    '--dartclip-api-base-url=http://127.0.0.1:4321',
+    '--dartclip-clips-dir=/Users/test/DartClip',
+  ]);
+
+  const errored = buildWindowOptions({
+    shouldUseDarkColors: false,
+    bootError: new Error('boom'),
+    preloadPath: '/app/preload.js',
+    apiBaseUrl: 'http://127.0.0.1:4321',
+    dataDir: '/Users/test/DartClip',
+  });
+  assert.equal(errored.backgroundColor, '#ffffff');
+  assert.equal(errored.webPreferences.preload, undefined);
+  assert.equal(errored.webPreferences.additionalArguments, undefined);
+
+  const menu = buildMenuTemplate();
+  const viewMenu = menu.find((item) => item.label === 'View');
+  assert.ok(viewMenu?.submenu.some((item) => item.role === 'togglefullscreen'));
 });

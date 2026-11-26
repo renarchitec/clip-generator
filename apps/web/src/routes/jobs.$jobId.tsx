@@ -305,7 +305,7 @@ function JobDetail() {
                 </Field>}
               </div>
             </div>
-            <div className="sticky bottom-0 border-t border-border bg-card/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+            <div className="sticky bottom-0 border-t border-border bg-card/95 px-4 py-3">
               <div className="flex flex-col gap-3">
                 <p className="text-xs leading-5 text-muted-foreground">
                   {snapshot.mode === "manual" ? t.manualSummary.replace("{count}", String(snapshot.ranges?.length ?? clipCount)) : t.autoSummary.replace("{count}", String(clipCount)).replace("{duration}", String(snapshot.targetDurationSec ?? ""))}

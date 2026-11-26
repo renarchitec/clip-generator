@@ -1,9 +1,15 @@
-const { app, BrowserWindow, ipcMain, Menu, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, nativeTheme, safeStorage, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { getDataDir, resolveDesktopPaths, startApiProcess } = require('./api-process');
 const { SettingsStore } = require('./settings-store');
 const { startStaticServer } = require('./static-server');
+const {
+  buildMenuTemplate,
+  buildWindowOptions,
+  normalizeThemeSource,
+  themeBackgroundColor,
+} = require('./window-options');
 
 app.setName('DartClip');
 
@@ -20,18 +26,13 @@ let cleanupDone = false;
 let configPush = Promise.resolve();
 
 function installMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: 'DartClip', submenu: [
-      { role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' },
-      { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
-    ] },
-    { label: 'Edit', submenu: [
-      { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
-      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
-    ] },
-    { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }] },
-    { role: 'windowMenu' },
-  ]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate()));
+}
+
+function syncWindowBackground() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(themeBackgroundColor(nativeTheme.shouldUseDarkColors));
+  }
 }
 
 function parseUrl(value) {
@@ -56,6 +57,11 @@ function isRenderer(event) {
 function registerIpc() {
   ipcMain.on('desktop:bootstrap', (event) => {
     event.returnValue = isRenderer(event) ? { apiBaseUrl: api.baseUrl, clipsDir: dataDir } : {};
+  });
+  ipcMain.on('desktop:set-theme', (event, theme) => {
+    if (!isRenderer(event)) return;
+    nativeTheme.themeSource = normalizeThemeSource(theme);
+    syncWindowBackground();
   });
   function handle(channel, callback) {
     ipcMain.handle(`desktop:${channel}`, (event, ...args) => {
@@ -108,24 +114,29 @@ function errorPage(error) {
 
 function createWindow() {
   if (quitting || mainWindow) return;
-  const win = new BrowserWindow({
-    width: 1360,
-    height: 880,
-    minWidth: 980,
-    minHeight: 660,
-    title: 'DartClip',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      ...(bootError ? {} : {
-        preload: path.join(__dirname, 'preload.js'),
-        additionalArguments: [`--dartclip-api-base-url=${api.baseUrl}`, `--dartclip-clips-dir=${dataDir}`],
-      }),
-    },
-  });
+  const win = new BrowserWindow(buildWindowOptions({
+    shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+    bootError,
+    preloadPath: path.join(__dirname, 'preload.js'),
+    apiBaseUrl: api?.baseUrl,
+    dataDir,
+  }));
   mainWindow = win;
-  win.on('closed', () => { if (mainWindow === win) mainWindow = undefined; });
+  let shown = false;
+  let revealTimer;
+  const reveal = () => {
+    if (shown) return;
+    shown = true;
+    clearTimeout(revealTimer);
+    if (!win.isDestroyed()) win.show();
+  };
+  revealTimer = setTimeout(reveal, 2000);
+  win.once('ready-to-show', reveal);
+  win.webContents.once('did-finish-load', reveal);
+  win.on('closed', () => {
+    clearTimeout(revealTimer);
+    if (mainWindow === win) mainWindow = undefined;
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
     openExternal(parseUrl(url));
     return { action: 'deny' };
@@ -200,6 +211,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', quitAfterCleanup);
   app.whenReady().then(() => {
     if (quitting) return;
+    nativeTheme.on('updated', syncWindowBackground);
     installMenu();
     registerIpc();
     boot = start();

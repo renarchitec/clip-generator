@@ -157,7 +157,7 @@ function main() {
     makeIcon();
     const { version } = JSON.parse(fs.readFileSync(path.join(desktopDir, 'package.json'), 'utf8'));
     renameBundle(version);
-    for (const file of ['package.json', 'main.js', 'preload.js', 'settings-store.js', 'static-server.js', 'api-process.js']) {
+    for (const file of ['package.json', 'main.js', 'preload.js', 'window-options.js', 'settings-store.js', 'static-server.js', 'api-process.js']) {
       copy(path.join(desktopDir, file), path.join(resources, 'app', file));
     }
     copy(webDist, path.join(resources, 'web'));

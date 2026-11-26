@@ -49,6 +49,7 @@ export type DartClipDesktopBridge = {
   testLlm: () => Promise<DesktopLlmTestResult>
   revealInFinder: (filePath: string) => Promise<{ ok: boolean; error?: string }>
   openClipsFolder: () => Promise<{ ok: boolean }>
+  setTheme?: (theme: "light" | "dark" | "system") => void
 }
 
 declare global {

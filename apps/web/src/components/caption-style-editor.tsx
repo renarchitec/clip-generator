@@ -86,7 +86,7 @@ export function CaptionStyleEditor({ value, onChange, twoSpeakers = false }: { v
   return <div className="space-y-3">
     <div className="relative aspect-[16/7] min-h-[82px] overflow-hidden rounded-md border border-white/10 bg-[radial-gradient(ellipse_at_50%_100%,#334155_0%,#171d27_48%,#0b0f16_100%)] shadow-inner">
       <div aria-hidden="true" className="absolute inset-0 opacity-[0.12]" style={{ backgroundImage: "linear-gradient(rgb(255 255 255 / 16%) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / 16%) 1px, transparent 1px)", backgroundSize: "18px 18px", maskImage: "radial-gradient(ellipse at center, black, transparent 80%)" }} />
-      <Badge variant="secondary" className="absolute right-2 top-2 z-10 h-5 bg-black/35 text-[9px] text-white/80 backdrop-blur">{{ top: t.captionPositionNames.top, center: t.captionPositionNames.center, bottom: t.captionPositionNames.bottom }[value.position]}</Badge>
+      <Badge variant="secondary" className="absolute right-2 top-2 z-10 h-5 bg-black/60 text-[9px] text-white/90">{{ top: t.captionPositionNames.top, center: t.captionPositionNames.center, bottom: t.captionPositionNames.bottom }[value.position]}</Badge>
       <PreviewText value={value} sample={words} twoSpeakers={twoSpeakers} />
       {twoSpeakers && <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-widest text-white/35">{t.twoSpeakers}</span>}
     </div>

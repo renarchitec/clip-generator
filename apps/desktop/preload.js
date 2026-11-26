@@ -19,4 +19,5 @@ contextBridge.exposeInMainWorld('dartclipDesktop', {
   testLlm: () => ipcRenderer.invoke('desktop:test-llm'),
   revealInFinder: (filePath) => ipcRenderer.invoke('desktop:reveal-in-finder', filePath),
   openClipsFolder: () => ipcRenderer.invoke('desktop:open-clips-folder'),
+  setTheme: (theme) => ipcRenderer.send('desktop:set-theme', theme),
 });

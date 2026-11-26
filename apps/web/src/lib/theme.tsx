@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
 import { Monitor, Moon, Sun } from "lucide-react"
+import { getDesktopBridge } from "@/lib/desktop"
 import { useT } from "@/lib/i18n"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
@@ -9,6 +10,7 @@ const ThemeContext = createContext<{ theme: Theme; setTheme: (theme: Theme) => v
 function applyTheme(theme: Theme) {
   const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
   document.documentElement.classList.toggle("dark", dark)
+  getDesktopBridge()?.setTheme?.(theme)
 }
 
 export function ThemeProvider({ initialTheme, children }: { initialTheme: Theme; children: ReactNode }) {

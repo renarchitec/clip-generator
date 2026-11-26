@@ -72,7 +72,7 @@
   50% { transform: scaleY(1); opacity: .9; }
 }
 
-.job-assembly__frame { filter: blur(var(--frame-blur, 7px)); opacity: var(--frame-opacity, .72); animation: assembly-drift 8s ease-in-out infinite; animation-delay: calc(var(--card-index) * -1.3s); transition: filter 900ms ease, opacity 900ms ease; }
+.job-assembly__frame { filter: blur(var(--frame-blur, 7px)); opacity: var(--frame-opacity, .72); will-change: transform; animation: assembly-drift 8s ease-in-out infinite; animation-delay: calc(var(--card-index) * -1.3s); transition: filter 900ms ease, opacity 900ms ease; }
 .job-assembly__art { background: radial-gradient(ellipse at 30% 25%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 38%), linear-gradient(145deg, var(--assembly-frame-a), var(--assembly-frame-b) 70%); }
 .job-assembly__bar { background: color-mix(in srgb, var(--foreground) 28%, transparent); }
 .job-assembly__scan { background: linear-gradient(to right, transparent, color-mix(in srgb, var(--foreground) 10%, transparent), transparent); animation: assembly-scan 3.8s ease-in-out infinite; animation-delay: calc(var(--card-index) * .55s); }
@@ -206,7 +206,7 @@
   .clip-carousel__pagination .swiper-pagination-bullet, .clip-carousel__nav { transition: none !important; }
 }
 
-.clip-card { transition: border-color 180ms ease, box-shadow 180ms ease; }
+.clip-card { contain: layout style; transition: border-color 180ms ease, box-shadow 180ms ease; }
 .clip-card:hover, .clip-card:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
 .clip-card-play { transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease; }
 .clip-card-actions { transition: opacity 160ms ease, transform 160ms ease; }
@@ -215,6 +215,17 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .clip-card, .clip-card-play, .clip-card-actions { transition: none !important; }
+}
+html.window-resizing *,
+html.window-resizing *::before,
+html.window-resizing *::after {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+html.window-resizing .job-assembly__frame,
+html.window-resizing .job-assembly__scan,
+html.window-resizing .job-assembly__wave {
+  animation-play-state: paused !important;
 }
 
 @layer base {
@@ -225,7 +236,8 @@
 @layer base {
   * { @apply border-border outline-ring/50; }
   body { @apply bg-background text-foreground font-sans antialiased; }
-  html { @apply font-sans; font-feature-settings: "ss01" on, "cv11" on; }
+  html { @apply bg-background font-sans; color-scheme: light; font-feature-settings: "ss01" on, "cv11" on; }
+  html.dark { color-scheme: dark; }
   ::selection { background: color-mix(in oklab, var(--primary) 25%, transparent); }
 }
 
