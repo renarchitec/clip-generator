@@ -631,24 +631,25 @@ def _two_speaker_graph(
 
 
 _FACECAM_BOX_CACHE: Dict[str, Optional[Tuple[int, int, int, int]]] = {}
-_FACECAM_KNOWN_BOXES: List[Tuple[Tuple[int, int, int, int], int, int]] = []
-_VIDEO_META_CACHE: Dict[str, Tuple[int, int, float]] = {}
 
 
-def _clear_facecam_cache() -> None:
-    _FACECAM_BOX_CACHE.clear()
-    _FACECAM_KNOWN_BOXES.clear()
-    _VIDEO_META_CACHE.clear()
+def _facecam_sample_fps(duration: float) -> float:
+    """Jarak sampling facecam sepanjang video, dibatasi jumlah sampel maksimum."""
+    return min(
+        reframe_mod.FACECAM_SAMPLE_FPS,
+        reframe_mod.FACECAM_MAX_SAMPLES / max(1.0, duration),
+    )
 
 
-def _facecam_sample_fps(duration: float, max_samples: int = reframe_mod.FACECAM_MAX_SAMPLES) -> float:
-    """Laju sampling facecam, dibatasi jumlah sampel maksimum."""
-    return min(reframe_mod.FACECAM_SAMPLE_FPS, max_samples / max(1.0, duration))
+def _facecam_box_for(video: str) -> Optional[Tuple[int, int, int, int]]:
+    """Kotak wajah facecam (piksel sumber); None -> fallback reframe biasa.
 
-
-def _probe_video_meta(video: str) -> Tuple[int, int, float]:
-    if video in _VIDEO_META_CACHE:
-        return _VIDEO_META_CACHE[video]
+    Dihitung sekali per file video, bukan per klip: panel facecam statis, jadi
+    satu kotak dipakai semua klip pada video itu. Deteksi per klip membuat
+    sebagian klip jatuh ke reframe biasa dan kotaknya bergeser antar klip.
+    """
+    if video in _FACECAM_BOX_CACHE:
+        return _FACECAM_BOX_CACHE[video]
 
     out = _run(
         [
