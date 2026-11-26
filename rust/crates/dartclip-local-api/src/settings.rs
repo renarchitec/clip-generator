@@ -2,7 +2,7 @@ use super::*;
 use anyhow::Context;
 use dartclip_core::{
     llm::{LlmClient, LlmConfig, LlmEndpoint, LlmStatusTracker},
-    stt::SttConfig,
+    stt::{SttConfig, DEFAULT_STT_FALLBACK_MODEL},
 };
 use serde::{Deserialize, Serialize};
 use std::{io::Write, time::Duration};
@@ -10,7 +10,9 @@ use std::{io::Write, time::Duration};
 const SETTINGS: &str = "desktop-settings.json";
 const SECRETS: &str = "desktop-secrets.json";
 const SERVICE: &str = "site.rencraft.dartclip";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -19,6 +21,8 @@ struct Preferences {
     nine_router_model: String,
     gemini_model: String,
     openai_model: String,
+    stt_base_url: String,
+    stt_model: String,
     video_encoder: String,
     #[serde(flatten)]
     extra: serde_json::Map<String, Value>,
@@ -30,6 +34,8 @@ impl Default for Preferences {
             nine_router_model: String::new(),
             gemini_model: "gemini-2.5-flash".into(),
             openai_model: "gpt-4o-mini".into(),
+            stt_base_url: "https://api.groq.com/openai/v1".into(),
+            stt_model: "whisper-large-v3-turbo".into(),
             video_encoder: "libx264".into(),
             extra: serde_json::Map::new(),
         }
@@ -42,6 +48,7 @@ struct Secrets {
     nine_router_api_key: String,
     gemini_api_key: String,
     openai_api_key: String,
+    stt_api_key: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +61,10 @@ pub(crate) struct Patch {
     nine_router_api_key: Option<String>,
     gemini_api_key: Option<String>,
     openai_api_key: Option<String>,
+    stt_base_url: Option<String>,
+    stt_model: Option<String>,
+    stt_api_key: Option<String>,
+    clear_stt_api_key: Option<bool>,
     #[serde(default)]
     clear_nine_router_api_key: bool,
     #[serde(default)]
@@ -94,6 +105,25 @@ fn persist_private(path: &Path, value: &impl Serialize) -> anyhow::Result<()> {
     file.as_file().sync_all()?;
     file.persist(path)?;
     Ok(())
+}
+
+fn http_url<'a>(url: &'a str, label: &str) -> ApiResult<&'a str> {
+    let url = url.trim().trim_end_matches('/');
+    if !url.is_empty() {
+        let parsed =
+            reqwest::Url::parse(url).map_err(|_| ApiError::bad(format!("Invalid {label} URL")))?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(ApiError::bad(format!(
+                "{label} must be an HTTP(S) base URL without login, query or fragment"
+            )));
+        }
+    }
+    Ok(url)
 }
 
 impl Store {
@@ -144,7 +174,7 @@ impl Store {
             ),
             (
                 "gemini",
-                "https://generativelanguage.googleapis.com/v1beta/openai",
+                GEMINI_BASE_URL,
                 &self.prefs.gemini_model,
                 &self.secrets.gemini_api_key,
             ),
@@ -170,6 +200,29 @@ impl Store {
     pub(crate) fn stt_config(&self) -> Option<SttConfig> {
         let prefs = &self.prefs;
         let secrets = &self.secrets;
+        if !prefs.stt_base_url.trim().is_empty()
+            && !secrets.stt_api_key.trim().is_empty()
+            && !prefs.stt_model.trim().is_empty()
+        {
+            let mut config = SttConfig::new(prefs.stt_base_url.trim(), secrets.stt_api_key.trim());
+            config.model = prefs.stt_model.trim().into();
+            let (base_url, api_key, model) = [
+                (
+                    prefs.nine_router_url.trim(),
+                    secrets.nine_router_api_key.trim(),
+                    DEFAULT_STT_FALLBACK_MODEL,
+                ),
+                (
+                    GEMINI_BASE_URL,
+                    secrets.gemini_api_key.trim(),
+                    prefs.gemini_model.trim(),
+                ),
+            ]
+            .into_iter()
+            .find(|(url, key, model)| !url.is_empty() && !key.is_empty() && !model.is_empty())
+            .unwrap_or(("", "", ""));
+            return Some(config.with_fallback(base_url, api_key, model));
+        }
         if !prefs.nine_router_url.is_empty() && !secrets.nine_router_api_key.is_empty() {
             return Some(SttConfig::new(
                 &prefs.nine_router_url,
@@ -195,7 +248,7 @@ impl Store {
         config.model = model.into();
         Some(if gemini {
             config.with_fallback(
-                "https://generativelanguage.googleapis.com/v1beta/openai",
+                GEMINI_BASE_URL,
                 &secrets.gemini_api_key,
                 &prefs.gemini_model,
             )
@@ -236,6 +289,8 @@ impl Store {
             "nineRouterModel": self.prefs.nine_router_model,
             "geminiModel": self.prefs.gemini_model,
             "openaiModel": self.prefs.openai_model,
+            "sttBaseUrl": self.prefs.stt_base_url,
+            "sttModel": self.prefs.stt_model,
             "videoEncoder": self.prefs.video_encoder,
         });
         for (label, field, key) in [
@@ -246,6 +301,7 @@ impl Store {
             ),
             ("Gemini", "gemini", &self.secrets.gemini_api_key),
             ("Openai", "openai", &self.secrets.openai_api_key),
+            ("Stt", "stt", &self.secrets.stt_api_key),
         ] {
             value[format!("has{label}ApiKey")] = json!(!key.is_empty());
             value[format!("{field}ApiKeyHint")] = json!(hint(key));
@@ -258,27 +314,16 @@ impl Store {
         let mut prefs = self.prefs.clone();
         let mut secrets = self.secrets.clone();
         if let Some(url) = patch.nine_router_url {
-            let url = url.trim().trim_end_matches('/');
-            if !url.is_empty() {
-                let parsed =
-                    reqwest::Url::parse(url).map_err(|_| ApiError::bad("Invalid 9Router URL"))?;
-                if !matches!(parsed.scheme(), "http" | "https")
-                    || !parsed.username().is_empty()
-                    || parsed.password().is_some()
-                    || parsed.query().is_some()
-                    || parsed.fragment().is_some()
-                {
-                    return Err(ApiError::bad(
-                        "9Router must be an HTTP(S) base URL without login, query or fragment",
-                    ));
-                }
-            }
-            prefs.nine_router_url = url.into();
+            prefs.nine_router_url = http_url(&url, "9Router")?.into();
+        }
+        if let Some(url) = patch.stt_base_url {
+            prefs.stt_base_url = http_url(&url, "STT")?.into();
         }
         for (dst, value) in [
             (&mut prefs.nine_router_model, patch.nine_router_model),
             (&mut prefs.gemini_model, patch.gemini_model),
             (&mut prefs.openai_model, patch.openai_model),
+            (&mut prefs.stt_model, patch.stt_model),
         ] {
             if let Some(value) = value {
                 *dst = value.trim().to_owned();
@@ -307,6 +352,11 @@ impl Store {
                 patch.openai_api_key,
                 patch.clear_openai_api_key,
             ),
+            (
+                &mut secrets.stt_api_key,
+                patch.stt_api_key,
+                patch.clear_stt_api_key.unwrap_or(false),
+            ),
         ] {
             if clear {
                 dst.clear();
@@ -324,7 +374,8 @@ impl Store {
             let fallback = self.dir.join(SECRETS);
             let empty = secrets.nine_router_api_key.is_empty()
                 && secrets.gemini_api_key.is_empty()
-                && secrets.openai_api_key.is_empty();
+                && secrets.openai_api_key.is_empty()
+                && secrets.stt_api_key.is_empty();
             let secured = self.entry.as_ref().is_some_and(|entry| {
                 if empty {
                     matches!(
@@ -362,10 +413,10 @@ pub(crate) struct Provider {
     endpoint: LlmEndpoint,
 }
 impl Provider {
-    fn client(&self) -> anyhow::Result<LlmClient> {
+    fn client(&self, timeout: Duration) -> anyhow::Result<LlmClient> {
         LlmClient::new(LlmConfig {
             primary: self.endpoint.clone(),
-            timeout: REQUEST_TIMEOUT,
+            timeout,
             ..Default::default()
         })
     }
@@ -413,7 +464,7 @@ pub(crate) async fn test(State(state): State<AppState>) -> ApiResult<Json<Value>
     }
     let mut last = None;
     for p in providers {
-        let client = p.client()?;
+        let client = p.client(TEST_TIMEOUT)?;
         state.settings().tracker = Some(client.status_tracker());
         match client.ping().await {
             Ok(()) => {
@@ -434,7 +485,7 @@ pub(crate) async fn caption(
 ) -> ApiResult<dartclip_core::models::CaptionResult> {
     let providers = state.settings().providers();
     for p in providers {
-        let client = p.client()?;
+        let client = p.client(REQUEST_TIMEOUT)?;
         state.settings().tracker = Some(client.status_tracker());
         if let Ok(result) = client.regenerate_caption(req).await {
             return Ok(result);
@@ -445,7 +496,7 @@ pub(crate) async fn caption(
 pub(crate) async fn expand(state: &AppState, brief: &str) -> ApiResult<String> {
     let providers = state.settings().providers();
     for p in providers {
-        let client = p.client()?;
+        let client = p.client(REQUEST_TIMEOUT)?;
         state.settings().tracker = Some(client.status_tracker());
         if let Ok(result) = client.expand_brief(brief).await {
             return Ok(result);
@@ -520,6 +571,7 @@ impl PipelineLlm {
                             let Ok(response) = http
                                 .post(url)
                                 .bearer_auth(p.endpoint.api_key)
+                                .header(reqwest::header::ACCEPT, "application/json")
                                 .json(&body)
                                 .send()
                                 .await
@@ -529,14 +581,12 @@ impl PipelineLlm {
                             if !response.status().is_success() {
                                 continue;
                             }
-                            let Ok(result) = response.json::<Value>().await else {
+                            let Ok(body) = response.text().await else {
                                 continue;
                             };
-                            if result
-                                .pointer("/choices/0/message/content")
-                                .is_some_and(Value::is_string)
-                            {
-                                return Json(result).into_response();
+                            if let Some(content) = dartclip_core::llm::extract_chat_content(&body) {
+                                return Json(json!({"choices":[{"message":{"content":content}}]}))
+                                    .into_response();
                             }
                         }
                         StatusCode::BAD_GATEWAY.into_response()

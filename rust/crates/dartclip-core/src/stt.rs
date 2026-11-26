@@ -254,16 +254,33 @@ const GEMINI_PROMPT: &str = concat!("Transcribe only verbatim speech in its orig
     "{\"segments\":[{\"start\":0.0,\"end\":1.5,\"text\":\"spoken words\"}]}. ",
     "Times are seconds relative to this audio slice, not the source video. Use an empty segments array if there is no speech.");
 fn gemini_payload(model: &str, wav: &[u8]) -> Value {
-    json!({"model":model,"temperature":0,"messages":[{"role":"user","content":[
+    json!({"model":model,"temperature":0,"stream":false,"messages":[{"role":"user","content":[
         {"type":"text","text":GEMINI_PROMPT}, {"type":"input_audio","input_audio":{"data":STANDARD.encode(wav),"format":"wav"}}
     ]}]})
 }
-fn parse_gemini(response: &Value, duration: f64, offset: f64) -> Result<Vec<Cue>> {
-    let raw = response["choices"][0]["message"]["content"]
-        .as_str()
-        .context("Gemini returned no transcription content")?;
+fn body_preview(body: &str) -> &str {
+    let body = body.trim();
+    let end = body.char_indices().nth(180).map_or(body.len(), |(i, _)| i);
+    &body[..end]
+}
+fn parse_gemini_body(body: &str, content_type: &str, duration: f64, offset: f64) -> Result<Vec<Cue>> {
+    let Some(raw) = llm::extract_chat_content(body) else {
+        if let Ok(response) = serde_json::from_str::<Value>(body) {
+            if let Some(message) = response
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .or_else(|| response.pointer("/error").and_then(Value::as_str))
+            {
+                bail!("Gemini transcription error: {}", body_preview(message));
+            }
+        }
+        bail!(
+            "Gemini returned no transcription content (content-type: {content_type}): {}",
+            body_preview(body)
+        );
+    };
     let mut segments = llm::parse_llm_list(
-        raw,
+        &raw,
         &[
             "segments", "moments", "clips", "results", "result", "data", "captions",
         ],
@@ -345,19 +362,29 @@ impl Transcriber {
         })
     }
 
-    async fn request_json(
+    async fn request_text(
         &self,
         request: reqwest::RequestBuilder,
         cancel: &CancellationToken,
-    ) -> Result<Value> {
+    ) -> Result<(String, String)> {
         let request = async {
             let response = request.send().await.map_err(reqwest::Error::without_url)?;
-            Ok(response
-                .error_for_status()
-                .map_err(reqwest::Error::without_url)?
-                .json()
-                .await
-                .map_err(reqwest::Error::without_url)?)
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("unknown")
+                .to_owned();
+            let body = response.text().await.map_err(reqwest::Error::without_url)?;
+            if !status.is_success() {
+                let preview = body_preview(&body);
+                if preview.is_empty() {
+                    bail!("STT HTTP {status}");
+                }
+                bail!("STT HTTP {status}: {preview}");
+            }
+            Ok((body, content_type))
         };
         tokio::select! { biased; _ = cancel.cancelled() => bail!("job cancelled"), result = request => result }
     }
@@ -382,9 +409,17 @@ impl Transcriber {
                     language,
                 )?);
             let result = self
-                .request_json(request, cancel)
+                .request_text(request, cancel)
                 .await
-                .and_then(|response| parse_whisper(&response, &self.cfg.model, offset));
+                .and_then(|(body, content_type)| {
+                    let response = serde_json::from_str::<Value>(&body).map_err(|error| {
+                        anyhow::anyhow!(
+                            "Whisper returned invalid JSON (content-type: {content_type}): {error}; body: {}",
+                            body_preview(&body)
+                        )
+                    })?;
+                    parse_whisper(&response, &self.cfg.model, offset)
+                });
             match result {
                 Ok(cues) if !cues.is_empty() || !self.cfg.gemini_configured() => return Ok(cues),
                 Err(e) if !self.cfg.gemini_configured() || cancel.is_cancelled() => return Err(e),
@@ -403,12 +438,15 @@ impl Transcriber {
                 .client
                 .post(endpoint(&self.cfg.fallback_base_url, "chat/completions"))
                 .bearer_auth(&self.cfg.fallback_api_key)
+                .header(reqwest::header::ACCEPT, "application/json")
                 .json(&gemini_payload(
                     &self.cfg.fallback_model,
                     &std::fs::read(&wav)?,
                 ));
-            cues.extend(parse_gemini(
-                &self.request_json(request, cancel).await?,
+            let (body, content_type) = self.request_text(request, cancel).await?;
+            cues.extend(parse_gemini_body(
+                &body,
+                &content_type,
                 end - start,
                 offset + start,
             )?);
@@ -846,19 +884,63 @@ mod tests {
 
     #[test]
     fn gemini_fenced_json_is_clamped_and_offset_and_accepts_silence() {
-        let response = |content| json!({"choices":[{"message":{"content":content}}]});
-        let c = parse_gemini(&response("```json\n{\"segments\":[{\"start\":-2,\"end\":100,\"text\":\"[tertawa] halo\"}]}\n```"),45.,80.).unwrap();
+        let response = |content| json!({"choices":[{"message":{"content":content}}]}).to_string();
+        let body = response(
+            "```json\n{\"segments\":[{\"start\":-2,\"end\":100,\"text\":\"[tertawa] halo\"}]}\n```",
+        );
+        let c = parse_gemini_body(&body, "application/json", 45., 80.).unwrap();
         assert_eq!(
             (c[0].start, c[0].end, c[0].text.as_str()),
             (80., 125., "halo")
         );
-        assert!(parse_gemini(&response(r#"{"segments":[]}"#), 5., 0.)
-            .unwrap()
-            .is_empty());
+        assert!(parse_gemini_body(
+            &response(r#"{"segments":[]}"#),
+            "application/json",
+            5.,
+            0.,
+        )
+        .unwrap()
+        .is_empty());
+        let payload = gemini_payload("model", b"wav");
+        assert_eq!(payload["stream"], json!(false));
         assert_eq!(
-            gemini_payload("model", b"wav")["messages"][0]["content"][1],
+            payload["messages"][0]["content"][1],
             json!({"type":"input_audio","input_audio":{"data":"d2F2","format":"wav"}})
         );
+    }
+
+    #[test]
+    fn gemini_9router_sse_is_clamped_and_offset() {
+        let body = concat!(
+            r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#,
+            "\n\n",
+            r#"data: {"choices":[{"delta":{"content":"{\"segments\":["}}]}"#,
+            "\n\n",
+            r#"data: {"choices":[{"delta":{"content":"{\"start\":-2,\"end\":10,\"text\":\"halo\"}]}"}}]}"#,
+            "\n\ndata: [DONE]\n",
+        );
+        let cues = parse_gemini_body(body, "text/event-stream", 5., 80.).unwrap();
+        assert_eq!(cues.len(), 1);
+        assert_eq!(
+            (cues[0].start, cues[0].end, cues[0].text.as_str()),
+            (80., 85., "halo"),
+        );
+    }
+
+    #[test]
+    fn gemini_surfaces_provider_error_messages() {
+        for body in [
+            r#"{"error":{"message":"Audio not supported"}}"#,
+            r#"{"error":"Audio not supported"}"#,
+        ] {
+            let error = parse_gemini_body(body, "application/json", 5., 0.)
+                .err()
+                .expect("expected a provider error");
+            assert_eq!(
+                error.to_string(),
+                "Gemini transcription error: Audio not supported"
+            );
+        }
     }
 
     #[test]

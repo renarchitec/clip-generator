@@ -229,6 +229,73 @@ async fn settings_masks_keys_persists_preferences_and_clears_keys() {
     api.stop();
 }
 
+#[tokio::test]
+async fn direct_stt_settings_persist_and_clearing_restores_provider_priority() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = Server::new(&dir).await;
+    const KEY: &str = "gsk-test-whisper-abcd";
+    const DEFAULT_URL: &str = "https://api.groq.com/openai/v1";
+    const MODEL: &str = "whisper-large-v3-turbo";
+
+    let initial = ok(api.get("/system/desktop-settings")).await;
+    assert_eq!(initial["sttBaseUrl"], DEFAULT_URL);
+    assert_eq!(initial["sttModel"], MODEL);
+    assert_eq!(initial["hasSttApiKey"], false);
+    assert_eq!(initial["sttApiKeyHint"], Value::Null);
+    response(
+        api.patch("/system/desktop-settings")
+            .json(&json!({"sttBaseUrl":"ftp://stt.example/v1"})),
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    let saved = ok(api.patch("/system/desktop-settings").json(&json!({
+        "sttBaseUrl": " https://stt.example/openai/v1/ ",
+        "sttModel": " whisper-large-v3-turbo ",
+        "sttApiKey": KEY,
+    })))
+    .await;
+    assert_eq!(saved["sttBaseUrl"], "https://stt.example/openai/v1");
+    assert_eq!(saved["sttModel"], MODEL);
+    assert_eq!(saved["hasSttApiKey"], true);
+    assert_eq!(saved["sttApiKeyHint"], "…abcd");
+    assert!(!saved.to_string().contains(KEY));
+    let prefs = std::fs::read_to_string(dir.path().join("data/desktop-settings.json")).unwrap();
+    assert!(!prefs.contains(KEY));
+    api.stop();
+
+    let api = Server::new(&dir).await;
+    assert_eq!(ok(api.get("/system/desktop-settings")).await, saved);
+    ok(api
+        .patch("/system/desktop-settings")
+        .json(&json!({"nineRouterApiKey":"test-router-key"})))
+    .await;
+    let status = ok(api.get("/system/llm-status")).await;
+    assert_eq!(status["sttConfigured"], true);
+    assert_eq!(status["sttModel"], MODEL);
+
+    let cleared = ok(api
+        .patch("/system/desktop-settings")
+        .json(&json!({"clearSttApiKey":true})))
+    .await;
+    assert_eq!(cleared["hasSttApiKey"], false);
+    assert_eq!(cleared["sttApiKeyHint"], Value::Null);
+    let status = ok(api.get("/system/llm-status")).await;
+    assert_eq!(status["sttConfigured"], true);
+    assert_eq!(status["sttModel"], dartclip_core::stt::DEFAULT_STT_MODEL);
+
+    let cleared = ok(api.patch("/system/desktop-settings").json(&json!({
+        "sttBaseUrl": " ",
+        "clearNineRouterApiKey": true,
+    })))
+    .await;
+    assert_eq!(cleared["sttBaseUrl"], "");
+    let status = ok(api.get("/system/llm-status")).await;
+    assert_eq!(status["sttConfigured"], false);
+    assert_eq!(status["sttModel"], Value::Null);
+    api.stop();
+}
+
 fn png() -> Vec<u8> {
     let mut png = Cursor::new(Vec::new());
     image::DynamicImage::new_rgba8(16, 8)

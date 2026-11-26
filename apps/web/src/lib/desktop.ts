@@ -11,6 +11,10 @@ export type DesktopSettingsView = {
   openaiModel: string
   hasOpenaiApiKey: boolean
   openaiApiKeyHint: string | null
+  sttBaseUrl: string
+  sttModel: string
+  hasSttApiKey: boolean
+  sttApiKeyHint: string | null
   videoEncoder: DesktopVideoEncoder
   encryptionAvailable: boolean
   clipsDir: string
@@ -27,6 +31,10 @@ export type DesktopSettingsPatch = {
   openaiApiKey?: string
   clearOpenaiApiKey?: boolean
   openaiModel?: string
+  sttBaseUrl?: string
+  sttModel?: string
+  sttApiKey?: string
+  clearSttApiKey?: boolean
   videoEncoder?: DesktopVideoEncoder
 }
 

@@ -6,6 +6,7 @@ import {
   FolderOpen,
   KeyRound,
   LoaderCircle,
+  Mic,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -38,6 +39,8 @@ import { useRuntime } from "@/lib/use-runtime"
 import { useT } from "@/lib/i18n"
 
 const desktopSettingsKey = ["desktop", "settings"] as const
+const defaultSttBaseUrl = "https://api.groq.com/openai/v1"
+const defaultSttModel = "whisper-large-v3-turbo"
 
 type FormValues = {
   nineRouterUrl: string
@@ -47,6 +50,9 @@ type FormValues = {
   geminiModel: string
   openaiApiKey: string
   openaiModel: string
+  sttBaseUrl: string
+  sttApiKey: string
+  sttModel: string
   videoEncoder: DesktopVideoEncoder
 }
 
@@ -60,6 +66,7 @@ export function DesktopSettings() {
     nineRouter: false,
     gemini: false,
     openai: false,
+    stt: false,
   })
 
   const settingsQuery = useQuery({
@@ -72,7 +79,7 @@ export function DesktopSettings() {
     mutationFn: saveDesktopSettings,
     onSuccess: (next) => {
       client.setQueryData<DesktopSettingsView>(desktopSettingsKey, next)
-      setClearFlags({ nineRouter: false, gemini: false, openai: false })
+      setClearFlags({ nineRouter: false, gemini: false, openai: false, stt: false })
       setTestResult(null)
       void client.invalidateQueries({ queryKey: ["system", "llm-status"] })
       toast.success(t.desktop.savedToast)
@@ -106,6 +113,9 @@ export function DesktopSettings() {
       geminiModel: "gemini-2.5-flash",
       openaiApiKey: "",
       openaiModel: "gpt-4o-mini",
+      sttBaseUrl: defaultSttBaseUrl,
+      sttApiKey: "",
+      sttModel: defaultSttModel,
       videoEncoder: "libx264" as DesktopVideoEncoder,
     } as FormValues,
     onSubmit: async ({ value }) => {
@@ -114,6 +124,8 @@ export function DesktopSettings() {
         nineRouterModel: value.nineRouterModel.trim(),
         geminiModel: value.geminiModel.trim(),
         openaiModel: value.openaiModel.trim(),
+        sttBaseUrl: value.sttBaseUrl.trim(),
+        sttModel: value.sttModel.trim(),
         videoEncoder: value.videoEncoder,
       }
       if (value.nineRouterApiKey.trim()) {
@@ -131,6 +143,11 @@ export function DesktopSettings() {
       } else if (clearFlags.openai) {
         patch.clearOpenaiApiKey = true
       }
+      if (value.sttApiKey.trim()) {
+        patch.sttApiKey = value.sttApiKey.trim()
+      } else if (clearFlags.stt) {
+        patch.clearSttApiKey = true
+      }
       try {
         await saveMutation.mutateAsync(patch)
       } catch {
@@ -139,6 +156,7 @@ export function DesktopSettings() {
       form.setFieldValue("nineRouterApiKey", "")
       form.setFieldValue("geminiApiKey", "")
       form.setFieldValue("openaiApiKey", "")
+      form.setFieldValue("sttApiKey", "")
     },
   })
 
@@ -149,6 +167,9 @@ export function DesktopSettings() {
     form.setFieldValue("nineRouterModel", data.nineRouterModel || "")
     form.setFieldValue("geminiModel", data.geminiModel || "gemini-2.5-flash")
     form.setFieldValue("openaiModel", data.openaiModel || "gpt-4o-mini")
+    form.setFieldValue("sttBaseUrl", data.sttBaseUrl || defaultSttBaseUrl)
+    form.setFieldValue("sttModel", data.sttModel || defaultSttModel)
+    form.setFieldValue("sttApiKey", "")
     form.setFieldValue("videoEncoder", data.videoEncoder || "libx264")
   }, [settingsQuery.data, form])
 
@@ -418,6 +439,103 @@ export function DesktopSettings() {
                 </form.Field>
               </div>
             </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+            <div className="mb-4">
+              <div className="flex items-center gap-2">
+                <Mic aria-hidden="true" className="size-4 text-accent" />
+                <h4 className="text-sm font-semibold">{t.desktop.sttHeading}</h4>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">{t.desktop.sttDescription}</p>
+            </div>
+
+            <FieldGroup className="gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <form.Field name="sttBaseUrl">
+                  {(field) => (
+                    <Field>
+                      <FieldLabel htmlFor="desktop-stt-url">{t.desktop.sttBaseUrl}</FieldLabel>
+                      <Input
+                        id="desktop-stt-url"
+                        type="url"
+                        placeholder={defaultSttBaseUrl}
+                        className="h-10 font-mono text-xs"
+                        value={field.state.value}
+                        onChange={(e) => field.handleChange(e.target.value)}
+                      />
+                    </Field>
+                  )}
+                </form.Field>
+
+                <form.Field name="sttModel">
+                  {(field) => (
+                    <Field>
+                      <FieldLabel htmlFor="desktop-stt-model">{t.desktop.sttModel}</FieldLabel>
+                      <Input
+                        id="desktop-stt-model"
+                        placeholder={defaultSttModel}
+                        className="h-10 font-mono text-xs"
+                        value={field.state.value}
+                        onChange={(e) => field.handleChange(e.target.value)}
+                      />
+                    </Field>
+                  )}
+                </form.Field>
+              </div>
+
+              <form.Field name="sttApiKey">
+                {(field) => {
+                  const hasSaved = Boolean(saved?.hasSttApiKey && !clearFlags.stt)
+                  const savedHint = hasSaved ? saved?.sttApiKeyHint : null
+                  return (
+                    <Field>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <FieldLabel htmlFor="desktop-stt-key">{t.desktop.sttApiKey}</FieldLabel>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline" className="gap-1 font-mono text-[11px] font-normal">
+                            {hasSaved ? (
+                              <>
+                                <KeyRound aria-hidden="true" className="size-3 text-accent" />
+                                {t.desktop.keySaved}{savedHint ? ` (${savedHint})` : ""}
+                              </>
+                            ) : t.desktop.sttFallbackBadge}
+                          </Badge>
+                          {hasSaved && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+                              onClick={() => {
+                                setClearFlags((prev) => ({ ...prev, stt: true }))
+                                field.handleChange("")
+                              }}
+                            >
+                              <Trash2 aria-hidden="true" className="size-3" />
+                              {t.desktop.clearKey}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      <Input
+                        id="desktop-stt-key"
+                        type="password"
+                        autoComplete="off"
+                        placeholder={savedHint ?? "gsk_..."}
+                        className="h-10 font-mono text-xs"
+                        value={field.state.value}
+                        onChange={(e) => {
+                          if (clearFlags.stt) setClearFlags((prev) => ({ ...prev, stt: false }))
+                          field.handleChange(e.target.value)
+                        }}
+                      />
+                      <FieldDescription className="text-xs">{t.desktop.sttFallbackHint}</FieldDescription>
+                    </Field>
+                  )
+                }}
+              </form.Field>
+            </FieldGroup>
           </div>
 
           {/* Local encoding & storage */}

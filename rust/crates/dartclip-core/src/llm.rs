@@ -1039,7 +1039,8 @@ fn extract_message_text(value: &Value) -> Option<String> {
     None
 }
 
-fn extract_chat_content(body: &str) -> Option<String> {
+/// Extract assistant text from a JSON chat completion or an SSE response body.
+pub fn extract_chat_content(body: &str) -> Option<String> {
     if let Ok(v) = serde_json::from_str::<Value>(body) {
         if let Some(content) = v
             .pointer("/choices/0/message/content")
