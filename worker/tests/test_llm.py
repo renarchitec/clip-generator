@@ -80,6 +80,50 @@ def test_fallback_moments_titles_use_timestamp_not_transcript():
         assert moment.title.count(":") == 2
 
 
+@pytest.mark.parametrize(
+    ("all_moments", "expected"),
+    [(True, [(40, 95), (80, 85), (0, 75)]), (False, [(40, 95), (80, 85)])],
+)
+def test_validate_moments_keeps_ranked_non_overlapping_candidates(all_moments, expected):
+    items = [
+        {"start": 30, "end": 60, "viralScore": 80},  # overlaps the stronger moment at 40
+        {"start": 0, "end": 30, "viralScore": 75},
+        {"start": 80, "end": 110, "viralScore": 85},
+        {"start": 40, "end": 70, "viralScore": 95},
+        {"start": 110, "end": 140, "viralScore": 100},  # outside the transcript
+    ]
+    params = JobParams(clip_count=2, target_duration_sec=30.0)
+
+    moments = llm.validate_moments(items, _cues(), params, all_moments=all_moments)
+
+    assert [(moment.start, moment.viral_score) for moment in moments] == expected
+
+
+def test_validate_all_unscored_moments_resolves_overlaps_by_start_without_count_warning(caplog):
+    items = [{"start": 10, "end": 40}, {"start": 0, "end": 30}, {"start": 50, "end": 80}]
+    params = JobParams(clip_count=3, target_duration_sec=30.0)
+
+    moments = llm.validate_moments(items, _cues(), params, all_moments=True)
+
+    assert [moment.start for moment in moments] == [0, 50]
+    assert "LLM hanya menghasilkan" not in caplog.text
+
+
+def test_build_prompt_only_caps_auto_mode():
+    params = JobParams(clip_count=2, target_duration_sec=30.0)
+    cues = _cues()
+
+    preview = llm._build_prompt(cues, params, all_moments=True)
+    auto = llm._build_prompt(cues, params, all_moments=False)
+
+    assert "SEMUA kandidat momen kuat" in preview
+    assert "seluruh transkrip" in preview
+    assert "4 kandidat momen" not in preview
+    assert "sistem memilih" not in preview
+    assert "Kembalikan 4 kandidat momen dari transkrip" in auto
+    assert "sistem memilih 2 terbaik" in auto
+
+
 # --- Pass refinement LLM + snap deterministik ---
 
 ENV_LLM = {"LLM_BASE_URL": "http://x", "LLM_API_KEY": "k", "LLM_MODEL": "m"}
@@ -117,6 +161,35 @@ def test_select_moments_refine_and_snap(monkeypatch):
     # Snap: start 12.0 -> awal cue 12.0 minus pad; end 42.0 -> akhir cue 42.0 plus pad.
     assert moments[0].start == pytest.approx(12.0 - START_PAD, abs=0.01)
     assert moments[0].end == pytest.approx(42.0 + END_PAD, abs=0.01)
+
+
+def test_select_all_moments_keeps_candidates_through_refine_and_snap(monkeypatch):
+    cues = [
+        Cue(cue.start + offset, cue.end + offset, cue.text)
+        for offset in (0.0, 60.0)
+        for cue in _cues_boundaries()
+    ]
+    responses = iter([
+        '[{"start": 10, "end": 40, "title": "A"}, {"start": 70, "end": 100, "title": "B"}]',
+        '[{"index": 0, "start": 12, "end": 42}, {"index": 1, "start": 72, "end": 102}]',
+    ])
+    prompts = []
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        prompts.append(prompt)
+        return next(responses)
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    params = JobParams(clip_count=1, target_duration_sec=30.0)
+
+    moments = select_moments(cues, params, ENV_LLM, all_moments=True)
+
+    assert len(prompts) == 2
+    assert "SEMUA kandidat momen kuat" in prompts[0]
+    assert "Kandidat 1" in prompts[1]
+    assert [moment.title for moment in moments] == ["A", "B"]
+    assert [moment.start for moment in moments] == pytest.approx([12 - START_PAD, 72 - START_PAD], abs=0.01)
+    assert [moment.end for moment in moments] == pytest.approx([42 + END_PAD, 102 + END_PAD], abs=0.01)
 
 
 def test_select_moments_refine_disabled_keeps_pass1(monkeypatch):

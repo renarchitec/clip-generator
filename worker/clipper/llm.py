@@ -270,10 +270,28 @@ def _build_prompt(
     cues: Sequence[Cue],
     params: JobParams,
     description: Optional[str] = None,
+    *,
+    all_moments: bool = False,
 ) -> str:
-    count = max(1, int(params.clip_count or DEFAULT_CLIP_COUNT))
     target = _target_duration(params)
     total = cues[-1].end if cues else 0.0
+
+    if all_moments:
+        task = (
+            "Tugas utama: pilih semua momen yang paling sesuai dengan preferensi pengguna, "
+            "lalu paling menarik. Temukan dan kembalikan SEMUA kandidat momen kuat yang "
+            "tidak tumpang tindih dari seluruh transkrip video ini untuk dijadikan video "
+            f"vertikal 9:16 berdurasi sekitar {target:.0f} detik tanpa membatasi jumlahnya "
+            "ke angka tertentu, agar pengguna dapat meninjau dan memilih sendiri.\n\n"
+        )
+    else:
+        count = max(1, int(params.clip_count or DEFAULT_CLIP_COUNT))
+        task = (
+            f"Tugas utama: pilih momen yang paling sesuai dengan preferensi pengguna, "
+            f"lalu paling menarik. Kembalikan {count + 2} kandidat momen dari transkrip "
+            f"video ini untuk dijadikan video vertikal 9:16 berdurasi sekitar "
+            f"{target:.0f} detik; sistem memilih {count} terbaik.\n\n"
+        )
 
     preference = ""
     text = (description or "").strip()
@@ -289,10 +307,7 @@ def _build_prompt(
 
     return (
         "Kamu editor video pendek berbahasa Indonesia.\n"
-        f"Tugas utama: pilih momen yang paling sesuai dengan preferensi pengguna, "
-        f"lalu paling menarik. Kembalikan {count + 2} kandidat momen dari transkrip "
-        f"video ini untuk dijadikan video vertikal 9:16 berdurasi sekitar "
-        f"{target:.0f} detik; sistem memilih {count} terbaik.\n\n"
+        f"{task}"
         "Aturan:\n"
         f"- Durasi tiap momen antara {MIN_DURATION_RATIO * target:.0f} dan "
         f"{MAX_DURATION_RATIO * target:.0f} detik idealnya.\n"
@@ -415,6 +430,8 @@ def validate_moments(
     items: Sequence[Mapping[str, Any]],
     cues: Sequence[Cue],
     params: JobParams,
+    *,
+    all_moments: bool = False,
 ) -> List[Moment]:
     """Saring jawaban LLM: angka valid, end > start, dalam batas, durasi wajar."""
     if not cues:
@@ -459,24 +476,26 @@ def validate_moments(
     scored = any(moment.viral_score is not None for moment in candidates)
     if scored:
         candidates.sort(key=_score_key, reverse=True)
+    elif all_moments:
+        candidates.sort(key=lambda moment: moment.start)
 
-    # Resolve overlaps in ranking order so a weaker candidate can't block a stronger one.
+    # Prefer higher scores, or earlier starts for unscored review candidates.
     moments: List[Moment] = []
     for candidate in candidates:
         if any(_overlap(candidate.start, candidate.end, m.start, m.end) > 0 for m in moments):
             continue
         moments.append(candidate)
-        if len(moments) >= count:
+        if not all_moments and len(moments) >= count:
             break
 
-    if len(moments) < count:
+    if not all_moments and len(moments) < count:
         log.warning(
             "LLM hanya menghasilkan %s momen valid dari %s yang diminta",
             len(moments),
             count,
         )
 
-    if not scored:
+    if not scored and not all_moments:
         moments.sort(key=lambda moment: moment.start)
     return moments
 
@@ -1263,6 +1282,8 @@ def select_moments(
     params: JobParams,
     env: Optional[Mapping[str, str]] = None,
     description: Optional[str] = None,
+    *,
+    all_moments: bool = False,
 ) -> List[Moment]:
     """Blokir (dipanggil lewat asyncio.to_thread). Satu retry bila JSON rusak."""
     env = env if env is not None else os.environ
@@ -1277,7 +1298,7 @@ def select_moments(
     if not cues:
         return []
 
-    prompt = _build_prompt(cues, params, description=description)
+    prompt = _build_prompt(cues, params, description=description, all_moments=all_moments)
     has_brief = bool((description or "").strip())
     for attempt in (1, 2):
         try:
@@ -1302,7 +1323,7 @@ def select_moments(
             log.warning("jawaban LLM tidak valid pada percobaan %s: %s", attempt, exc)
             continue
 
-        moments = validate_moments(items, cues, params)
+        moments = validate_moments(items, cues, params, all_moments=all_moments)
         if moments:
             if _refine_enabled(env):
                 moments = _refine(base_url, api_key, model, cues, moments, params, description=description)

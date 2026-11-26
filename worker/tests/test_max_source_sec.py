@@ -79,9 +79,10 @@ def test_run_preview_filters_cues_and_passes_them_to_llm(monkeypatch, tmp_path):
 
     seen = {}
 
-    def fake_select(cues_arg, params, env, description):
+    def fake_select(cues_arg, params, env, description, *, all_moments=False):
         seen["cues"] = list(cues_arg)
         seen["params"] = params
+        seen["all_moments"] = all_moments
         return [llm.Moment(start=1.0, end=9.0, title="K", reason="r")]
 
     monkeypatch.setattr(pipeline, "_fetch_subtitles", fake_fetch)
@@ -100,6 +101,7 @@ def test_run_preview_filters_cues_and_passes_them_to_llm(monkeypatch, tmp_path):
     # Parameter flat dari preview diteruskan (bukan default).
     assert seen["params"].clip_count == 7
     assert seen["params"].target_duration_sec == 60.0
+    assert seen["all_moments"] is True
     # Transkrip yang dikembalikan ke UI sama dengan versi terpotong.
     assert [cue["start"] for cue in result["cues"]] == [0.0, 118.0]
     assert result["cues"][1]["end"] == 120.0
