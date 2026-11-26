@@ -1,0 +1,1925 @@
+use crate::{
+    hook_thumbnail, live_chat,
+    llm::{self, LlmClient},
+    models::*,
+    stt::{self, SttConfig, Transcriber},
+    subtitles,
+    tools::{self, ToolPaths},
+};
+use anyhow::{anyhow, bail, Context, Result};
+use std::{
+    fs,
+    future::Future,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{process::Command, task::JoinSet};
+pub use tokio_util::sync::CancellationToken;
+
+pub type FacecamBox = (u32, u32, u32, u32);
+pub type SpeakerSegment = (f64, f64, f64);
+pub trait FaceAnalyzer: Send + Sync {
+    /// Segment times are relative to the beginning of this render window.
+    fn track_active_speaker(
+        &self,
+        video_path: &Path,
+        start: f64,
+        end: f64,
+    ) -> Result<Vec<SpeakerSegment>>;
+    fn detect_two_speakers(
+        &self,
+        video_path: &Path,
+        start: f64,
+        end: f64,
+    ) -> Result<Option<(f64, f64)>>;
+    fn detect_facecam_box(
+        &self,
+        video_path: &Path,
+        start: f64,
+        end: f64,
+        cached: Option<FacecamBox>,
+    ) -> Result<Option<FacecamBox>>;
+    fn detect_cover_face_focus(&self, image_path: &Path) -> Option<(f32, f32)>;
+}
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopFaceAnalyzer;
+impl FaceAnalyzer for NoopFaceAnalyzer {
+    fn track_active_speaker(&self, _: &Path, _: f64, _: f64) -> Result<Vec<SpeakerSegment>> {
+        Ok(vec![])
+    }
+    fn detect_two_speakers(&self, _: &Path, _: f64, _: f64) -> Result<Option<(f64, f64)>> {
+        Ok(None)
+    }
+    fn detect_facecam_box(
+        &self,
+        _: &Path,
+        _: f64,
+        _: f64,
+        _: Option<FacecamBox>,
+    ) -> Result<Option<FacecamBox>> {
+        Ok(None)
+    }
+    fn detect_cover_face_focus(&self, _: &Path) -> Option<(f32, f32)> {
+        None
+    }
+}
+#[derive(Debug, Clone)]
+pub struct PipelineConfig {
+    pub tools: ToolPaths,
+    pub clips_dir: PathBuf,
+    pub temp_root: Option<PathBuf>,
+    pub font_dir: Option<PathBuf>,
+    pub video_encoder: String,
+    pub render_timeout: Duration,
+}
+impl PipelineConfig {
+    pub fn new(tools: ToolPaths, clips_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            tools,
+            clips_dir: clips_dir.into(),
+            temp_root: None,
+            font_dir: None,
+            video_encoder: "libx264".into(),
+            render_timeout: Duration::from_secs(900),
+        }
+    }
+}
+#[derive(Clone)]
+pub struct Pipeline {
+    pub config: PipelineConfig,
+    faces: Arc<dyn FaceAnalyzer>,
+    llm: Option<LlmClient>,
+    stt_config: Option<SttConfig>,
+}
+impl Pipeline {
+    pub fn new(config: PipelineConfig) -> Self {
+        Self {
+            config,
+            faces: Arc::new(NoopFaceAnalyzer),
+            llm: None,
+            stt_config: None,
+        }
+    }
+    pub fn with_face_analyzer(mut self, faces: Arc<dyn FaceAnalyzer>) -> Self {
+        self.faces = faces;
+        self
+    }
+    pub fn with_llm(mut self, llm: LlmClient) -> Self {
+        self.llm = Some(llm);
+        self
+    }
+    pub fn with_stt(mut self, stt: SttConfig) -> Self {
+        self.stt_config = Some(stt);
+        self
+    }
+    fn transcriber(&self) -> Result<Transcriber> {
+        let cfg = self.stt_config.as_ref().filter(|cfg| cfg.is_configured()).ok_or_else(|| {
+            anyhow!("Transkripsi audio belum dikonfigurasi. Atur provider STT atau STT_BASE_URL dan STT_API_KEY.")
+        })?;
+        Transcriber::new(cfg.clone(), self.config.tools.clone())
+    }
+    fn workdir(&self, prefix: &str) -> Result<tempfile::TempDir> {
+        let mut b = tempfile::Builder::new();
+        b.prefix(prefix);
+        if let Some(dir) = &self.config.temp_root {
+            fs::create_dir_all(dir)?;
+            Ok(b.tempdir_in(dir)?)
+        } else {
+            Ok(b.tempdir()?)
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct RenderOptions {
+    pub reframe: ReframeMode,
+    pub aspect_ratio: AspectRatio,
+    pub captions: bool,
+    pub two_speakers: bool,
+    pub facecam: bool,
+    pub caption_style: Option<CaptionStyle>,
+    pub watermarks: Vec<(Watermark, PathBuf)>,
+    pub normalize_audio: bool,
+    pub timeline_offset: f64,
+}
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            reframe: ReframeMode::FaceTracking,
+            aspect_ratio: AspectRatio::Portrait,
+            captions: true,
+            two_speakers: false,
+            facecam: false,
+            caption_style: None,
+            watermarks: vec![],
+            normalize_audio: false,
+            timeline_offset: 0.,
+        }
+    }
+}
+
+pub fn black_bars(w: u32, h: u32) -> String {
+    format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1")
+}
+pub fn blurred_fill(w: u32, h: u32) -> String {
+    format!("split=2[fg][bg];[bg]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=luma_radius=min(h\\,w)/10:luma_power=2[blurred];[fg]scale={w}:{h}:force_original_aspect_ratio=decrease[sharp];[blurred][sharp]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,setsar=1")
+}
+fn center(cx: f64) -> f64 {
+    if cx.is_finite() {
+        cx.clamp(0., 1.)
+    } else {
+        0.5
+    }
+}
+pub fn portrait_crop_filter(cx: f64, w: u32, h: u32) -> String {
+    let ratio = w as f64 / h as f64;
+    format!(
+        "crop=ih*{ratio:.5}:ih:{:.5}*in_w-ih*{:.5}:0,scale={w}:{h}",
+        center(cx),
+        ratio / 2.
+    )
+}
+pub fn cut_crop_filter(segments: &[SpeakerSegment], w: u32, h: u32) -> String {
+    let ratio = w as f64 / h as f64;
+    let mut segments: Vec<_> = segments
+        .iter()
+        .copied()
+        .filter(|(s, e, _)| s.is_finite() && e.is_finite() && e > s)
+        .collect();
+    segments.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if segments.is_empty() {
+        return portrait_crop_filter(0.5, w, h);
+    }
+    let terms = segments
+        .iter()
+        .enumerate()
+        .map(|(i, &(start, _, cx))| {
+            let next = segments
+                .get(i + 1)
+                .map(|s| format!("*lt(t,{:.3})", s.0))
+                .unwrap_or_default();
+            format!("{:.4}*gte(t,{start:.3}){next}", center(cx))
+        })
+        .collect::<Vec<_>>()
+        .join("+");
+    format!("crop=w='ih*{ratio:.5}':h=ih:x='max(0,min(({terms})*in_w-ih*{:.5},in_w-ih*{ratio:.5}))',scale={w}:{h}",ratio/2.)
+}
+pub fn panel_crop_filter(cx: f64) -> String {
+    format!("crop=w='min(ih*1.125,in_w)':h='if(gt(ih*1.125,in_w),in_w*0.88889,ih)':x='max(0,min({:.5}*in_w-out_w/2,in_w-out_w))':y='max(0,(in_h-out_h)/2)',scale=1080:960,setsar=1",center(cx))
+}
+fn standard_video_filter(base: &str, subtitle: Option<&str>) -> String {
+    let mut filter = format!("setpts=PTS-STARTPTS,{base}");
+    if let Some(sub) = subtitle {
+        filter.push(',');
+        filter.push_str(sub);
+    }
+    filter
+}
+fn add_subtitles(
+    mut graph: Vec<String>,
+    base: &str,
+    subtitle_filter: Option<&str>,
+) -> (Vec<String>, String) {
+    if let Some(filter) = subtitle_filter {
+        graph.push(format!("{base}{filter}[vout]"));
+        (graph, "[vout]".into())
+    } else {
+        (graph, base.into())
+    }
+}
+pub fn two_speaker_graph(
+    left: f64,
+    right: f64,
+    subtitle_filter: Option<&str>,
+) -> (Vec<String>, String) {
+    add_subtitles(
+        vec![
+            "[0:v]setpts=PTS-STARTPTS,split=2[s0][s1]".into(),
+            format!("[s0]{}[top]", panel_crop_filter(left)),
+            format!("[s1]{}[bottom]", panel_crop_filter(right)),
+            "[top][bottom]vstack=inputs=2[vstacked]".into(),
+        ],
+        "[vstacked]",
+        subtitle_filter,
+    )
+}
+pub fn facecam_graph(
+    (x, y, w, h): FacecamBox,
+    subtitle_filter: Option<&str>,
+) -> (Vec<String>, String) {
+    add_subtitles(vec!["[0:v]setpts=PTS-STARTPTS,split=2[fc0][fc1]".into(),format!("[fc0]crop={w}:{h}:{x}:{y},scale=1080:840,setsar=1[top]"),"[fc1]crop=w='min(ih*1080/1080,in_w)':h=ih:x='(in_w-out_w)/2':y=0,scale=1080:1080,setsar=1[bot]".into(),"[top][bot]vstack=inputs=2[v]".into()],"[v]",subtitle_filter)
+}
+pub fn chroma_key_filters(ck: &WatermarkChromaKey) -> Vec<String> {
+    let hex = ck.color.trim_start_matches('#');
+    let rgb = if hex.len() == 6 {
+        u32::from_str_radix(hex, 16).unwrap_or(0x00ff00)
+    } else {
+        0x00ff00
+    };
+    let (r, g, b) = (
+        (rgb >> 16) as f64,
+        (rgb >> 8 & 255) as f64,
+        (rgb & 255) as f64,
+    );
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let opt = format!(
+        "color=0x{rgb:06X}:similarity={:.3}:blend={:.3}",
+        ck.similarity, ck.blend
+    );
+    if max == 0. || (max - min) / max < 0.15 {
+        return vec![format!("colorkey={opt}")];
+    }
+    let mut filters = vec![format!("chromakey={opt}")];
+    if g > r && g > b {
+        filters.push("despill=type=green".into());
+    } else if b > r && b > g {
+        filters.push("despill=type=blue".into());
+    }
+    filters
+}
+pub fn watermark_chain(width: u32, wm: &Watermark, input: &str, output: &str) -> String {
+    let w = ((width as f64 * wm.scale / 2.).round_ties_even() as u32)
+        .saturating_mul(2)
+        .max(2);
+    let mut chain = Vec::new();
+    if wm.is_video() {
+        chain.push("setpts=PTS-STARTPTS".into());
+    }
+    if let Some(ck) = wm.chroma_key.as_ref().filter(|c| c.enabled) {
+        chain.extend(chroma_key_filters(ck));
+    }
+    chain.extend([
+        format!("scale=w={w}:h=-2"),
+        "format=rgba".into(),
+        format!("colorchannelmixer=aa={:.3}", wm.opacity),
+    ]);
+    format!("{input}{}{output}", chain.join(","))
+}
+pub fn watermark_overlay(label: &str, wm: &Watermark, wm_label: &str, output: &str) -> String {
+    format!("{label}{wm_label}overlay=x='max(0,min(main_w-overlay_w,main_w*{:.4}-overlay_w/2))':y='max(0,min(main_h-overlay_h,main_h*{:.4}-overlay_h/2))':shortest=1:format=auto{output}",wm.x,wm.y)
+}
+pub fn with_watermarks(
+    mut graph: Vec<String>,
+    label: &str,
+    width: u32,
+    watermarks: &[Watermark],
+) -> (Vec<String>, String) {
+    let count = watermarks.len().min(WATERMARK_MAX_PER_JOB);
+    let mut current = label.to_owned();
+    for (i, wm) in watermarks.iter().take(count).enumerate() {
+        let input = format!("[{}:v]", i + 1);
+        let wm_label = if count == 1 {
+            "[wm]".into()
+        } else {
+            format!("[wm{i}]")
+        };
+        let output = if i + 1 == count {
+            "[wmout]".into()
+        } else {
+            format!("[wmout{i}]")
+        };
+        graph.push(watermark_chain(width, wm, &input, &wm_label));
+        graph.push(watermark_overlay(&current, wm, &wm_label, &output));
+        current = output;
+    }
+    (graph, current)
+}
+fn canonical_destination(path: &Path) -> Result<PathBuf> {
+    let filename = path
+        .file_name()
+        .ok_or_else(|| anyhow!("invalid output path"))?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    Ok(parent.canonicalize()?.join(filename))
+}
+fn escape_filter_option(path: &Path) -> String {
+    // FFmpeg parses both the filter graph and then the filter's option list.
+    let value = path.to_string_lossy().replace('\\', "/");
+    let mut inner = String::new();
+    for c in value.chars() {
+        if matches!(c, ':' | '\'' | '\\' | ' ') {
+            inner.push('\\');
+        }
+        inner.push(c);
+    }
+    let mut outer = String::new();
+    for c in inner.chars() {
+        if matches!(c, '[' | ']' | ';' | ',' | '\'' | '\\') {
+            outer.push('\\');
+        }
+        outer.push(c);
+    }
+    outer
+}
+fn check_cancel(c: &CancellationToken) -> Result<()> {
+    if c.is_cancelled() {
+        bail!("job cancelled");
+    }
+    Ok(())
+}
+fn resolve_asset(root: &Path, name: &str) -> Option<PathBuf> {
+    let normalized = name.replace('\\', "/");
+    let relative = Path::new(&normalized);
+    if normalized.contains(':')
+        || relative
+            .components()
+            .any(|c| !matches!(c, Component::CurDir | Component::Normal(_)))
+    {
+        return None;
+    }
+    let root = root.canonicalize().ok()?;
+    let path = root.join(relative).canonicalize().ok()?;
+    (path.starts_with(&root) && path.is_file()).then_some(path)
+}
+fn usable_duration(duration: f64) -> bool {
+    duration.is_finite() && duration > 0.
+}
+
+impl Pipeline {
+    async fn watermark_input(
+        &self,
+        wm: &Watermark,
+        p: &Path,
+        duration: f64,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<std::ffi::OsString>> {
+        let mut args = Vec::new();
+        if wm.is_video() {
+            if p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("webm"))
+                || wm
+                    .mime_type
+                    .as_deref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case("video/webm"))
+            {
+                let output = tools::run(
+                    Command::new(&self.config.tools.ffprobe)
+                        .args([
+                            "-v",
+                            "error",
+                            "-select_streams",
+                            "v:0",
+                            "-show_entries",
+                            "stream=codec_name",
+                            "-of",
+                            "default=nw=1:nk=1",
+                        ])
+                        .arg(p),
+                    Duration::from_secs(10),
+                    cancel,
+                )
+                .await;
+                check_cancel(cancel)?;
+                if let Ok(output) = output {
+                    let name = String::from_utf8_lossy(&output.stdout);
+                    match name.trim() {
+                        "vp9" => args.extend(["-c:v".into(), "libvpx-vp9".into()]),
+                        "vp8" => args.extend(["-c:v".into(), "libvpx".into()]),
+                        _ => {}
+                    }
+                }
+            }
+            args.extend([
+                "-stream_loop".into(),
+                "-1".into(),
+                "-t".into(),
+                format!("{duration:.3}").into(),
+                "-an".into(),
+            ]);
+        } else {
+            args.extend([
+                "-loop".into(),
+                "1".into(),
+                "-t".into(),
+                format!("{duration:.3}").into(),
+            ]);
+        }
+        args.extend(["-i".into(), p.as_os_str().to_owned()]);
+        Ok(args)
+    }
+    pub async fn render_one(
+        &self,
+        video: &Path,
+        moment: &Moment,
+        cues: &[TranscriptCue],
+        out: &Path,
+        options: &RenderOptions,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        self.render_window(video, moment, cues, out, options, None, cancel)
+            .await
+            .map(|_| ())
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn render_window(
+        &self,
+        video: &Path,
+        moment: &Moment,
+        cues: &[TranscriptCue],
+        out: &Path,
+        options: &RenderOptions,
+        cached: Option<FacecamBox>,
+        cancel: &CancellationToken,
+    ) -> Result<Option<FacecamBox>> {
+        check_cancel(cancel)?;
+        if moment.start < 0. || !usable_duration(moment.end - moment.start) {
+            bail!("invalid clip range");
+        }
+        let video = video.canonicalize()?;
+        let out = canonical_destination(out)?;
+        let work = self.workdir("render-")?;
+        let duration = (moment.end - moment.start).max(0.5);
+        let (w, h) = options.aspect_ratio.output_size();
+        let portrait = options.aspect_ratio == AspectRatio::Portrait;
+        let landscape = options.aspect_ratio == AspectRatio::Landscape;
+        let two = portrait && options.two_speakers;
+        let abs_start = moment.start + options.timeline_offset;
+        let abs_end = moment.end + options.timeline_offset;
+        let clip_cues = if options.captions {
+            subtitles::clip_caption_cues(cues, abs_start, abs_end)
+        } else {
+            vec![]
+        };
+        let subtitle = if !clip_cues.is_empty() {
+            fs::write(
+                work.path().join("caption.ass"),
+                subtitles::ass_text(&clip_cues, w, h, two, options.caption_style.as_ref()),
+            )?;
+            let fonts = self
+                .config
+                .font_dir
+                .as_ref()
+                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()));
+            Some(match fonts {
+                Some(fonts) => format!(
+                    "subtitles=caption.ass:fontsdir={}",
+                    escape_filter_option(&fonts)
+                ),
+                None => "subtitles=caption.ass".into(),
+            })
+        } else {
+            None
+        };
+        let require_facecam = portrait && options.facecam && !two;
+        let faces = self.faces.clone();
+        let src = video.clone();
+        let (start, end) = (moment.start, moment.end);
+        let reframe = options.reframe;
+        let (facebox, centers, segments) = tokio::task::spawn_blocking(move || {
+            let facebox = if require_facecam {
+                faces
+                    .detect_facecam_box(&src, start, end, cached)
+                    .ok()
+                    .flatten()
+                    .filter(|&(_, _, w, h)| w > 0 && h > 0)
+            } else {
+                None
+            };
+            let centers = if two {
+                faces.detect_two_speakers(&src, start, end).ok().flatten()
+            } else {
+                None
+            };
+            let segments = if !two
+                && facebox.is_none()
+                && !landscape
+                && reframe == ReframeMode::FaceTracking
+            {
+                faces
+                    .track_active_speaker(&src, start, end)
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            (facebox, centers, segments)
+        })
+        .await?;
+        let mut simple = None;
+        let (graph, base) = if two {
+            let (left, right) = centers.unwrap_or((0.25, 0.75));
+            two_speaker_graph(left, right, subtitle.as_deref())
+        } else if let Some(b) = facebox {
+            facecam_graph(b, subtitle.as_deref())
+        } else {
+            let vf = if landscape || reframe == ReframeMode::BlurredFill {
+                blurred_fill(w, h)
+            } else if reframe == ReframeMode::BlackBars {
+                black_bars(w, h)
+            } else {
+                format!("{},setsar=1", cut_crop_filter(&segments, w, h))
+            };
+            let vf = standard_video_filter(&vf, subtitle.as_deref());
+            let graph = vec![format!("[0:v]{vf}[base]")];
+            simple = Some(vf);
+            (graph, "[base]".into())
+        };
+        let loudnorm = if options.normalize_audio {
+            !tools::run(
+                Command::new(&self.config.tools.ffprobe)
+                    .args([
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "a:0",
+                        "-show_entries",
+                        "stream=index",
+                        "-of",
+                        "csv=p=0",
+                    ])
+                    .arg(&video),
+                Duration::from_secs(20),
+                cancel,
+            )
+            .await?
+            .stdout
+            .is_empty()
+        } else {
+            false
+        };
+        let mut layers = Vec::new();
+        let mut wm_args = Vec::new();
+        for (wm, path) in options.watermarks.iter().take(WATERMARK_MAX_PER_JOB) {
+            let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            wm_args.extend(self.watermark_input(wm, &path, duration, cancel).await?);
+            layers.push(wm.clone());
+        }
+        let tmp = tempfile::Builder::new()
+            .prefix(".clip-")
+            .suffix(".mp4")
+            .tempfile_in(out.parent().unwrap())?;
+        let build = |with_marks: bool| {
+            let mut cmd = tools::ffmpeg(&self.config.tools.ffmpeg);
+            cmd.current_dir(work.path())
+                .args([
+                    "-ss",
+                    &format!("{:.3}", moment.start),
+                    "-t",
+                    &format!("{duration:.3}"),
+                    "-i",
+                ])
+                .arg(&video);
+            if with_marks {
+                cmd.arg("-xerror");
+                let (chain, label) = with_watermarks(graph.clone(), &base, w, &layers);
+                cmd.args(&wm_args)
+                    .args(["-filter_complex", &chain.join(";"), "-map", &label]);
+            } else if let Some(vf) = &simple {
+                cmd.args(["-vf", vf, "-map", "0:v:0"]);
+            } else {
+                cmd.args(["-filter_complex", &graph.join(";"), "-map", &base]);
+            }
+            cmd.args(["-map", "0:a:0?"]);
+            tools::video_encoder(&mut cmd, &self.config.video_encoder, "23");
+            cmd.args([
+                "-c:a",
+                "aac",
+                "-b:a",
+                if loudnorm { "160k" } else { "128k" },
+            ]);
+            if loudnorm {
+                cmd.args(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "44100"]);
+            }
+            // Also bound the output: some image demuxers loop forever on a corrupt
+            // watermark even with an input-side duration.
+            cmd.args([
+                "-t",
+                &format!("{duration:.3}"),
+                "-movflags",
+                "+faststart",
+                "-sn",
+                "-f",
+                "mp4",
+            ])
+            .arg(tmp.path());
+            cmd
+        };
+        let run = tools::run(
+            &mut build(!layers.is_empty()),
+            self.config.render_timeout,
+            cancel,
+        )
+        .await;
+        if let Err(e) = run {
+            if layers.is_empty() || cancel.is_cancelled() {
+                return Err(e);
+            }
+            tools::run(&mut build(false), self.config.render_timeout, cancel)
+                .await
+                .context("retry without watermarks")?;
+        }
+        check_cancel(cancel)?;
+        if fs::metadata(tmp.path())?.len() == 0 {
+            bail!("render output is empty");
+        }
+        tmp.persist(out)?;
+        Ok(facebox)
+    }
+
+    pub async fn append_outro(
+        &self,
+        clip: &Path,
+        outro: &Path,
+        out: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        let c = tools::probe_media_cancel(&self.config.tools.ffprobe, clip, cancel).await?;
+        let o = tools::probe_media_cancel(&self.config.tools.ffprobe, outro, cancel).await?;
+        let (w, h, fps) = (c.width, c.height, c.fps);
+        let out = canonical_destination(out)?;
+        let tmp = tempfile::Builder::new()
+            .prefix(".outro-")
+            .suffix(".mp4")
+            .tempfile_in(out.parent().unwrap())?;
+        let mut cmd = tools::ffmpeg(&self.config.tools.ffmpeg);
+        cmd.arg("-i").arg(clip).arg("-i").arg(outro);
+        let mut next = 2;
+        let mut audio = |i: u32, m: tools::MediaInfo| {
+            if m.has_audio {
+                format!("{i}:a:0")
+            } else {
+                tools::silence(&mut cmd, m.duration);
+                let label = format!("{next}:a");
+                next += 1;
+                label
+            }
+        };
+        let ca = audio(0, c);
+        let oa = audio(1, o);
+        let graph = [
+            format!(
+                "[0:v]scale={w}:{h},setsar=1,fps={fps:.3},format=yuv420p,setpts=PTS-STARTPTS[cv]"
+            ),
+            format!(
+                "[1:v]{},fps={fps:.3},format=yuv420p,setpts=PTS-STARTPTS[ov]",
+                blurred_fill(w, h)
+            ),
+            tools::audio_filter(&ca, "ca", c.duration, ""),
+            tools::audio_filter(&oa, "oa", o.duration, ""),
+            "[cv][ca][ov][oa]concat=n=2:v=1:a=1[v][a]".into(),
+        ]
+        .join(";");
+        cmd.args(["-filter_complex", &graph, "-map", "[v]", "-map", "[a]"]);
+        tools::video_encoder(&mut cmd, &self.config.video_encoder, "23");
+        cmd.args([
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            "-sn",
+            "-f",
+            "mp4",
+        ])
+        .arg(tmp.path());
+        tools::run(&mut cmd, self.config.render_timeout, cancel).await?;
+        if fs::metadata(tmp.path())?.len() == 0 {
+            bail!("hasil outro kosong");
+        }
+        tmp.persist(out)?;
+        Ok(())
+    }
+}
+
+const NO_LIVE_CHAT_LONG_VIDEO_ERROR: &str = "Live chat dan heatmap YouTube tidak tersedia. Transkripsi audio penuh dibatasi 20 menit; batasi durasi sumber atau pilih rentang secara manual.";
+const NO_STT_CUES_ERROR: &str = "Transkripsi audio tidak menemukan dialog yang bisa digunakan.";
+const NO_SUBTITLE_ERROR: &str = "Subtitle YouTube tidak tersedia untuk video ini.";
+const SECTION_FORMAT:&str="bv*[ext=mp4][protocol^=http]+ba[ext=m4a][protocol^=http]/bv*[ext=mp4][protocol^=http]+ba[ext=mp4][protocol^=http]/b[ext=mp4][protocol^=http]";
+const FULL_FORMAT: &str = "bv*[ext=mp4]+ba[ext=m4a]/bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b";
+fn read_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<_> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.ok().map(|e| e.path()))
+        .filter(|p| p.is_file())
+        .collect();
+    files.sort();
+    files
+}
+fn filename(p: &Path) -> &str {
+    p.file_name().and_then(|s| s.to_str()).unwrap_or_default()
+}
+fn media_file(dir: &Path, prefix: &str) -> Option<PathBuf> {
+    let mp4 = dir.join(format!("{prefix}.mp4"));
+    if mp4.is_file() {
+        return Some(mp4);
+    }
+    read_files(dir).into_iter().find(|p| {
+        let name = filename(p).to_ascii_lowercase();
+        name.starts_with(prefix)
+            && !name.contains(".part")
+            && [".mp4", ".webm", ".mkv", ".mov"]
+                .iter()
+                .any(|e| name.ends_with(e))
+    })
+}
+fn within_limit(cues: Vec<TranscriptCue>, limit: Option<u32>) -> Vec<TranscriptCue> {
+    let Some(limit) = limit.map(f64::from) else {
+        return cues;
+    };
+    cues.into_iter()
+        .filter(|c| c.start < limit)
+        .map(|mut c| {
+            if c.end > limit {
+                c.end = limit;
+                c.words.retain(|w| w.start < limit);
+                for w in &mut c.words {
+                    w.end = w.end.min(limit);
+                }
+            }
+            c
+        })
+        .collect()
+}
+fn validate_url(url: &str) -> Result<()> {
+    if !reqwest::Url::parse(url)
+        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
+    {
+        bail!("URL video harus http atau https");
+    }
+    Ok(())
+}
+
+impl Pipeline {
+    fn ytdlp(&self) -> Command {
+        let mut cmd = Command::new(&self.config.tools.ytdlp);
+        cmd.arg("--ffmpeg-location").arg(&self.config.tools.ffmpeg);
+        cmd
+    }
+    async fn fetch_cues(
+        &self,
+        url: &str,
+        dir: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<TranscriptCue>> {
+        for write_flag in ["--write-subs", "--write-auto-subs"] {
+            let mut cmd = self.ytdlp();
+            cmd.args([
+                "--skip-download",
+                "--ignore-errors",
+                "--no-playlist",
+                write_flag,
+                "--extractor-args",
+                "youtube:skip=translated_subs",
+                "--sub-langs",
+                "id,id-orig,en,en-orig",
+                "--sub-format",
+                "vtt",
+                "--convert-subs",
+                "vtt",
+                "--no-progress",
+                "--no-warnings",
+                "-o",
+            ])
+            .arg(dir.join("source.%(ext)s"))
+            .arg("--")
+            .arg(url);
+            let _ = tools::run(&mut cmd, Duration::from_secs(180), cancel).await;
+            check_cancel(cancel)?;
+            let mut files: Vec<_> = read_files(dir)
+                .into_iter()
+                .filter(|p| filename(p).starts_with("source") && filename(p).ends_with(".vtt"))
+                .collect();
+            files.sort_by_key(|p| !filename(p).to_ascii_lowercase().contains(".id."));
+            if let Some(path) = files.first() {
+                let input = fs::read(path)?;
+                return Ok(subtitles::parse_vtt(&String::from_utf8_lossy(&input), true));
+            }
+        }
+        bail!(NO_SUBTITLE_ERROR)
+    }
+    async fn optional_cues(
+        &self,
+        source: TranscriptSource,
+        url: &str,
+        dir: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<TranscriptCue>> {
+        if source == TranscriptSource::LiveChatStt {
+            return Ok(vec![]);
+        }
+        let result = self.fetch_cues(url, dir, cancel).await;
+        check_cancel(cancel)?;
+        match (source, result) {
+            (_, Ok(cues)) if !cues.is_empty() => Ok(cues),
+            (TranscriptSource::Youtube, Err(err)) => Err(err),
+            (TranscriptSource::Youtube, Ok(_)) => bail!(NO_SUBTITLE_ERROR),
+            _ => Ok(vec![]),
+        }
+    }
+    async fn video_metadata(
+        &self,
+        url: &str,
+        cancel: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        let mut cmd = self.ytdlp();
+        cmd.args([
+            "--dump-single-json",
+            "--skip-download",
+            "--no-warnings",
+            "--no-playlist",
+            "--",
+            url,
+        ]);
+        let out = tools::run(&mut cmd, Duration::from_secs(60), cancel).await?;
+        Ok(serde_json::from_slice(&out.stdout)?)
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn auto_stt<F, Fut>(
+        &self,
+        source: TranscriptSource,
+        url: &str,
+        dir: &Path,
+        video: Option<&Path>,
+        limit: Option<u32>,
+        clip_count: usize,
+        language: &str,
+        cancel: &CancellationToken,
+        mut progress: F,
+    ) -> Result<Vec<TranscriptCue>>
+    where
+        F: FnMut(JobProgress) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let transcriber = self.transcriber()?;
+        let stage = |percent, message| JobProgress {
+            stage: "transcribe".into(),
+            percent,
+            message,
+            clip: None,
+        };
+        progress(stage(0., "memindai live chat...".into())).await;
+        let meta = if video.is_none() {
+            self.video_metadata(url, cancel).await?
+        } else {
+            serde_json::Value::Null
+        };
+        let duration = if let Some(video) = video {
+            transcriber.duration(video, cancel).await?
+        } else {
+            live_chat::number(&meta["duration"]).unwrap_or_default()
+        };
+        let max_windows = clip_count.saturating_mul(2).clamp(6, 10);
+        let mut windows = live_chat::discover_windows(
+            url,
+            duration,
+            limit,
+            max_windows,
+            Some(&meta["heatmap"]),
+            cancel,
+        )
+        .await;
+        check_cancel(cancel)?;
+        if windows.is_empty() && video.is_some() {
+            if let Ok(meta) = self.video_metadata(url, cancel).await {
+                windows =
+                    live_chat::windows_from_heatmap(&meta["heatmap"], duration, limit, max_windows);
+            }
+            check_cancel(cancel)?;
+        }
+        if windows.is_empty() {
+            if let Some(window) = live_chat::full_audio_window(duration, limit) {
+                windows.push(window);
+            } else {
+                if source == TranscriptSource::LiveChatStt {
+                    // The worker makes one last VTT attempt for long sources with no radar data.
+                    let cues = self
+                        .optional_cues(TranscriptSource::Auto, url, dir, cancel)
+                        .await?;
+                    if !cues.is_empty() {
+                        progress(stage(100., format!("{} cue dari subtitle", cues.len()))).await;
+                        return Ok(cues);
+                    }
+                }
+                bail!(NO_LIVE_CHAT_LONG_VIDEO_ERROR);
+            }
+        }
+        let stream = stt::pick_hls_audio(&meta);
+        let total = windows.len();
+        let mut pending = windows.into_iter().enumerate();
+        let mut tasks = JoinSet::new();
+        let mut results: Vec<(usize, Result<Vec<TranscriptCue>>)> = Vec::new();
+        let mut completed = 0;
+        let spawn = |tasks: &mut JoinSet<_>, (i, (start, end))| {
+            let transcriber = transcriber.clone();
+            let (url, language, base, video, stream, cancel) = (
+                url.to_owned(),
+                language.to_owned(),
+                dir.to_owned(),
+                video.map(Path::to_owned),
+                stream.clone(),
+                cancel.clone(),
+            );
+            tasks.spawn(async move {
+                let result = async {
+                    let dir = tempfile::Builder::new()
+                        .prefix("stt-window-")
+                        .tempdir_in(&base)?;
+                    if let Some(video) = video {
+                        transcriber
+                            .media(
+                                &video,
+                                Some((start, end)),
+                                start,
+                                &language,
+                                dir.path(),
+                                &cancel,
+                            )
+                            .await
+                    } else {
+                        transcriber
+                            .remote_window(
+                                &url,
+                                stream.as_ref(),
+                                (start, end),
+                                &language,
+                                dir.path(),
+                                &cancel,
+                            )
+                            .await
+                    }
+                }
+                .await;
+                (i, result)
+            });
+        };
+        for window in pending.by_ref().take(stt::MAX_STT_WINDOW_CONCURRENCY) {
+            spawn(&mut tasks, window);
+        }
+        let mut join_error = None;
+        // Drain every sibling before returning an error, so the parent working directory stays alive.
+        while let Some(item) = tasks.join_next().await {
+            match item {
+                Ok((index, result)) => {
+                    if result.is_ok() {
+                        completed += 1;
+                        progress(stage(
+                            completed as f64 * 100. / total as f64,
+                            format!("mentranskrip segmen {completed}/{total}..."),
+                        ))
+                        .await;
+                    }
+                    results.push((index, result));
+                }
+                Err(err) => {
+                    join_error = Some(err);
+                }
+            }
+            if !cancel.is_cancelled() {
+                if let Some(window) = pending.next() {
+                    spawn(&mut tasks, window);
+                }
+            }
+        }
+        check_cancel(cancel)?;
+        if let Some(err) = join_error {
+            return Err(err.into());
+        }
+        results.sort_by_key(|(index, _)| *index);
+        let mut cues = Vec::new();
+        for (_, result) in results {
+            cues.extend(result?);
+        }
+        if cues.is_empty() {
+            bail!(NO_STT_CUES_ERROR)
+        }
+        cues.sort_by(|a, b| a.start.total_cmp(&b.start));
+        progress(stage(100., format!("{} cue dari audio", cues.len()))).await;
+        Ok(cues)
+    }
+    async fn stream_start(
+        &self,
+        path: &Path,
+        stream: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Option<f64>> {
+        let out = tools::run(
+            Command::new(&self.config.tools.ffprobe)
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    stream,
+                    "-show_entries",
+                    "stream=start_time",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(path),
+            Duration::from_secs(20),
+            cancel,
+        )
+        .await?;
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite()))
+    }
+    async fn download_source(
+        &self,
+        url: &str,
+        dir: &Path,
+        prefix: &str,
+        section: Option<(f64, f64)>,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<PathBuf> {
+        let mut cmd = self.ytdlp();
+        cmd.args([
+            "-f",
+            if section.is_some() {
+                SECTION_FORMAT
+            } else {
+                FULL_FORMAT
+            },
+            "--merge-output-format",
+            "mp4",
+            "--no-playlist",
+            "--no-progress",
+            "--no-warnings",
+            "-N",
+            "8",
+            "--http-chunk-size",
+            "10M",
+        ]);
+        if let Some((s, e)) = section {
+            cmd.args([
+                "--download-sections",
+                &format!("*{s:.3}-{e:.3}"),
+                "--force-keyframes-at-cuts",
+            ]);
+        }
+        cmd.arg("-o")
+            .arg(dir.join(format!("{prefix}.%(ext)s")))
+            .arg("--")
+            .arg(url);
+        tools::run(&mut cmd, timeout, cancel).await?;
+        let path = media_file(dir, prefix)
+            .ok_or_else(|| anyhow!("yt-dlp selesai tanpa menghasilkan file video"))?;
+        if section.is_some() {
+            let meta = tools::probe_media_cancel(&self.config.tools.ffprobe, &path, cancel).await?;
+            if meta.has_audio {
+                let video = self.stream_start(&path, "v:0", cancel).await?;
+                let audio = self.stream_start(&path, "a:0", cancel).await?;
+                if video.zip(audio).is_some_and(|(v, a)| v - a > 0.05) {
+                    bail!("section A/V tidak sinkron (video mulai lebih lambat dari audio)");
+                }
+            }
+        }
+        Ok(path)
+    }
+    async fn section(
+        &self,
+        url: &str,
+        dir: &Path,
+        prefix: &str,
+        window: (f64, f64),
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<PathBuf> {
+        for attempt in [1, 2] {
+            let result = self
+                .download_source(url, dir, prefix, Some(window), timeout, cancel)
+                .await;
+            match result {
+                Ok(p) => return Ok(p),
+                Err(e) => {
+                    for file in read_files(dir)
+                        .into_iter()
+                        .filter(|p| filename(p).starts_with(prefix))
+                    {
+                        let _ = fs::remove_file(file);
+                    }
+                    if attempt != 1 || !e.to_string().contains("403") {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        unreachable!()
+    }
+    async fn select(
+        &self,
+        cues: &[TranscriptCue],
+        params: &JobParams,
+        desc: Option<&str>,
+        all: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<Moment>> {
+        let client = self.llm.as_ref().ok_or_else(|| {
+            anyhow!("LLM tidak dikonfigurasi: set LLM_BASE_URL, LLM_API_KEY, LLM_MODEL di worker.")
+        })?;
+        tokio::select! {biased;_=cancel.cancelled()=>bail!("job cancelled"),r=client.select_moments(cues,params,desc,all)=>r}
+    }
+    pub async fn run_preview(
+        &self,
+        request: &PreviewRequest,
+        cancel: &CancellationToken,
+    ) -> Result<PreviewResult> {
+        self.run_preview_with_progress(request, cancel, |_| std::future::ready(()))
+            .await
+    }
+    pub async fn run_preview_with_progress<F, Fut>(
+        &self,
+        request: &PreviewRequest,
+        cancel: &CancellationToken,
+        mut progress: F,
+    ) -> Result<PreviewResult>
+    where
+        F: FnMut(JobProgress) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        validate_url(&request.url)?;
+        let dir = self.workdir("preview-")?;
+        let mut cues = self
+            .optional_cues(request.transcript_source, &request.url, dir.path(), cancel)
+            .await?;
+        if cues.is_empty() {
+            cues = self
+                .auto_stt(
+                    request.transcript_source,
+                    &request.url,
+                    dir.path(),
+                    None,
+                    request.max_source_sec,
+                    request.params.clip_count,
+                    &request.caption_language,
+                    cancel,
+                    progress,
+                )
+                .await?;
+        } else {
+            progress(JobProgress {
+                stage: "transcribe".into(),
+                percent: 100.,
+                message: format!("{} cue dari subtitle", cues.len()),
+                clip: None,
+            })
+            .await;
+        }
+        let cues = within_limit(cues, request.max_source_sec);
+        let candidates = self
+            .select(
+                &cues,
+                &request.params,
+                request.description.as_deref(),
+                true,
+                cancel,
+            )
+            .await?;
+        let cues = cues
+            .into_iter()
+            .map(|c| TranscriptCue {
+                start: llm::round_time(c.start),
+                end: llm::round_time(c.end),
+                words: vec![],
+                ..c
+            })
+            .collect();
+        Ok(PreviewResult { candidates, cues })
+    }
+    pub async fn run_frame(
+        &self,
+        request: &FrameRequest,
+        cancel: &CancellationToken,
+    ) -> Result<FrameResult> {
+        validate_url(&request.url)?;
+        if !request.at_sec.is_finite() || request.at_sec < 0. {
+            bail!("invalid_frame_payload");
+        }
+        let normalized = request.out_path.replace('\\', "/");
+        let relative = relative_output(&normalized)?;
+        fs::create_dir_all(&self.config.clips_dir)?;
+        let root = self.config.clips_dir.canonicalize()?;
+        let dest = destination_in(&root, &relative)?;
+        clean_frames(&root.join(".frames"));
+        let dir = self.workdir("frame-")?;
+        let offset = (request.at_sec - 1.).max(0.);
+        let source = self
+            .section(
+                &request.url,
+                dir.path(),
+                "frame-source",
+                (offset, request.at_sec + 3.),
+                Duration::from_secs(100),
+                cancel,
+            )
+            .await?;
+        let opts = RenderOptions {
+            reframe: request.reframe,
+            two_speakers: request.two_speakers,
+            facecam: request.facecam,
+            captions: request.captions,
+            aspect_ratio: request.aspect_ratio,
+            caption_style: request.caption_style.clone(),
+            timeline_offset: offset,
+            ..Default::default()
+        };
+        let cues = if request.captions {
+            vec![TranscriptCue {
+                start: offset,
+                end: offset + 2.,
+                text: request.caption_sample.clone(),
+                words: vec![],
+            }]
+        } else {
+            vec![]
+        };
+        let moment = Moment {
+            start: 0.,
+            end: 2.,
+            title: "frame".into(),
+            ..Default::default()
+        };
+        let rendered = dir.path().join("render.mp4");
+        self.render_one(&source, &moment, &cues, &rendered, &opts, cancel)
+            .await?;
+        let tmp = tempfile::Builder::new()
+            .suffix(".jpg")
+            .tempfile_in(dest.parent().unwrap())?;
+        tools::run(
+            tools::ffmpeg(&self.config.tools.ffmpeg)
+                .args(["-ss", "1.000", "-i"])
+                .arg(&rendered)
+                .args(["-frames:v", "1", "-q:v", "3"])
+                .arg(tmp.path()),
+            Duration::from_secs(20),
+            cancel,
+        )
+        .await?;
+        if fs::metadata(tmp.path())?.len() == 0 {
+            bail!("frame_render_failed");
+        }
+        tmp.persist(dest)?;
+        let (width, height) = request.aspect_ratio.output_size();
+        Ok(FrameResult {
+            file: relative.to_string_lossy().replace('\\', "/"),
+            width,
+            height,
+            at_sec: request.at_sec,
+        })
+    }
+    async fn add_hook(
+        &self,
+        source: &Path,
+        moment: &Moment,
+        clip: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        let Some(text) = moment
+            .hook_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some(moment.title.trim()).filter(|s| !s.is_empty()))
+        else {
+            return Ok(());
+        };
+        let dir = self.workdir("hook-")?;
+        let cover = dir.path().join("cover.png");
+        let thumb = dir.path().join("hook.png");
+        hook_thumbnail::cover_frame(
+            &self.config.tools.ffmpeg,
+            source,
+            moment.start,
+            moment.end - moment.start,
+            &cover,
+            cancel,
+        )
+        .await?;
+        let meta = tools::probe_media_cancel(&self.config.tools.ffprobe, clip, cancel).await?;
+        let faces = self.faces.clone();
+        let fonts = self.config.font_dir.clone().unwrap_or_default();
+        let text = text.to_owned();
+        let thumb2 = thumb.clone();
+        // The tempdir stays alive until the blocking task finishes.
+        let _dir = tokio::task::spawn_blocking(move || {
+            let focus = faces.detect_cover_face_focus(&cover);
+            hook_thumbnail::render_hook_thumbnail(
+                &cover,
+                &text,
+                meta.width,
+                meta.height,
+                focus,
+                fonts,
+                &thumb2,
+            )?;
+            Ok::<_, anyhow::Error>(dir)
+        })
+        .await??;
+        let tmp = tempfile::Builder::new()
+            .prefix(".intro-")
+            .suffix(".mp4")
+            .tempfile_in(clip.parent().unwrap())?;
+        hook_thumbnail::intro(
+            &self.config.tools.ffmpeg,
+            clip,
+            &thumb,
+            tmp.path(),
+            meta,
+            &self.config.video_encoder,
+            cancel,
+        )
+        .await?;
+        tmp.persist(clip)?;
+        Ok(())
+    }
+    pub async fn run_job<F, Fut>(
+        &self,
+        job: &JobData,
+        cancel: &CancellationToken,
+        mut on_progress: F,
+    ) -> Result<JobResult>
+    where
+        F: FnMut(JobProgress) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        check_cancel(cancel)?;
+        validate_url(&job.url)?;
+        if job.job_id.is_empty()
+            || job.job_id.len() > 64
+            || !job
+                .job_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+        {
+            bail!("job_id tidak valid: {:?}", job.job_id);
+        }
+        fs::create_dir_all(&self.config.clips_dir)?;
+        let minimum = std::env::var("MIN_FREE_GB")
+            .ok()
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .unwrap_or(5.0);
+        let free = fs2::available_space(&self.config.clips_dir)? as f64 / (1024_f64.powi(3));
+        if free < minimum {
+            bail!("Ruang disk tinggal {free:.1} GB, minimal {minimum:.0} GB. Hapus clip lama lalu jalankan ulang job.");
+        }
+        let manual = job.mode == JobMode::Manual;
+        let mut valid_ranges: Vec<_> = job
+            .ranges
+            .iter()
+            .filter(|r| r.start >= 0. && usable_duration(r.end - r.start))
+            .collect();
+        valid_ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
+        if manual && valid_ranges.is_empty() {
+            bail!("mode manual butuh minimal satu range");
+        }
+        let stage = |stage: &str, percent, message: String, clip| JobProgress {
+            stage: stage.into(),
+            percent,
+            message,
+            clip,
+        };
+        let dir = self.workdir("clip-")?;
+        let limit = (!manual).then_some(job.max_source_sec).flatten();
+        let timeout = Duration::from_secs(1800);
+        let mut full = None;
+        if job.transcript_source == TranscriptSource::LiveChatStt {
+            self.transcriber()?;
+        }
+        let message = if manual {
+            format!("mengunduh subtitle untuk {} rentang", valid_ranges.len())
+        } else if let Some(n) = limit {
+            format!("mengunduh 0-{n} detik")
+        } else {
+            "mengunduh video".into()
+        };
+        on_progress(stage("download", 0., message, None)).await;
+        if !manual {
+            if let Some(limit) = limit {
+                full = self
+                    .section(
+                        &job.url,
+                        dir.path(),
+                        "source",
+                        (0., limit.into()),
+                        timeout,
+                        cancel,
+                    )
+                    .await
+                    .ok();
+            }
+            if full.is_none() {
+                full = Some(
+                    self.download_source(&job.url, dir.path(), "source", None, timeout, cancel)
+                        .await?,
+                );
+            }
+        }
+        let mut cues = self
+            .optional_cues(job.transcript_source, &job.url, dir.path(), cancel)
+            .await?;
+        on_progress(stage(
+            "download",
+            100.,
+            if manual && !cues.is_empty() {
+                "subtitle siap"
+            } else {
+                "media siap dirender"
+            }
+            .into(),
+            None,
+        ))
+        .await;
+        check_cancel(cancel)?;
+        let manual_stt = if cues.is_empty() && manual {
+            Some(self.transcriber()?)
+        } else {
+            None
+        };
+        if cues.is_empty() && !manual {
+            cues = self
+                .auto_stt(
+                    job.transcript_source,
+                    &job.url,
+                    dir.path(),
+                    full.as_deref(),
+                    limit,
+                    job.params.clip_count,
+                    &job.caption_language,
+                    cancel,
+                    &mut on_progress,
+                )
+                .await?;
+        } else if !cues.is_empty() {
+            on_progress(stage("transcribe", 0., "menyiapkan transkrip".into(), None)).await;
+            on_progress(stage(
+                "transcribe",
+                100.,
+                format!("{} cue dari subtitle", cues.len()),
+                None,
+            ))
+            .await;
+        }
+        let mut cues = within_limit(cues, limit);
+        on_progress(stage("select", 0., "memilih momen".into(), None)).await;
+        let moments = if manual {
+            valid_ranges
+                .into_iter()
+                .map(|r| Moment {
+                    start: llm::round_time(r.start),
+                    end: llm::round_time(r.end),
+                    title: r
+                        .title
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| cut(s, 70))
+                        .unwrap_or_else(|| llm::title_from_cues(&cues, r.start, r.end)),
+                    reason: r
+                        .reason
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| cut(s, 200))
+                        .unwrap_or_else(|| "manual".into()),
+                    hook_text: r.hook_text.clone(),
+                    viral_score: None,
+                })
+                .collect()
+        } else {
+            self.select(
+                &cues,
+                &job.params,
+                job.description.as_deref(),
+                false,
+                cancel,
+            )
+            .await?
+        };
+        if moments.is_empty() {
+            bail!("tidak ada momen yang bisa dirender");
+        }
+        let total = moments.len();
+        on_progress(stage(
+            "select",
+            100.,
+            format!("{total} momen dipilih"),
+            None,
+        ))
+        .await;
+        fs::create_dir_all(&self.config.clips_dir)?;
+        let root = self.config.clips_dir.canonicalize()?;
+        let outdir = destination_in(&root, &Path::new(&job.job_id).join("placeholder"))?
+            .parent()
+            .unwrap()
+            .to_owned();
+        let watermarks = if job.watermarks.is_empty() {
+            job.watermark.as_slice()
+        } else {
+            &job.watermarks
+        };
+        let mut opts = RenderOptions {
+            reframe: job.reframe,
+            aspect_ratio: job.aspect_ratio,
+            captions: job.captions,
+            two_speakers: job.two_speakers,
+            facecam: job.facecam,
+            caption_style: job.caption_style.clone(),
+            normalize_audio: job.normalize_audio,
+            watermarks: watermarks
+                .iter()
+                .take(WATERMARK_MAX_PER_JOB)
+                .filter_map(|w| Some((w.clone(), resolve_asset(&root, &w.file_path)?)))
+                .collect(),
+            timeline_offset: 0.,
+        };
+        let outro = job
+            .outro
+            .as_ref()
+            .and_then(|o| resolve_asset(&root, &o.file_path));
+        let mut clips = Vec::new();
+        let mut cached = None;
+        on_progress(stage("render", 0., format!("merender {total} clip"), None)).await;
+        for (i, moment) in moments.iter().enumerate() {
+            check_cancel(cancel)?;
+            let n = i + 1;
+            let mut section = None;
+            if full.is_none() {
+                let percent = i as f64 * 100. / total as f64;
+                on_progress(stage(
+                    "download",
+                    percent,
+                    format!("mengunduh clip {n}/{total}"),
+                    None,
+                ))
+                .await;
+                let prefix = format!("section-{n:02}");
+                section = self
+                    .section(
+                        &job.url,
+                        dir.path(),
+                        &prefix,
+                        (moment.start, moment.end),
+                        timeout,
+                        cancel,
+                    )
+                    .await
+                    .ok();
+                if section.is_none() {
+                    check_cancel(cancel)?;
+                    on_progress(stage(
+                        "download",
+                        percent,
+                        "section gagal, mengunduh video penuh".into(),
+                        None,
+                    ))
+                    .await;
+                    full = Some(
+                        self.download_source(&job.url, dir.path(), "source", None, timeout, cancel)
+                            .await?,
+                    );
+                }
+            }
+            let video = section
+                .as_ref()
+                .or(full.as_ref())
+                .ok_or_else(|| anyhow!("sumber video tidak tersedia untuk render"))?;
+            let offset = if section.is_some() { moment.start } else { 0. };
+            opts.timeline_offset = offset;
+            let window = Moment {
+                start: moment.start - offset,
+                end: moment.end - offset,
+                ..moment.clone()
+            };
+            let range_cues = if let Some(stt) = &manual_stt {
+                on_progress(stage(
+                    "transcribe",
+                    0.,
+                    format!("mentranskrip clip {n}/{total}..."),
+                    None,
+                ))
+                .await;
+                let bounds = section.is_none().then_some((moment.start, moment.end));
+                let speech = stt
+                    .media(
+                        video,
+                        bounds,
+                        moment.start,
+                        &job.caption_language,
+                        dir.path(),
+                        cancel,
+                    )
+                    .await?;
+                cues.extend(speech.iter().cloned());
+                on_progress(stage(
+                    "transcribe",
+                    100.,
+                    format!("{} cue dari audio", speech.len()),
+                    None,
+                ))
+                .await;
+                Some(speech)
+            } else {
+                None
+            };
+            let active_cues = range_cues.as_deref().unwrap_or(&cues);
+            let file = format!("clip-{n:02}.mp4");
+            let clip = outdir.join(&file);
+            if let Some(b) = self
+                .render_window(video, &window, active_cues, &clip, &opts, cached, cancel)
+                .await?
+            {
+                cached = Some(b);
+            }
+            if job.hook_banner {
+                let _ = self.add_hook(video, &window, &clip, cancel).await;
+                check_cancel(cancel)?;
+            }
+            if let Some(outro) = &outro {
+                let _ = self.append_outro(&clip, outro, &clip, cancel).await;
+                check_cancel(cancel)?;
+            }
+            if let Some(section) = section {
+                let _ = fs::remove_file(section);
+            }
+            let transcript = llm::clip_transcript(active_cues, moment.start, moment.end);
+            let result = ClipResult {
+                title: moment.title.clone(),
+                start: moment.start,
+                end: moment.end,
+                file,
+                transcript: (!transcript.is_empty()).then_some(transcript),
+                viral_score: moment.viral_score,
+                hook_text: moment.hook_text.clone(),
+                ..Default::default()
+            };
+            clips.push(result.clone());
+            on_progress(stage(
+                "render",
+                n as f64 * 100. / total as f64,
+                format!("clip {n}/{total} selesai"),
+                Some(result),
+            ))
+            .await;
+        }
+        check_cancel(cancel)?;
+        on_progress(stage("save", 0., "membuat caption sosial".into(), None)).await;
+        for c in &mut clips {
+            c.hashtags = job.custom_hashtags.clone();
+        }
+        if let Some(llm) = &self.llm {
+            let caps = tokio::select! {biased;_=cancel.cancelled()=>bail!("job cancelled"),r=llm.generate_captions(&moments,&cues,&job.caption_language,&job.custom_hashtags,job.description.as_deref())=>r};
+            for (clip, cap) in clips.iter_mut().zip(caps) {
+                if let Some(cap) = cap {
+                    clip.caption = Some(cap.caption);
+                    if job.custom_hashtags.is_empty() {
+                        clip.hashtags = cap.hashtags;
+                    }
+                    clip.platform_captions = cap.platform_captions;
+                }
+            }
+        }
+        check_cancel(cancel)?;
+        clips.retain(|c| {
+            fs::metadata(outdir.join(&c.file)).is_ok_and(|m| m.is_file() && m.len() > 0)
+        });
+        if clips.is_empty() {
+            bail!("tidak ada file clip yang tersisa setelah render");
+        }
+        on_progress(stage("save", 100., "clip tersimpan".into(), None)).await;
+        Ok(JobResult { clips })
+    }
+}
+fn relative_output(s: &str) -> Result<PathBuf> {
+    if s.contains(':') {
+        bail!("invalid_frame_path");
+    }
+    let mut out = PathBuf::new();
+    for c in Path::new(s).components() {
+        match c {
+            Component::Normal(n) => out.push(n),
+            Component::CurDir => {}
+            Component::ParentDir if out.pop() => {}
+            _ => bail!("invalid_frame_path"),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        bail!("invalid_frame_path");
+    }
+    Ok(out)
+}
+fn destination_in(root: &Path, relative: &Path) -> Result<PathBuf> {
+    // Walk existing parents before creating new directories, including symlinks.
+    let file = relative
+        .file_name()
+        .ok_or_else(|| anyhow!("invalid_frame_path"))?;
+    let mut dest = root.to_path_buf();
+    for component in relative.parent().unwrap_or(Path::new("")).components() {
+        let Component::Normal(name) = component else {
+            bail!("invalid_frame_path");
+        };
+        dest.push(name);
+        match dest.symlink_metadata() {
+            Ok(_) => {
+                dest = dest.canonicalize()?;
+                if !dest.starts_with(root) || !dest.is_dir() {
+                    bail!("invalid_frame_path");
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::create_dir(&dest)?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(dest.join(file))
+}
+fn clean_frames(dir: &Path) {
+    if !dir
+        .symlink_metadata()
+        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+    {
+        return;
+    }
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        if let Ok(kind) = e.file_type() {
+            if kind.is_dir() {
+                clean_frames(&e.path());
+            } else if kind.is_file()
+                && e.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|t| t > Duration::from_secs(3600))
+            {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preview_routes_sources_and_rejects_missing_stt_config() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ytdlp = dir.path().join("yt-dlp");
+        fs::write(
+            &ytdlp,
+            r#"#!/bin/sh
+case "$1" in --ffmpeg-location) shift 2;; esac
+output=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '-o' ]; then output="$2"; shift; fi
+  url="$1"
+  shift
+done
+case "$url" in
+  */vtt) printf 'WEBVTT\n\n00:05.000 --> 00:07.000\nSpeech\n' > "${output%.*}.en.vtt";;
+  */empty) printf 'WEBVTT\n' > "${output%.*}.en.vtt";;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&ytdlp, fs::Permissions::from_mode(0o755)).unwrap();
+        let tool_paths = ToolPaths {
+            ytdlp,
+            ffmpeg: "unused".into(),
+            ffprobe: "unused".into(),
+        };
+        let pipeline = Pipeline::new(PipelineConfig::new(tool_paths, dir.path()));
+        let cancel = CancellationToken::new();
+        for (source, url, expected) in [
+            ("youtube", "vtt", "LLM tidak dikonfigurasi"),
+            ("youtube", "empty", NO_SUBTITLE_ERROR),
+            ("auto", "vtt", "LLM tidak dikonfigurasi"),
+            ("auto", "empty", "STT_BASE_URL"),
+            ("auto", "missing", "STT_BASE_URL"),
+            ("live_chat_stt", "vtt", "STT_BASE_URL"),
+        ] {
+            let req = serde_json::from_value(serde_json::json!({"url":format!("https://example.test/{url}"), "transcriptSource":source})).unwrap();
+            let error = pipeline
+                .run_preview(&req, &cancel)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{source} {url}: {error}");
+        }
+    }
+
+    #[test]
+    fn caption_filters_reset_pts_before_burning_subtitles() {
+        let sf = Some("subtitles=caption.ass");
+        for base in [
+            black_bars(1080, 1920),
+            blurred_fill(1920, 1080),
+            cut_crop_filter(&[(0., 5., 0.5)], 1080, 1920),
+        ] {
+            let filter = standard_video_filter(&base, sf);
+            assert!(filter.starts_with("setpts=PTS-STARTPTS,"));
+            assert!(filter.ends_with(",subtitles=caption.ass"));
+        }
+        for (graph, output) in [
+            two_speaker_graph(0.25, 0.75, sf),
+            facecam_graph((10, 10, 200, 200), sf),
+        ] {
+            assert!(graph[0].starts_with("[0:v]setpts=PTS-STARTPTS,split"));
+            assert!(graph.last().unwrap().contains("subtitles=caption.ass"));
+            assert_eq!(output, "[vout]");
+        }
+        // Preview frames use render_one -> render_window, the same filter path.
+    }
+
+    #[test]
+    fn reframe_graphs_match_worker_dimensions() {
+        assert_eq!(black_bars(1080,1920),"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1");
+        assert!(blurred_fill(1920, 1080)
+            .contains(r"boxblur=luma_radius=min(h\,w)/10:luma_power=2[blurred]"));
+        assert_eq!(
+            portrait_crop_filter(0.5, 1080, 1920),
+            "crop=ih*0.56250:ih:0.50000*in_w-ih*0.28125:0,scale=1080:1920"
+        );
+        assert!(
+            cut_crop_filter(&[(0., 1.5, 0.25), (1.5, 3., 0.75)], 1080, 1920)
+                .contains("0.2500*gte(t,0.000)*lt(t,1.500)+0.7500*gte(t,1.500)")
+        );
+        assert!(panel_crop_filter(0.25).ends_with("scale=1080:960,setsar=1"));
+        let (g, l) = facecam_graph((1, 2, 300, 200), Some("subtitles=clip.ass"));
+        assert_eq!(l, "[vout]");
+        assert!(g[1].contains("crop=300:200:1:2,scale=1080:840"));
+        assert!(g[2].contains("scale=1080:1080"));
+    }
+    #[test]
+    fn watermark_layers_are_clamped_to_five_and_chroma_is_selected_by_color() {
+        let key = |color: &str| WatermarkChromaKey {
+            enabled: true,
+            color: color.into(),
+            ..Default::default()
+        };
+        assert!(chroma_key_filters(&key("#333333"))[0].starts_with("colorkey="));
+        assert_eq!(chroma_key_filters(&key("#0000FF"))[1], "despill=type=blue");
+        let wm = Watermark {
+            file_path: "video.webm".into(),
+            chroma_key: Some(key("#00ff00")),
+            scale: 0.251,
+            y: 0.8,
+            ..Default::default()
+        };
+        let (graph, label) =
+            with_watermarks(vec!["[0:v]null[base]".into()], "[base]", 1080, &vec![wm; 6]);
+        assert_eq!(label, "[wmout]");
+        assert_eq!(graph.len(), 11);
+        assert!(graph[1].contains("[1:v]setpts=PTS-STARTPTS,chromakey=color=0x00FF00"));
+        assert!(graph[1].contains(
+            "despill=type=green,scale=w=272:h=-2,format=rgba,colorchannelmixer=aa=1.000"
+        ));
+        assert!(graph[10].starts_with("[wmout3][wm4]overlay"));
+        assert!(graph[10].contains("main_h*0.8000-overlay_h/2"));
+    }
+    #[test]
+    fn paths_cannot_traverse_clips_root() {
+        assert_eq!(
+            relative_output(".frames/../still.jpg").unwrap(),
+            Path::new("still.jpg")
+        );
+        assert!(relative_output("../still.jpg").is_err());
+        assert!(relative_output("C:/still.jpg").is_err());
+    }
+}

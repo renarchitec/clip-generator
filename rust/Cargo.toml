@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dartclip-core",
+    "crates/dartclip-face",
+    "crates/dartclip-local-api",
+    "crates/dartclip-worker",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"

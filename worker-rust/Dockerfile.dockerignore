@@ -1,0 +1,12 @@
+**
+!rust/
+!rust/**
+!worker/
+!worker/fonts/
+!worker/fonts/*.ttf
+!worker-rust/package.json
+!worker-rust/bridge.mjs
+rust/**/target
+rust/worker
+**/.env
+**/.env.*
