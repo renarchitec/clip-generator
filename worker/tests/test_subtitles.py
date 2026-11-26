@@ -1,6 +1,7 @@
 import pytest
 
 from clipper.models import CaptionStyle
+from clipper.pipeline import _clip_cues
 from clipper.subtitles import (
     Cue,
     Word,
@@ -233,6 +234,108 @@ def test_parse_vtt_dedupes_rolling_auto_subs():
     assert cues[1].text == "selamat datang"
 
 
+def test_parse_vtt_youtube_rolling_cues_and_silence():
+    vtt = (
+        "WEBVTT\n\n"
+        "00:02:41.000 --> 00:02:43.000\n \nDean<00:02:42.239><c> KT.</c>\n\n"
+        "00:02:43.000 --> 00:02:43.010\nDean KT.\n\n"
+        "00:02:43.010 --> 00:02:50.000\nDean KT.\nAku<00:02:43.500><c> pergi</c>\n\n"
+        "00:02:50.000 --> 00:02:50.010\npergi\n\n"
+        "00:02:51.599 --> 00:02:55.550\n \nLiburkah<00:02:52.080><c> kita?</c>\n\n"
+        "00:02:58.000 --> 00:02:58.500\n \nYa.\n\n"
+        "00:03:01.000 --> 00:03:10.000\n \n<00:03:01.250><c> Nah.</c>\n"
+    )
+    cues = parse_vtt(vtt, word_level=True)
+
+    assert cues == [
+        Cue(161, 163, "Dean KT.", [Word(161, 162.239, "Dean"), Word(162.239, 163, "KT.")]),
+        Cue(163.01, 164.7, "Aku pergi", [Word(163.01, 163.5, "Aku"), Word(163.5, 164.7, "pergi")]),
+        Cue(171.599, 173.28, "Liburkah kita?", [Word(171.599, 172.08, "Liburkah"), Word(172.08, 173.28, "kita?")]),
+        Cue(178, 178.5, "Ya."),
+        Cue(181.25, 182.45, "Nah.", [Word(181.25, 182.45, "Nah.")]),
+    ]
+    assert parse_vtt(vtt)[0].text == "Dean KT."
+
+
+def test_parse_vtt_word_level_moves_start_after_trimming_overlap():
+    vtt = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:02.000\nHalo<00:00:01.500><c> semua</c>\n\n"
+        "00:00:02.000 --> 00:00:03.000\nsemua<00:00:02.500><c> datang</c>\n"
+    )
+    assert parse_vtt(vtt, word_level=True)[1] == Cue(2.5, 3, "datang", [Word(2.5, 3, "datang")])
+
+
+def test_parse_vtt_note_can_contain_whitespace_only_line():
+    vtt = (
+        "WEBVTT\n\nNOTE\n \n00:00:01.000 --> 00:00:02.000\nignored\n\n"
+        "00:00:02.000 --> 00:00:03.000\nspoken\n"
+    )
+    assert parse_vtt(vtt) == [Cue(2, 3, "spoken")]
+
+
+def test_sanitize_filters_annotations_and_censors_but_keeps_speech():
+    source = (
+        "Halo [tertawa] [Musik] [tepuk tangan] [Laughter] [&nbsp;__&nbsp;] [ __ ] "
+        "(tertawa) (APPLAUSE) (clears throat) (_) (***) ♪♫♬♩ f*** an***g __ *** "
+        "b*tch! -*ck- ? , {kurung} &amp; (katanya) 2*3 &lt;3 &gt;2 &#39;ya&#39; &quot;oke&quot;"
+    )
+    assert sanitize(source) == "Halo {kurung} & (katanya) 2*3 <3 >2 'ya' \"oke\""
+
+
+@pytest.mark.parametrize("hidden", ["[&nbsp;__&nbsp;]", "[tertawa]", "(tepuk tangan)", "f***!", "__", "♪"])
+def test_parse_vtt_filters_timed_tokens_without_stretching_neighbors(hidden):
+    vtt = (
+        "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nrollup\n"
+        f"{hidden}<00:00:01.500><c> sebelum</c><00:00:02.000><c> {hidden}</c>"
+        "<00:00:02.500><c> sesudah</c><00:00:03.000><c> [Musik]</c>\n"
+    )
+    assert parse_vtt(vtt, word_level=True) == [
+        Cue(1.5, 3, "sebelum sesudah", [Word(1.5, 2, "sebelum"), Word(2.5, 3, "sesudah")])
+    ]
+
+
+def test_parse_vtt_drops_fully_filtered_tagged_line_without_falling_back_to_rollup():
+    vtt = (
+        "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nprevious caption\n"
+        "[Musik]<00:00:02.000><c> [__]</c><00:00:03.000><c> f***</c>\n"
+    )
+    assert parse_vtt(vtt, word_level=True) == []
+
+
+@pytest.mark.parametrize("cue", [
+    Cue(0, 2, "[tertawa] halo [ __ ]"),
+    Cue(0, 2, "[tertawa] halo [ __ ]", [
+        Word(0, 0.5, "[tertawa]"), Word(0.5, 1, "halo"), Word(1, 1.2, "["),
+        Word(1.2, 1.4, "__"), Word(1.4, 2, "]"),
+    ]),
+])
+def test_write_ass_defensively_filters_annotations(cue):
+    dialogue = [line for line in write_ass([cue]).splitlines() if line.startswith("Dialogue:")]
+    assert len(dialogue) == 1
+    assert "HALO" in dialogue[0]
+    assert "[" not in dialogue[0] and "]" not in dialogue[0] and "__" not in dialogue[0]
+    if cue.words:
+        assert "0:00:00.50,0:00:01.00" in dialogue[0]
+
+
+@pytest.mark.parametrize("timed", [True, False])
+def test_clip_cues_keeps_only_words_in_window(timed):
+    words = [Word(i, i + 1, text) for i, text in enumerate("aa bb cc dd".split())]
+    cue = Cue(0, 4, "aa bb cc dd", words if timed else [])
+    assert _clip_cues([cue], 1.5, 2.5) == [
+        Cue(0, 1, "bb cc", [Word(0, 0.5, "bb"), Word(0.5, 1, "cc")])
+    ]
+
+
+def test_clip_cues_drops_silence_only_and_uses_word_bounds():
+    silent_overlap = Cue(0, 20, "dulu", [Word(0, 2, "dulu")])
+    spoken_overlap = Cue(2, 20, "sekarang", [Word(6, 7, "sekarang")])
+    assert _clip_cues([silent_overlap, spoken_overlap], 5, 9) == [
+        Cue(1, 2, "sekarang", [Word(1, 2, "sekarang")])
+    ]
+
+
 def test_clip_words_shifts_to_zero_and_drops_out_of_window():
     cues = [Cue(0.0, 4.0, "satu dua tiga empat")]
     words = clip_words(cues, 1.0, 3.0)
@@ -270,3 +373,25 @@ def test_write_ass_custom_style_applies_font_colors_case_effect_and_position(pos
     assert f",3,14,0,{alignment},80,80," in ass
     dialogue = next(line for line in ass.splitlines() if line.startswith("Dialogue:"))
     assert "{\\c&H00665544&}Halo{\\c&H00332211&} dunia" in dialogue
+
+
+def test_parse_vtt_splits_tied_inline_timestamps_and_drops_10ms_suffix_snapshot():
+    vtt = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:02.000\n"
+        "awal<00:00:01.500><c> kata</c>\n\n"
+        "00:00:02.000 --> 00:00:03.200\n"
+        "awal kata\n"
+        "kata<00:00:02.400><c> ada ada</c><00:00:03.000><c> lagi</c>\n\n"
+        "00:00:03.200 --> 00:00:03.210\n"
+        "kata ada ada lagi\n"
+        " \n"
+    )
+    cues = parse_vtt(vtt, word_level=True)
+
+    assert [cue.text for cue in cues] == ["awal kata", "ada ada lagi"]
+    assert all(word.end > word.start for cue in cues for word in cue.words)
+    assert cues[1].words[0].start == pytest.approx(2.4)
+    assert cues[1].words[0].end == pytest.approx(2.7)
+    assert cues[1].words[1].start == pytest.approx(2.7)
+    assert cues[1].words[1].end == pytest.approx(3.0)

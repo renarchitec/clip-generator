@@ -43,6 +43,7 @@ from .subtitles import (
     Cue,
     Word,
     clip_words,
+    cue_to_words,
     parse_vtt,
     write_ass,
 )
@@ -545,19 +546,14 @@ def _clip_cues(cues: Sequence[Cue], start: float, end: float) -> List[Cue]:
     limit = max(0.0, end - start)
     relative: List[Cue] = []
     for cue in cues:
-        if cue.end <= start or cue.start >= end:
-            continue
-        cue_start = max(0.0, cue.start - start)
-        cue_end = min(limit, cue.end - start)
-        if cue_end <= cue_start:
-            continue
         words: List[Word] = []
-        for word in cue.words:
+        for word in cue.words or cue_to_words(cue):
             word_start = max(0.0, word.start - start)
             word_end = min(limit, word.end - start)
             if word_end > word_start:
                 words.append(Word(start=word_start, end=word_end, text=word.text))
-        relative.append(Cue(start=cue_start, end=cue_end, text=cue.text, words=words))
+        if words:
+            relative.append(Cue(words[0].start, words[-1].end, " ".join(w.text for w in words), words))
     return relative
 
 
@@ -576,8 +572,10 @@ def _reframe_filters(
     Mode centered (black_bars, blurred_fill) lewat tanpa deteksi frame.
     face_tracking memanggil MediaPipe; dep hilang -> raise RuntimeError.
     """
+    reset_pts = "setpts=PTS-STARTPTS"
     if reframe == "black_bars" and not landscape:
         return [
+            reset_pts,
             f"scale={width}:{height}:force_original_aspect_ratio=decrease",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
             "setsar=1",
@@ -586,6 +584,7 @@ def _reframe_filters(
     # bar hitam, tapi potongan video yang sama diburamkan di belakangnya.
     if reframe == "blurred_fill" or landscape:
         return [
+            reset_pts,
             (
                 f"split=2[fg][bg];"
                 f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -600,8 +599,8 @@ def _reframe_filters(
     # Default / fallback eksplisit: face_tracking (cut per pembicara aktif)
     segments = reframe_mod.face_track_samples(video, moment.start, moment.end)
     if segments:
-        return [reframe_mod.cut_crop_filter(segments, width, height), "setsar=1"]
-    return [reframe_mod.portrait_crop_filter(0.5, width, height), "setsar=1"]
+        return [reset_pts, reframe_mod.cut_crop_filter(segments, width, height), "setsar=1"]
+    return [reset_pts, reframe_mod.portrait_crop_filter(0.5, width, height), "setsar=1"]
 
 
 def _two_speaker_graph(
@@ -618,7 +617,7 @@ def _two_speaker_graph(
     centers = reframe_mod.two_speaker_centers(video, moment.start, moment.end)
     left, right = centers if centers else (0.25, 0.75)
     graph = [
-        "[0:v]split=2[s0][s1]",
+        "[0:v]setpts=PTS-STARTPTS,split=2[s0][s1]",
         f"[s0]{reframe_mod.panel_crop_filter(left)}[top]",
         f"[s1]{reframe_mod.panel_crop_filter(right)}[bottom]",
         "[top][bottom]vstack=inputs=2[vstacked]",
@@ -747,7 +746,7 @@ def _facecam_graph(
     game_h = reframe_mod.FACECAM_GAMEPLAY_H
     x, y, w, h = box
     graph = [
-        "[0:v]split=2[fc0][fc1]",
+        "[0:v]setpts=PTS-STARTPTS,split=2[fc0][fc1]",
         f"[fc0]crop={w}:{h}:{x}:{y},scale={panel_w}:{panel_h},setsar=1[top]",
         f"[fc1]crop=w='min(ih*{panel_w}/{game_h},in_w)':h=ih:x='(in_w-out_w)/2':y=0,scale={panel_w}:{game_h},setsar=1[bot]",
         "[top][bot]vstack=inputs=2[v]",

@@ -56,9 +56,10 @@ def test_reframe_filters_landscape_ignores_reframe():
         )
 
         assert "pad=" not in "".join(filters)
-        assert "boxblur" in filters[0]
-        assert "crop=1920:1080" in filters[0]
-        assert "force_original_aspect_ratio=decrease" in filters[0]
+        assert filters[0] == "setpts=PTS-STARTPTS"
+        assert "boxblur" in filters[1]
+        assert "crop=1920:1080" in filters[1]
+        assert "force_original_aspect_ratio=decrease" in filters[1]
         assert filters[-1] == "setsar=1"
 
 
@@ -67,9 +68,10 @@ def test_reframe_filters_1_1_centered_modes_use_square_target():
     bars = pipeline._reframe_filters("black_bars", "x.mp4", moment, 1080, 1080)
     blur = pipeline._reframe_filters("blurred_fill", "x.mp4", moment, 1080, 1080)
 
-    assert "scale=1080:1080" in bars[0] and "pad=1080:1080" in bars[1]
-    assert "scale=1080:1080" in blur[0]
-    assert "crop=1080:1080" in blur[0]
+    assert bars[0] == blur[0] == "setpts=PTS-STARTPTS"
+    assert "scale=1080:1080" in bars[1] and "pad=1080:1080" in bars[2]
+    assert "scale=1080:1080" in blur[1]
+    assert "crop=1080:1080" in blur[1]
 
 
 def test_write_ass_playres_follows_output_size():
