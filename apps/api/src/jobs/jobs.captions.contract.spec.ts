@@ -91,6 +91,7 @@ test('worker parses captions default true and skips ASS when false', async () =>
   assert.match(models, /raw_captions = _first\(data, "captions", default=DEFAULT_CAPTIONS\)/);
 
   const pipeline = await readFile(join(root, 'worker/clipper/pipeline.py'), 'utf8');
-  assert.match(pipeline, /burn_captions = captions and bool\(clip_cues\)/);
+  assert.match(pipeline, /clip_cues = _clip_cues\(cues, absolute_start, absolute_end\) if captions else \[\]/);
+  assert.match(pipeline, /burn_ass = bool\(clip_cues or effective_hook\)/);
   assert.match(pipeline, /job\.captions,/);
 });

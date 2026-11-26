@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from textwrap import wrap
 from typing import List, Optional, Sequence
 
 from .models import CaptionStyle
@@ -327,6 +328,9 @@ def write_ass(
     max_words: int = MAX_WORDS_PER_CUE,
     max_chars: int = WRAP_CHARS,
     style: Optional[CaptionStyle] = None,
+    hook_text: str | None = None,
+    hook_duration_sec: float = 2.8,
+    facecam: bool = False,
 ) -> str:
     """Tulis ASS takarir pendek tebal (Anton, UPPERCASE, kata aktif kuning).
 
@@ -336,9 +340,11 @@ def write_ass(
     - two_speakers=False: Alignment 2 (bawah tengah), margin_v aman >=18% tinggi frame.
     - style.position_y mengatur pusat takarir secara eksplisit dan mengabaikan margin vertikal.
     - max_words/max_chars mengatur pemecahan baris (16:9 memakai 6 kata / 32 karakter).
-    - Format teks: tiap jendela kata memancarkan satu Dialogue event non-overlapping
-      berisi seluruh kata chunk dengan kata aktif berformat {\\c&H00FFFF&}...{\\c&HFFFFFF&}.
+    - Tiap jendela kata menyorot satu kata aktif, dengan animasi pop bila aktif.
+    - hook_text menambah banner independen dari takarir; pemanggil membatasi
+      hook_duration_sec ke durasi klip.
     """
+    animate = style.animate if style is not None else True
     if style is None:
         alignment = 5 if two_speakers else 2
         safe_margin_v = 0 if two_speakers else max(int(margin_v), int(height * 0.18))
@@ -382,15 +388,34 @@ def write_ass(
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         ass_style,
+    ]
+    hook = " ".join((hook_text or "").split())
+    show_hook = bool(hook) and hook_duration_sec > 0
+    if show_hook:
+        hook_size = max(1, round(54 * height / 1920))
+        hook_outline = max(1, round(14 * height / 1920))
+        hook_align, hook_margin = (5, 0) if facecam else (8, int(height * 0.16))
+        lines.append(
+            f"Style: Hook,Montserrat,{hook_size},&H00FFFFFF,&H00FFFFFF,&H26000000,&H26000000,"
+            f"-1,0,0,0,100,100,0,0,3,{hook_outline},0,{hook_align},80,80,{hook_margin},1"
+        )
+
+    lines.extend([
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ]
+    ])
+    if show_hook:
+        hook_lines = wrap(hook, width=32 if width > height else 20, max_lines=2, placeholder="…")
+        text = r"\N".join(_ass_escape(line) for line in hook_lines)
+        position = f"\\an5\\pos({width // 2},{int(height * 0.44)})" if facecam else r"\an8"
+        effect = r"\fad(120,250)\fscx104\fscy104\t(0,120,\fscx100\fscy100)"
+        lines.append(f"Dialogue: 2,0:00:00.00,{_timestamp(hook_duration_sec)},Hook,,0,0,0,,{{{position}{effect}}}{text}")
 
     for part in _render_cue_parts(cues, max_words, max_chars):
         _write_cue_part(
             part, lines, uppercase=uppercase, primary_col=primary_col,
-            highlight_col=highlight_col, pos_tag=pos_tag,
+            highlight_col=highlight_col, pos_tag=pos_tag, animate=animate,
         )
 
     return "\n".join(lines) + "\n"
@@ -398,7 +423,7 @@ def write_ass(
 
 def _write_cue_part(
     cue: Cue, lines: List[str], uppercase: bool = True, primary_col: str = TEXT_COLOUR,
-    highlight_col: str = HIGHLIGHT_COLOUR, pos_tag: str = "",
+    highlight_col: str = HIGHLIGHT_COLOUR, pos_tag: str = "", animate: bool = True,
 ) -> None:
     if cue.end <= cue.start:
         return
@@ -417,12 +442,14 @@ def _write_cue_part(
         if seg_end <= seg_start:
             continue
 
+        pop = r"\fscx110\fscy110\t(0,120,\fscx100\fscy100)" if animate else ""
+        restore_scale = r"\fscx100\fscy100" if animate else ""
         rendered_words: List[str] = []
         for j, w in enumerate(words):
             word_text = _ass_escape(w.text.upper() if uppercase else w.text)
             if j == i:
                 rendered_words.append(
-                    f"{{\\c{highlight_col}&}}{word_text}{{\\c{primary_col}&}}"
+                    f"{{\\c{highlight_col}&{pop}}}{word_text}{{\\c{primary_col}&{restore_scale}}}"
                 )
             else:
                 rendered_words.append(word_text)

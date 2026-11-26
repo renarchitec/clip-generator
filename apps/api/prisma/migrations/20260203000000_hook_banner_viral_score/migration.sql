@@ -1,0 +1,7 @@
+ALTER TABLE "jobs"
+ADD COLUMN "hookBanner" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "normalizeAudio" BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE "clips"
+ADD COLUMN "viralScore" INTEGER,
+ADD COLUMN "hookText" TEXT;

@@ -35,6 +35,7 @@ type Props = {
   captionStyle?: CaptionStyle
   twoSpeakers?: boolean
   onCaptionStyleChange?: (next: CaptionStyle) => void
+  showSafeZone?: boolean
 }
 
 /**
@@ -52,6 +53,7 @@ export function WatermarkOverlay({
   captionStyle,
   twoSpeakers = false,
   onCaptionStyleChange,
+  showSafeZone = false,
 }: Props) {
   const t = useT()
   const frameRef = useRef<HTMLDivElement>(null)
@@ -62,6 +64,7 @@ export function WatermarkOverlay({
   const hasLayers = layers.length > 0
   const multiLayer = layers.length > 1
   const showSubtitle = Boolean(captions && captionStyle && onCaptionStyleChange)
+  const safeZoneVisible = Boolean(showSafeZone && aspectRatio === "9:16")
   const ratio = frame ? frame.width / frame.height : null
 
   const getLayerSize = (watermark: Watermark, scale: number) => {
@@ -165,7 +168,7 @@ export function WatermarkOverlay({
   return (
     <div
       className={`absolute inset-0 z-10 grid place-items-center p-3 ${frame ? "bg-zinc-950" : "pointer-events-none"}`}
-      aria-hidden={!hasLayers && !frame && !showSubtitle}
+      aria-hidden={!hasLayers && !frame && !showSubtitle && !safeZoneVisible}
     >
       <div
         ref={frameRef}
@@ -174,7 +177,25 @@ export function WatermarkOverlay({
         style={frameStyle}
       >
         {frame && <img src={frame.imageUrl} alt={frame.alt} draggable={false} onError={frame.onImageError} className="absolute inset-0 size-full select-none object-fill" />}
-        <span className="pointer-events-none absolute left-1.5 top-1.5 z-10 rounded-sm bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-white">
+        {safeZoneVisible && (
+          <div
+            data-testid="safe-zone-overlay"
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-[15]"
+          >
+            {/* Top UI bar (TikTok / Reels / Shorts nav & tabs) */}
+            <div className="absolute inset-x-0 top-0 h-[13%] border-b border-dashed border-rose-400/50 bg-rose-500/18" />
+            {/* Right action rail (Like / Comment / Share) */}
+            <div className="absolute bottom-[22%] right-0 top-[44%] w-[16%] border-l border-t border-dashed border-rose-400/50 bg-rose-500/18" />
+            {/* Bottom caption & navigation bar */}
+            <div className="absolute inset-x-0 bottom-0 h-[22%] border-t border-dashed border-rose-400/50 bg-rose-500/18" />
+            {/* Safe rectangle indicator badge */}
+            <span className="absolute left-1.5 top-[14.5%] rounded-sm border border-emerald-400/40 bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wider text-emerald-200 backdrop-blur-[2px]">
+              {t.safeZoneBadge}
+            </span>
+          </div>
+        )}
+        <span className="pointer-events-none absolute left-1.5 top-1.5 z-20 rounded-sm bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-white">
           {frame ? frame.caption : aspectRatio}
         </span>
         {frame?.busy && (

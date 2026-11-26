@@ -58,7 +58,7 @@ def test_write_ass_positions_every_dialogue_at_custom_y(two_speakers):
 
 
 def test_write_ass_without_custom_y_keeps_legacy_placement():
-    style = CaptionStyle.from_dict({"position": "top"})
+    style = CaptionStyle.from_dict({"position": "top", "animate": False})
     ass = write_ass([Cue(0, 2, "dua kata")], style=style)
     style_fields = next(line for line in ass.splitlines() if line.startswith("Style:")).split(",")
     assert style_fields[18:22] == ["8", "80", "80", "230"]
@@ -126,8 +126,11 @@ def test_write_ass_styles_hook_captions_one_event_per_word():
     assert "0:00:01.00,0:00:02.48" in dialogue[0]
     assert "0:00:02.48,0:00:04.25" in dialogue[1]
     # UPPERCASE + hanya kata aktif yang kuning.
-    assert "{\\c&H0000FFFF&}HALO{\\c&H00FFFFFF&} DUNIA" in dialogue[0]
-    assert "HALO {\\c&H0000FFFF&}DUNIA{\\c&H00FFFFFF&}" in dialogue[1]
+    pop = r"{\c&H0000FFFF&\fscx110\fscy110\t(0,120,\fscx100\fscy100)}"
+    restore = r"{\c&H00FFFFFF&\fscx100\fscy100}"
+    assert f"{pop}HALO{restore} DUNIA" in dialogue[0]
+    assert f"HALO {pop}DUNIA{restore}" in dialogue[1]
+    assert r"\r" not in ass
 
 
 def test_write_ass_two_speakers_aligns_middle_centre_without_margin():
@@ -139,7 +142,8 @@ def test_write_ass_two_speakers_aligns_middle_centre_without_margin():
 
 def test_write_ass_keeps_inline_word_timings_and_escapes_braces():
     words = [Word(0.0, 0.5, "kata"), Word(0.5, 1.2, "{kurung}")]
-    ass = write_ass([Cue(0.0, 1.2, "kata {kurung}", words=words)], 1080, 1920, 80, 180)
+    style = CaptionStyle.from_dict({"preset": "hook", "animate": False})
+    ass = write_ass([Cue(0.0, 1.2, "kata {kurung}", words=words)], 1080, 1920, 80, 180, style=style)
     dialogue = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
 
     assert len(dialogue) == 2
@@ -259,7 +263,7 @@ def test_hex_to_ass_color_uses_ass_bgr_order():
 
 @pytest.mark.parametrize("position,alignment", [("top", 8), ("center", 5), ("bottom", 2)])
 def test_write_ass_custom_style_applies_font_colors_case_effect_and_position(position, alignment):
-    style = CaptionStyle.from_dict({"preset": "hook", "fontFamily": "Bangers", "uppercase": False, "effect": "box", "position": position, "primaryColor": "#112233", "highlightColor": "#445566"})
+    style = CaptionStyle.from_dict({"preset": "hook", "fontFamily": "Bangers", "uppercase": False, "effect": "box", "position": position, "animate": False, "primaryColor": "#112233", "highlightColor": "#445566"})
     assert style
     ass = write_ass([Cue(0.0, 1.0, "Halo dunia")], style=style)
     assert "Style: Default,Bangers,68,&H00332211,&H00665544," in ass

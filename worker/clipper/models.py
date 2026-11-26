@@ -37,11 +37,11 @@ CAPTION_FONT_SIZE_MIN = 44
 CAPTION_FONT_SIZE_MAX = 120
 DEFAULT_CAPTION_FONT_SIZE = 80
 CAPTION_PRESET_STYLES = {
-    "hook": {"preset": "hook", "fontFamily": "Anton", "fontSize": 80, "primaryColor": "#FFFFFF", "highlightColor": "#FFFF00", "outlineColor": "#000000", "effect": "outline", "uppercase": True, "position": "bottom", "italic": False},
-    "beast": {"preset": "beast", "fontFamily": "Montserrat", "fontSize": 84, "primaryColor": "#FFFFFF", "highlightColor": "#22C55E", "outlineColor": "#000000", "effect": "outline", "uppercase": True, "position": "bottom", "italic": False},
-    "boxed": {"preset": "boxed", "fontFamily": "Plus Jakarta Sans", "fontSize": 68, "primaryColor": "#FFFFFF", "highlightColor": "#FACC15", "outlineColor": "#000000", "effect": "box", "uppercase": False, "position": "bottom", "italic": False},
-    "neon": {"preset": "neon", "fontFamily": "Bebas Neue", "fontSize": 92, "primaryColor": "#FFFFFF", "highlightColor": "#5CE1C4", "outlineColor": "#09090B", "effect": "shadow", "uppercase": True, "position": "bottom", "italic": False},
-    "cinema": {"preset": "cinema", "fontFamily": "Oswald", "fontSize": 68, "primaryColor": "#FEF08A", "highlightColor": "#FFFFFF", "outlineColor": "#000000", "effect": "shadow", "uppercase": False, "position": "bottom", "italic": False},
+    "hook": {"preset": "hook", "fontFamily": "Anton", "fontSize": 80, "primaryColor": "#FFFFFF", "highlightColor": "#FFFF00", "outlineColor": "#000000", "effect": "outline", "uppercase": True, "position": "bottom", "italic": False, "animate": True},
+    "beast": {"preset": "beast", "fontFamily": "Montserrat", "fontSize": 84, "primaryColor": "#FFFFFF", "highlightColor": "#22C55E", "outlineColor": "#000000", "effect": "outline", "uppercase": True, "position": "bottom", "italic": False, "animate": True},
+    "boxed": {"preset": "boxed", "fontFamily": "Plus Jakarta Sans", "fontSize": 68, "primaryColor": "#FFFFFF", "highlightColor": "#FACC15", "outlineColor": "#000000", "effect": "box", "uppercase": False, "position": "bottom", "italic": False, "animate": False},
+    "neon": {"preset": "neon", "fontFamily": "Bebas Neue", "fontSize": 92, "primaryColor": "#FFFFFF", "highlightColor": "#5CE1C4", "outlineColor": "#09090B", "effect": "shadow", "uppercase": True, "position": "bottom", "italic": False, "animate": False},
+    "cinema": {"preset": "cinema", "fontFamily": "Oswald", "fontSize": 68, "primaryColor": "#FEF08A", "highlightColor": "#FFFFFF", "outlineColor": "#000000", "effect": "shadow", "uppercase": False, "position": "bottom", "italic": False, "animate": False},
 }
 _CAPTION_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -59,9 +59,10 @@ class CaptionStyle:
     position: str
     italic: bool
     position_y: float | None = None
+    animate: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
-        payload = {"preset": self.preset, "fontFamily": self.font_family, "fontSize": self.font_size, "primaryColor": self.primary_color, "highlightColor": self.highlight_color, "outlineColor": self.outline_color, "effect": self.effect, "uppercase": self.uppercase, "position": self.position, "italic": self.italic}
+        payload = {"preset": self.preset, "fontFamily": self.font_family, "fontSize": self.font_size, "primaryColor": self.primary_color, "highlightColor": self.highlight_color, "outlineColor": self.outline_color, "effect": self.effect, "uppercase": self.uppercase, "position": self.position, "italic": self.italic, "animate": self.animate}
         if self.position_y is not None:
             payload["positionY"] = self.position_y
         return payload
@@ -83,7 +84,8 @@ class CaptionStyle:
         if isinstance(data.get("uppercase"), bool): base["uppercase"] = data["uppercase"]
         if data.get("position") in CAPTION_POSITIONS: base["position"] = data["position"]
         if isinstance(data.get("italic"), bool): base["italic"] = data["italic"]
-        fields = ("fontFamily", "fontSize", "primaryColor", "highlightColor", "outlineColor", "effect", "uppercase", "position", "italic")
+        if isinstance(data.get("animate"), bool): base["animate"] = data["animate"]
+        fields = ("fontFamily", "fontSize", "primaryColor", "highlightColor", "outlineColor", "effect", "uppercase", "position", "italic", "animate")
         base["preset"] = next((name for name, style in CAPTION_PRESET_STYLES.items() if all(base[field] == style[field] for field in fields)), "custom")
         position_y = _first(data, "positionY", "position_y")
         if isinstance(position_y, (int, float)) and not isinstance(position_y, bool) and position_y == position_y and position_y not in (float("inf"), float("-inf")):
@@ -92,7 +94,7 @@ class CaptionStyle:
             position_y = None
         if position_y is not None:
             base["preset"] = "custom"
-        return cls(base["preset"], base["fontFamily"], base["fontSize"], base["primaryColor"], base["highlightColor"], base["outlineColor"], base["effect"], base["uppercase"], base["position"], base["italic"], position_y)
+        return cls(base["preset"], base["fontFamily"], base["fontSize"], base["primaryColor"], base["highlightColor"], base["outlineColor"], base["effect"], base["uppercase"], base["position"], base["italic"], position_y, base["animate"])
 
 
 def to_caption_language(value: Any) -> str:
@@ -175,6 +177,7 @@ MAX_SOURCE_SEC = 36000
 # MaxLength di apps/api/src/jobs/dto/create-job.dto.ts.
 MAX_RANGE_TITLE_CHARS = 70
 MAX_RANGE_REASON_CHARS = 200
+MAX_RANGE_HOOK_CHARS = 80
 
 # job_id dipakai sebagai nama folder di CLIPS_DIR. Batasi keras supaya nilai
 # dari antrean tidak bisa keluar dari CLIPS_DIR.
@@ -371,6 +374,7 @@ class ManualRange:
     # Judul/alasan hasil tinjauan LLM; None bila rentang berasal dari transkrip.
     title: Optional[str] = None
     reason: Optional[str] = None
+    hook_text: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"start": self.start, "end": self.end}
@@ -378,15 +382,19 @@ class ManualRange:
             payload["title"] = self.title
         if self.reason:
             payload["reason"] = self.reason
+        if self.hook_text is not None:
+            payload["hookText"] = self.hook_text
         return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ManualRange":
+        hook = _to_text(_first(data, "hookText", "hook_text"), MAX_RANGE_HOOK_CHARS)
         return cls(
             start=_to_float(data.get("start"), 0.0),
             end=_to_float(data.get("end"), 0.0),
             title=_to_text(data.get("title"), MAX_RANGE_TITLE_CHARS),
             reason=_to_text(data.get("reason"), MAX_RANGE_REASON_CHARS),
+            hook_text=hook.rstrip() if hook else None,
         )
 
 
@@ -443,6 +451,8 @@ class JobData:
     outro: Optional[Outro] = None
     # Watermark ditumpuk dari bawah ke atas sesuai urutan daftar.
     watermarks: List[Watermark] = field(default_factory=list)
+    hook_banner: bool = False
+    normalize_audio: bool = True
 
     def __post_init__(self) -> None:
         if self.watermarks:
@@ -464,6 +474,8 @@ class JobData:
             "reframe": self.reframe,
             "captions": self.captions,
             "twoSpeakers": self.two_speakers,
+            "hookBanner": self.hook_banner,
+            "normalizeAudio": self.normalize_audio,
             "facecam": self.facecam,
             "aspectRatio": self.aspect_ratio,
             "captionLanguage": self.caption_language,
@@ -569,6 +581,8 @@ def job_data_from_dict(data: Mapping[str, Any] | JobData) -> JobData:
         watermark=watermarks[0] if watermarks else None,
         watermarks=watermarks,
         outro=Outro.from_dict(_first(data, "outro")),
+        hook_banner=_to_bool(_first(data, "hookBanner", "hook_banner"), False),
+        normalize_audio=_to_bool(_first(data, "normalizeAudio", "normalize_audio"), True),
     )
 
 
@@ -604,6 +618,8 @@ class ClipResult:
     hashtags: List[str] = field(default_factory=list)
     # Cuplikan transkrip klip (<= CLIP_TRANSCRIPT_MAX karakter).
     transcript: Optional[str] = None
+    viral_score: int | None = None
+    hook_text: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -619,6 +635,10 @@ class ClipResult:
         transcript = (self.transcript or "").strip()[:CLIP_TRANSCRIPT_MAX].strip()
         if transcript:
             payload["transcript"] = transcript
+        if self.viral_score is not None:
+            payload["viralScore"] = self.viral_score
+        if self.hook_text is not None:
+            payload["hookText"] = self.hook_text
         return payload
 
 

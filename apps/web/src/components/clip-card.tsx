@@ -1,4 +1,4 @@
-import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Copy, ExternalLink, Eye, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
+import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Copy, ExternalLink, Eye, Flame, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 import { Children, createContext, isValidElement, useContext, useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils"
 import { isActivePublication, metricsErrorMessage, publicationsKey, PublishDialog, refreshClipPublicationMetrics, type ClipPublication, type PublicationResponse } from "@/components/publish-dialog"
 import { InstagramMark, TikTokMark, YouTubeMark, type SocialPlatform } from "@/components/social-accounts"
 
-export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
+export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; viralScore?: number | null; hookText?: string | null; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
 
 export type ClipFeedItem = { clip: ClipCardData; meta: string; index?: number }
 
@@ -94,7 +94,11 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
       <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent px-3 pb-3 pt-16 text-left text-white"><span className="line-clamp-2 block min-h-10 text-xs font-semibold leading-5 sm:text-sm">{title}</span><span className="mt-1 line-clamp-2 block text-[10px] leading-4 text-white/80 sm:text-xs">{meta}</span></span>
     </button>
     <div className="pointer-events-none absolute left-2 top-2 z-[2] flex flex-col items-start gap-1.5">
-      <span className="flex items-center gap-1"><span className="rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span><PublishBadge publications={clip.publications}/></span>
+      <span className="flex flex-wrap items-center gap-1">
+        <span className="rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span>
+        {typeof clip.viralScore === "number" && <ViralScorePill score={clip.viralScore} />}
+        <PublishBadge publications={clip.publications}/>
+      </span>
       {viewsSummary.totalViews !== null && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -188,6 +192,8 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
   const metaLabel = activeMeta && activeMeta !== timeRange ? activeMeta : activeClip ? sourceLabel(activeClip.job.url) : ""
   const showTimeRange = Boolean(timeRange && !metaLabel.includes(timeRange))
   const captionText = activeClip?.caption?.trim() ?? ""
+  const hookText = activeClip?.hookText?.trim() ?? ""
+  const showHookText = Boolean(hookText && hookText.toLowerCase() !== title.trim().toLowerCase())
   const tags = (activeClip?.hashtags ?? []).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean)
   const hasCaption = Boolean(captionText || tags.length)
   const canExpandCaption = captionText.length + tags.join(" ").length > 75 || captionText.includes("\n")
@@ -521,15 +527,22 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
           </div>
 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/70 to-transparent pb-12 pl-3 pr-20 pt-16">
-            <DialogDescription className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] leading-4 text-white/75 sm:text-xs">
+            <DialogDescription className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] leading-4 text-white/75 sm:text-xs">
               <span className="line-clamp-1 min-w-0">{metaLabel}</span>
               {showTimeRange && <>
                 <span aria-hidden="true">·</span>
                 <span className="font-mono tabular-nums">{timeRange}</span>
               </>}
+              {typeof activeClip.viralScore === "number" && <ViralScorePill score={activeClip.viralScore} />}
               {activeClip.job.aspectRatio !== "9:16" && <Badge variant="outline" className="h-5 border-white/20 bg-black/50 px-1.5 text-[10px] text-white">{activeClip.job.aspectRatio}</Badge>}
             </DialogDescription>
             <DialogTitle className="mt-1 line-clamp-2 font-display text-sm font-semibold leading-snug text-white sm:text-base">{title}</DialogTitle>
+            {showHookText && (
+              <p className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] leading-4 text-white/90 backdrop-blur-sm">
+                <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-wide text-accent">{t.hookLabel}:</span>
+                <span className="line-clamp-1 min-w-0 italic">“{hookText}”</span>
+              </p>
+            )}
             {hasCaption && <div className="pointer-events-auto mt-1.5">
               {captionExpanded ? (
                 <div className="max-h-36 overflow-y-auto rounded-lg bg-black/60 p-2 text-xs leading-5 text-white/90 backdrop-blur-sm sm:text-sm">
@@ -579,6 +592,32 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
       </AlertDialogContent>
     </AlertDialog>
   </>
+}
+
+function ViralScorePill({ score, className }: { score: number; className?: string }) {
+  const t = useT()
+  if (!Number.isFinite(score)) return null
+  const rounded = Math.max(0, Math.min(100, Math.round(score)))
+  const tone = rounded >= 80
+    ? "border-emerald-400/30 bg-emerald-500/20 text-emerald-300"
+    : rounded >= 60
+      ? "border-amber-400/30 bg-amber-500/20 text-amber-300"
+      : "border-zinc-400/30 bg-zinc-500/25 text-zinc-200"
+  const tooltip = t.viralScoreTooltip.replace("{score}", String(rounded))
+  return (
+    <span
+      title={tooltip}
+      aria-label={tooltip}
+      className={cn(
+        "pointer-events-auto inline-flex h-[22px] items-center gap-0.5 rounded-full border px-1.5 font-mono text-[10px] font-semibold tabular-nums shadow-sm backdrop-blur-md [text-shadow:0_1px_2px_rgb(0_0_0/60%)]",
+        tone,
+        className,
+      )}
+    >
+      <Flame aria-hidden="true" className="size-3 shrink-0" />
+      <span>{rounded}</span>
+    </span>
+  )
 }
 
 function PlatformMark({ platform, className }: { platform: SocialPlatform; className?: string }) {

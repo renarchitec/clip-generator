@@ -207,7 +207,10 @@ export function SubtitleOverlay({ style, twoSpeakers = false, frameHeightPx, onC
           <span style={{ color: style.primaryColor, ...effectCss, ...boxWordStyle }}>
             {firstWord}
           </span>
-          <span style={{ color: style.highlightColor, ...effectCss, ...boxWordStyle }}>
+          <span
+            className={`inline-block transition-transform duration-150 ${style.animate ? "scale-105" : ""}`}
+            style={{ color: style.highlightColor, ...effectCss, ...boxWordStyle }}
+          >
             {highlightWord}
           </span>
         </span>

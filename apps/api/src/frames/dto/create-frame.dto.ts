@@ -33,6 +33,10 @@ export class CreateFrameDto {
   captions?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  hookBanner?: boolean;
+
+  @IsOptional()
   @IsCaptionStyle()
   captionStyle?: CaptionStyle | null;
 }

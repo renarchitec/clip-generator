@@ -1,6 +1,6 @@
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Captions, CircleAlert, LoaderCircle, Play, Trash2, Users, Video } from "lucide-react"
+import { ArrowLeft, AudioLines, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Trash2, Users, Video } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
@@ -219,13 +219,15 @@ function JobDetail() {
                   </div>
                 </Field>}
 
-                {(snapshot.twoSpeakers || snapshot.facecam || snapshot.captions) && <Field>
+                {(snapshot.twoSpeakers || snapshot.facecam || snapshot.captions || snapshot.hookBanner || snapshot.normalizeAudio) && <Field>
                   <FieldTitle>{t.processingOptions}</FieldTitle>
                   <div className="mt-2 divide-y divide-border border-y border-border">
                     {[
                       ...(snapshot.twoSpeakers ? [{ key: "two-speakers", icon: Users, label: t.twoSpeakers, hint: t.twoSpeakersHint }] : []),
                       ...(snapshot.facecam ? [{ key: "facecam", icon: Video, label: t.facecam, hint: t.facecamHint }] : []),
                       ...(snapshot.captions ? [{ key: "burn-captions", icon: Captions, label: t.burnCaptions, hint: t.burnCaptionsHint }] : []),
+                      ...(snapshot.hookBanner ? [{ key: "hook-banner", icon: PanelTop, label: t.hookBannerSummary, hint: t.hookBannerHint }] : []),
+                      ...(snapshot.normalizeAudio ? [{ key: "normalize-audio", icon: AudioLines, label: t.normalizeAudioSummary, hint: t.normalizeAudioHint }] : []),
                     ].map(({ key, icon: Icon, label, hint }) => (
                       <div key={key} className="flex min-h-12 items-center gap-3 py-2.5">
                         <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
@@ -241,7 +243,7 @@ function JobDetail() {
                     <FieldTitle>{t.captionStyle}</FieldTitle>
                     <div className="mt-2 rounded-md border border-border bg-muted/40 p-3">
                       <div className="flex items-center justify-between gap-2"><Badge variant="secondary" className="text-[10px]">{t.captionPresetNames[detectCaptionPreset(captionStyle)]}</Badge><span className="font-mono text-xs tabular-nums text-foreground">{captionStyle.fontFamily} · {captionStyle.fontSize}px</span></div>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t.captionEffect}: {t.captionEffectNames[captionStyle.effect]}</span><span>{t.captionPosition}: {captionStyle.positionY != null ? `Y ${Math.round(captionStyle.positionY * 100)}%` : t.captionPositionNames[captionStyle.position]}</span></div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t.captionEffect}: {t.captionEffectNames[captionStyle.effect]}</span><span>{t.captionPosition}: {captionStyle.positionY != null ? `Y ${Math.round(captionStyle.positionY * 100)}%` : t.captionPositionNames[captionStyle.position]}</span>{captionStyle.animate && <span>{t.captionAnimate}</span>}</div>
                       <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground"><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.primaryColor }} />{t.captionPrimaryColor}</span><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.highlightColor }} />{t.captionHighlightColor}</span></div>
                     </div>
                   </Field>

@@ -140,6 +140,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
         endSec: clip.end,
         filePath,
         ...sanitizeClipSocialMetadata(clip),
+        ...sanitizeClipRetentionMetadata(clip),
         transcript: sanitizeClipTranscript(clip.transcript),
       }];
     });
@@ -182,6 +183,8 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
             caption: clip.caption,
             hashtags: clip.hashtags,
             transcript: clip.transcript,
+            viralScore: clip.viralScore,
+            hookText: clip.hookText,
           },
         });
       }
@@ -219,6 +222,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       endSec: clip.end,
       filePath,
       ...sanitizeClipSocialMetadata(clip),
+      ...sanitizeClipRetentionMetadata(clip),
       transcript: sanitizeClipTranscript(clip.transcript),
     };
 
@@ -329,6 +333,8 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
             endSec: true,
             caption: true,
             hashtags: true,
+            viralScore: true,
+            hookText: true,
             downloadedAt: true,
             deletedAt: true,
             publications: CLIP_PUBLICATION_SELECT,
@@ -346,6 +352,8 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       mode: job.mode,
       reframe: job.reframe,
       captions: job.captions,
+      hookBanner: job.hookBanner,
+      normalizeAudio: job.normalizeAudio,
       twoSpeakers: job.twoSpeakers,
       facecam: job.facecam,
       aspectRatio: job.aspectRatio,
@@ -369,6 +377,20 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       })),
     });
   }
+}
+
+function sanitizeClipRetentionMetadata({ viralScore, hookText }: {
+  viralScore?: unknown;
+  hookText?: unknown;
+}) {
+  return {
+    viralScore: typeof viralScore === 'number' && Number.isFinite(viralScore)
+      ? Math.min(100, Math.max(0, Math.round(viralScore)))
+      : null,
+    hookText: typeof hookText === 'string'
+      ? Array.from(hookText.trim()).slice(0, 80).join('').trimEnd() || null
+      : null,
+  };
 }
 
 function errorMessage(error: unknown): string {

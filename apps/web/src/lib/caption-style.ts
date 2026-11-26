@@ -50,6 +50,7 @@ export type CaptionStyle = {
   uppercase: boolean
   position: CaptionPosition
   italic: boolean
+  animate: boolean
   positionY?: number | null
 }
 
@@ -65,6 +66,7 @@ export const CAPTION_PRESET_STYLES: Record<NamedCaptionPreset, CaptionStyle> = {
     uppercase: true,
     position: "bottom",
     italic: false,
+    animate: true,
   },
   beast: {
     preset: "beast",
@@ -77,6 +79,7 @@ export const CAPTION_PRESET_STYLES: Record<NamedCaptionPreset, CaptionStyle> = {
     uppercase: true,
     position: "bottom",
     italic: false,
+    animate: true,
   },
   boxed: {
     preset: "boxed",
@@ -89,6 +92,7 @@ export const CAPTION_PRESET_STYLES: Record<NamedCaptionPreset, CaptionStyle> = {
     uppercase: false,
     position: "bottom",
     italic: false,
+    animate: false,
   },
   neon: {
     preset: "neon",
@@ -101,6 +105,7 @@ export const CAPTION_PRESET_STYLES: Record<NamedCaptionPreset, CaptionStyle> = {
     uppercase: true,
     position: "bottom",
     italic: false,
+    animate: false,
   },
   cinema: {
     preset: "cinema",
@@ -113,6 +118,7 @@ export const CAPTION_PRESET_STYLES: Record<NamedCaptionPreset, CaptionStyle> = {
     uppercase: false,
     position: "bottom",
     italic: false,
+    animate: false,
   },
 }
 
@@ -179,7 +185,8 @@ export function detectCaptionPreset(fields: Omit<CaptionStyle, "preset">): Capti
       candidate.effect === fields.effect &&
       candidate.uppercase === fields.uppercase &&
       candidate.position === fields.position &&
-      candidate.italic === fields.italic
+      candidate.italic === fields.italic &&
+      candidate.animate === fields.animate
     ) {
       return name
     }
@@ -205,6 +212,7 @@ export function normalizeCaptionStyle(raw: unknown): CaptionStyle {
     uppercase: typeof input.uppercase === "boolean" ? input.uppercase : base.uppercase,
     position: isCaptionPosition(input.position) ? input.position : base.position,
     italic: typeof input.italic === "boolean" ? input.italic : base.italic,
+    animate: typeof input.animate === "boolean" ? input.animate : base.animate,
     ...(positionY !== undefined ? { positionY } : {}),
   }
 

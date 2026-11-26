@@ -461,16 +461,18 @@ def test_render_clip_sync_skips_missing_layer_and_renders_valid_layer(tmp_path):
         pipeline._render_clip_sync(job, MOMENT, [], "src.mp4", "clip-01.mp4", str(outdir), 0.0)
 
     render.assert_called_once()
-    assert render.call_args.kwargs == {"watermark": valid, "watermark_path": os.path.realpath(png)}
+    assert render.call_args.kwargs["watermark"] == valid
+    assert render.call_args.kwargs["watermark_path"] == os.path.realpath(png)
+    assert "watermarks" not in render.call_args.kwargs
 
 
-def test_render_clip_sync_no_watermark_adds_no_kwargs(tmp_path):
+def test_render_clip_sync_no_watermark_adds_no_watermark_kwargs(tmp_path):
     seen = {}
     with patch.object(pipeline, "_render_one", side_effect=lambda *a, **k: seen.update(k)):
         pipeline._render_clip_sync(
             _job(None), MOMENT, [], "src.mp4", "clip-01.mp4", str(tmp_path / "jobwm"), 0.0
         )
-    assert seen == {}
+    assert {"watermark", "watermark_path", "watermarks"}.isdisjoint(seen)
 
 
 # ---------- smoke ffmpeg nyata ----------

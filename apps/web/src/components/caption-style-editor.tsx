@@ -68,7 +68,19 @@ function PreviewText({ value, sample, twoSpeakers }: { value: CaptionStyle; samp
         textTransform: value.uppercase ? "uppercase" : "none",
       }}
     >
-      {sample.map((word, index) => <span key={`${word}-${index}`} style={{ color: index === 1 ? value.highlightColor : value.primaryColor, ...common, ...(value.effect === "box" ? { backgroundColor: `${value.outlineColor}bf`, borderRadius: 5, padding: "3px 5px" } : {}) }}>{word}</span>)}
+      {sample.map((word, index) => (
+        <span
+          key={`${word}-${index}`}
+          className={`inline-block transition-transform duration-150 ${value.animate && index === 1 ? "scale-105" : ""}`}
+          style={{
+            color: index === 1 ? value.highlightColor : value.primaryColor,
+            ...common,
+            ...(value.effect === "box" ? { backgroundColor: `${value.outlineColor}bf`, borderRadius: 5, padding: "3px 5px" } : {}),
+          }}
+        >
+          {word}
+        </span>
+      ))}
     </p>
   </div>
 }
@@ -170,6 +182,20 @@ export function CaptionStyleEditor({ value, onChange, twoSpeakers = false }: { v
             ))}
           </ToggleGroup>
         </Field>
+      </div>
+      <div className="relative flex items-center justify-between gap-2 rounded-md border border-border/70 bg-background/40 px-2.5 py-2">
+        <div className="min-w-0">
+          <label htmlFor="caption-animate" className="block cursor-pointer text-xs font-medium text-foreground">
+            {t.captionAnimate}
+          </label>
+          <p className="text-[10px] leading-snug text-muted-foreground">{t.captionAnimateHint}</p>
+        </div>
+        <Switch
+          id="caption-animate"
+          aria-label={t.captionAnimate}
+          checked={value.animate}
+          onCheckedChange={(animate) => update({ animate })}
+        />
       </div>
       <Field className="gap-2 rounded-md border border-border/70 bg-background/40 p-2"><FieldDescription className="text-[10px]">{t.captionColorsHint}</FieldDescription><ColorControl id="caption-primary" label={t.captionPrimaryColor} color={value.primaryColor} onChange={(primaryColor) => update({ primaryColor })}/><ColorControl id="caption-highlight" label={t.captionHighlightColor} color={value.highlightColor} onChange={(highlightColor) => update({ highlightColor })}/><ColorControl id="caption-outline" label={t.captionOutlineColor} color={value.outlineColor} onChange={(outlineColor) => update({ outlineColor })}/></Field>
     </div>}

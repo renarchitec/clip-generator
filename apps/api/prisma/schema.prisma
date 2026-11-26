@@ -61,6 +61,8 @@ model Job {
   mode              JobMode
   reframe           String    @default("face_tracking")
   captions          Boolean   @default(true)
+  hookBanner        Boolean   @default(false)
+  normalizeAudio    Boolean   @default(true)
   twoSpeakers       Boolean   @default(false)
   facecam           Boolean   @default(false)
   aspectRatio       String    @default("9:16")
@@ -193,6 +195,8 @@ model Clip {
   caption      String?
   hashtags     String[]  @default([])
   transcript   String?
+  viralScore   Int?
+  hookText     String?
   createdAt    DateTime  @default(now())
 
   publications Publication[]

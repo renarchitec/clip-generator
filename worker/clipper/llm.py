@@ -10,7 +10,7 @@ import logging
 import math
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -79,9 +79,16 @@ class Moment:
     end: float
     title: str
     reason: str = ""
+    viral_score: int | None = None
+    hook_text: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"start": self.start, "end": self.end, "title": self.title, "reason": self.reason}
+        payload = {"start": self.start, "end": self.end, "title": self.title, "reason": self.reason}
+        if self.viral_score is not None:
+            payload["viralScore"] = self.viral_score
+        if self.hook_text is not None:
+            payload["hookText"] = self.hook_text
+        return payload
 
 
 @dataclass
@@ -290,9 +297,22 @@ def _build_prompt(
         f"- start dan end dalam detik, end > start, dalam rentang 0 sampai {total:.1f}.\n"
         "- Momen harus utuh: jangan memotong di tengah kalimat, dan jangan tumpang tindih.\n"
         "- title singkat dan memancing rasa ingin tahu (maksimal 70 karakter).\n"
-        "- reason satu kalimat alasan momen itu menarik.\n\n"
+        "- Hook-first (0–3 detik pertama): Setiap klip HARUS dimulai pada kalimat yang "
+        "langsung memancing rasa penasaran, emosi, konflik, atau menyampaikan pernyataan "
+        "mengejutkan. Hindari basa-basi seperti 'halo guys', 'oke jadi', 'nah kemarin', "
+        "atau kalimat gantung tanpa konteks.\n"
+        "- Konteks mandiri: Penonton baru yang tidak menonton video penuh harus langsung "
+        "paham topik atau situasinya dalam 3 detik pertama.\n"
+        "- Ketat di awal dan akhir: Mulai tepat sebelum kalimat pembuka, selesai tepat "
+        "setelah punchline atau payoff.\n"
+        "- reason satu kalimat alasan momen itu menarik.\n"
+        "- viralScore: integer 0–100, nilai kekuatan hook untuk menghentikan scroll dan "
+        "potensi retensi/payoff (85–100 sangat kuat/viral, 70–84 kuat, di bawah 70 biasa).\n"
+        "- hookText: teks banner untuk 3 detik pertama, 3–6 kata dan maksimal 48 karakter, "
+        "sebahasa dengan klip, tanpa tanda kutip atau emoji berlebihan, memancing penasaran.\n\n"
         "Balas HANYA dengan JSON list, tanpa penjelasan:\n"
-        '[{"start": 12.5, "end": 58.0, "title": "...", "reason": "..."}]\n\n'
+        '[{"start": 12.5, "end": 58.0, "title": "...", "reason": "...", '
+        '"viralScore": 91, "hookText": "..."}]\n\n'
         f"{preference}"
         "Transkrip (detik):\n"
         f"{_transcript_text(cues, description=description)}"
@@ -369,6 +389,26 @@ def title_from_cues(cues: Sequence[Cue], start: float, end: float) -> str:
     return f"Clip {clock(start)}\u2013{clock(end)}"
 
 
+def _viral_score(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return max(0, min(100, int(value)))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _hook_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split()).strip(" \"'“”‘’«»`")
+    if len(text) > 60:
+        # Prefer a whole word at the limit, with a hard cap for a single long word.
+        head, separator, _ = text[:61].rpartition(" ")
+        text = head if separator else text[:60]
+    return text or None
+
+
 def validate_moments(
     items: Sequence[Mapping[str, Any]],
     cues: Sequence[Cue],
@@ -381,11 +421,11 @@ def validate_moments(
     target = _target_duration(params)
     total = cues[-1].end
 
-    moments: List[Moment] = []
+    candidates: List[Moment] = []
     for item in items:
         start = _number(item.get("start"))
         end = _number(item.get("end"))
-        if start is None or end is None:
+        if start is None or end is None or not (math.isfinite(start) and math.isfinite(end)):
             continue
         if start < 0 or end <= start:
             continue
@@ -396,8 +436,6 @@ def validate_moments(
         start, end = _fit_duration(start, end, target, total)
         if end <= start or end - start < MIN_CLIP_SECONDS:
             continue
-        if any(_overlap(start, end, m.start, m.end) > 0.5 * (end - start) for m in moments):
-            continue
 
         title = str(item.get("title") or "").strip()
         # Jendela bergeser: judul dari LLM sudah tidak relevan.
@@ -405,14 +443,29 @@ def validate_moments(
             title = title_from_cues(cues, start, end)
         title = title or title_from_cues(cues, start, end)
         reason = str(item.get("reason") or "").strip()
-        moments.append(
+        candidates.append(
             Moment(
                 start=round(start, 2),
                 end=round(end, 2),
                 title=title[:70],
                 reason=reason[:200],
+                viral_score=_viral_score(item.get("viralScore", item.get("viral_score"))),
+                hook_text=_hook_text(item.get("hookText", item.get("hook_text"))),
             )
         )
+
+    scored = any(moment.viral_score is not None for moment in candidates)
+    if scored:
+        candidates.sort(key=_score_key, reverse=True)
+
+    # Resolve overlaps in ranking order so a weaker candidate can't block a stronger one.
+    moments: List[Moment] = []
+    for candidate in candidates:
+        if any(_overlap(candidate.start, candidate.end, m.start, m.end) > 0 for m in moments):
+            continue
+        moments.append(candidate)
+        if len(moments) >= count:
+            break
 
     if len(moments) < count:
         log.warning(
@@ -421,10 +474,13 @@ def validate_moments(
             count,
         )
 
-    # Pertahankan urutan ranking LLM: potong dulu, baru urutkan per waktu.
-    moments = moments[:count]
-    moments.sort(key=lambda moment: moment.start)
+    if not scored:
+        moments.sort(key=lambda moment: moment.start)
     return moments
+
+
+def _score_key(moment: Moment) -> int:
+    return moment.viral_score if moment.viral_score is not None else -1
 
 
 def _density(cue: Cue) -> float:
@@ -448,26 +504,20 @@ def _snap_moments(
         return list(moments)
 
     min_duration, max_duration = _duration_bounds(params)
-    result: List[Moment] = []
+    snapped: Dict[int, Moment] = {}
     previous_end = 0.0
-    for moment in moments:
+    # Repair in timeline order, not score order, then restore rank (including ties).
+    for index, moment in sorted(enumerate(moments), key=lambda item: item[1].start):
         start, end = snap_window(cues, moment.start, moment.end, min_duration, max_duration)
         start = max(start, previous_end)
         if end - start < MIN_CLIP_SECONDS:
             continue
         previous_end = end
-        title = moment.title
-        if retitle or not title:
-            title = title_from_cues(cues, start, end)
-        result.append(
-            Moment(
-                start=round(start, 2),
-                end=round(end, 2),
-                title=title[:70],
-                reason=moment.reason,
-            )
-        )
-    return result
+        title = title_from_cues(cues, start, end) if retitle or not moment.title else moment.title
+        snapped[index] = replace(moment, start=round(start, 2), end=round(end, 2), title=title[:70])
+    if any(moment.viral_score is not None for moment in moments):
+        return sorted((snapped[index] for index in sorted(snapped)), key=_score_key, reverse=True)
+    return list(snapped.values())
 
 
 def _refine_enabled(env: Mapping[str, str]) -> bool:
@@ -998,8 +1048,10 @@ def _refine_prompt(
 
     return (
         "Kamu editor video pendek berbahasa Indonesia.\n"
-        "Tugas: perbaiki batas tiap kandidat momen di bawah agar klip dimulai tepat di "
-        "awal pemikiran/hook yang utuh dan berakhir setelah payoff, di akhir kalimat.\n\n"
+        "Tugas: rapikan batas tiap kandidat. Buang pembuka lemah seperti 'oke jadi', "
+        "'eh tunggu', sapaan, dan jeda pengisi. Mulai tepat sebelum kalimat hook yang "
+        "utuh dan langsung memberi konteks, lalu akhiri tepat setelah punchline atau "
+        "payoff, tanpa jeda atau komentar tambahan.\n\n"
         "Aturan:\n"
         f"- Durasi tiap klip antara {MIN_DURATION_RATIO * target:.0f} dan "
         f"{MAX_DURATION_RATIO * target:.0f} detik.\n"
@@ -1044,12 +1096,8 @@ def _refine_items(
         accepted[index] = (start, end)
 
     return [
-        Moment(
-            start=accepted.get(index, (moment.start, moment.end))[0],
-            end=accepted.get(index, (moment.start, moment.end))[1],
-            title=moment.title,
-            reason=moment.reason,
-        )
+        replace(moment, start=accepted[index][0], end=accepted[index][1])
+        if index in accepted else moment
         for index, moment in enumerate(moments)
     ]
 

@@ -34,6 +34,7 @@ export class FramesService {
     const data: FrameJobData = {
       url: assertAllowedUrl(dto.url), atSec: dto.atSec, aspectRatio,
       reframe: dto.reframe, twoSpeakers, facecam, captions: dto.captions ?? true,
+      hookBanner: dto.hookBanner ?? false,
       captionSample: 'Sample caption', captionStyle: normalizeCaptionStyle(dto.captionStyle), outPath: `.frames/${id}.jpg`, userId,
     };
     await this.queue.add('frame', data, { jobId: id, attempts: 1,

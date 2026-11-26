@@ -73,6 +73,8 @@ export class JobsService {
       dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
     const reframe = dto.reframe ?? DEFAULT_REFRAME;
     const captions = dto.captions ?? true;
+    const hookBanner = Boolean(dto.hookBanner ?? false);
+    const normalizeAudio = dto.normalizeAudio ?? true;
     const captionStyle = captions ? normalizeCaptionStyle(dto.captionStyle) : null;
     const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
     const captionLanguage = dto.captionLanguage ?? DEFAULT_CAPTION_LANGUAGE;
@@ -103,6 +105,8 @@ export class JobsService {
         targetDurationSec: dto.targetDurationSec,
         maxSourceSec,
         facecam,
+        hookBanner,
+        normalizeAudio,
         captionLanguage,
         customHashtags,
         captionStyle: captionStyle ? (captionStyle as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
@@ -169,6 +173,8 @@ export class JobsService {
       watermark,
       watermarks,
       outro,
+      hookBanner,
+      normalizeAudio,
     };
 
     try {
@@ -301,6 +307,8 @@ export class JobsService {
     dto.targetDurationSec = old.targetDurationSec;
     dto.reframe = old.reframe as ReframeMode;
     dto.captions = old.captions;
+    dto.hookBanner = old.hookBanner;
+    dto.normalizeAudio = old.normalizeAudio;
     dto.twoSpeakers = old.twoSpeakers;
     dto.facecam = old.facecam;
     dto.aspectRatio = old.aspectRatio as AspectRatio;
@@ -409,11 +417,14 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     mode: job.mode,
     reframe: job.reframe,
     captions: job.captions,
+    hookBanner: job.hookBanner,
+    normalizeAudio: job.normalizeAudio,
     twoSpeakers: job.twoSpeakers,
     facecam: job.facecam,
     aspectRatio: job.aspectRatio,
     captionLanguage: job.captionLanguage,
     customHashtags: job.customHashtags,
+    captionStyle: normalizeCaptionStyle(job.captionStyle),
     clipCount: job.clipCount,
     targetDurationSec: job.targetDurationSec,
     maxSourceSec: job.maxSourceSec ?? null,
@@ -432,6 +443,8 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
       endSec: clip.endSec,
       caption: clip.caption,
       hashtags: clip.hashtags,
+      viralScore: clip.viralScore,
+      hookText: clip.hookText,
       downloadedAt: clip.downloadedAt,
       deletedAt: clip.deletedAt,
       publications: 'publications' in clip ? clip.publications : [],
@@ -468,8 +481,10 @@ function normalizeRanges(dto: CreateJobDto): ManualRange[] {
     const normalized: ManualRange = { start: range.start, end: range.end };
     const title = sanitizeMomentText(range.title, 70);
     const reason = sanitizeMomentText(range.reason, 200);
+    const hookText = sanitizeMomentText(range.hookText, 80);
     if (title) normalized.title = title;
     if (reason) normalized.reason = reason;
+    if (hookText) normalized.hookText = hookText;
     return normalized;
   });
 }
@@ -482,5 +497,5 @@ function sanitizeMomentText(
   if (typeof raw !== 'string') return undefined;
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
-  return trimmed.slice(0, max);
+  return Array.from(trimmed).slice(0, max).join('').trimEnd();
 }

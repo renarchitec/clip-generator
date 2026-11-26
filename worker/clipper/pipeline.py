@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 from . import llm
 from . import reframe as reframe_mod
 from .models import (
-    CLIP_TRANSCRIPT_MAX,
     JOB_ID_RE,
     MAX_DESCRIPTION_CHARS,
     CaptionStyle,
@@ -30,6 +29,8 @@ from .models import (
     Outro,
     Watermark,
     WatermarkChromaKey,
+    _first,
+    _to_bool,
     job_data_from_dict,
     to_max_source_sec,
 )
@@ -502,6 +503,7 @@ def _moments_from_ranges(cues: Sequence[Cue], ranges) -> List[llm.Moment]:
                 end=round(float(item.end), 2),
                 title=title[:70] or llm.title_from_cues(cues, item.start, item.end),
                 reason=reason[:200] or "manual",
+                hook_text=item.hook_text,
             )
         )
     return moments
@@ -849,6 +851,14 @@ OUTRO_AUDIO_RATE = 44100
 OUTRO_TIMEOUT_SEC = 900.0
 
 
+def _has_audio(path: str) -> bool:
+    """Probe just the first audio stream; an empty result means video-only."""
+    return bool(_run([
+        "ffprobe", "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=index", "-of", "csv=p=0", path,
+    ], timeout=20).strip())
+
+
 def _parse_rate(value: Any) -> Optional[float]:
     try:
         text = str(value)
@@ -1011,6 +1021,7 @@ def parse_frame_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "facecam": bool(payload.get("facecam", False)),
         "captions": bool(payload.get("captions", False)),
         "captionSample": str(payload.get("captionSample") or "Sample caption"),
+        "hookBanner": _to_bool(_first(payload, "hookBanner", "hook_banner"), False),
         "captionStyle": CaptionStyle.from_dict(payload.get("captionStyle")),
         "outPath": normalized,
     }
@@ -1046,11 +1057,16 @@ async def run_frame(payload: Mapping[str, Any], clips_dir: str, temp_root: Optio
         moment = llm.Moment(start=0.0, end=2.0, title="frame")
         cues = [Cue(offset, offset + 2.0, data["captionSample"])] if data["captions"] else []
         rendered = os.path.join(workdir, "render.mp4")
+        extra: Dict[str, Any] = {}
+        if data["captionStyle"] is not None:
+            extra["caption_style"] = data["captionStyle"]
+        if data["hookBanner"]:
+            extra.update(hook_banner=True, hook_text="WAIT FOR THIS MOMENT")
         await asyncio.to_thread(
             _render_one, video, moment, cues, workdir, "render.mp4", data["reframe"],
             data["captions"], data["twoSpeakers"], data["facecam"], offset,
             data["aspectRatio"], None, None, 100.0,
-            **({"caption_style": data["captionStyle"]} if data.get("captionStyle") is not None else {}),
+            **extra,
         )
         await asyncio.to_thread(_run, [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
@@ -1084,6 +1100,9 @@ def _render_one(
     run_timeout: Optional[float] = None,
     caption_style: Optional[CaptionStyle] = None,
     watermarks: Sequence[tuple[Watermark, str]] = (),
+    hook_text: str | None = None,
+    hook_banner: bool = False,
+    normalize_audio: bool = False,
 ) -> None:
     resolved_wms: list[tuple[Watermark, str]] = []
     if watermarks:
@@ -1109,10 +1128,21 @@ def _render_one(
     # Teks takarir dicocokkan dengan timestamp absolut video asli.
     absolute_start = moment.start + timeline_offset
     absolute_end = moment.end + timeline_offset
-    clip_cues = _clip_cues(cues, absolute_start, absolute_end)
-    burn_captions = captions and bool(clip_cues)
+    clip_cues = _clip_cues(cues, absolute_start, absolute_end) if captions else []
+    if hook_text is None:
+        hook_text = moment.hook_text
+    effective_hook = (hook_text or "").strip() if hook_banner else ""
+    burn_ass = bool(clip_cues or effective_hook)
+    duration = max(0.5, moment.end - moment.start)
+    loudnorm = normalize_audio and _has_audio(video)
+    box = None
+    if facecam:
+        try:
+            box = _facecam_box_for(video)
+        except Exception as exc:
+            log.warning("facecam: deteksi wajah gagal, fallback reframe biasa: %s", exc)
 
-    if burn_captions:
+    if burn_ass:
         with open(ass_path, "w", encoding="utf-8") as handle:
             handle.write(
                 write_ass(
@@ -1125,10 +1155,12 @@ def _render_one(
                     max_words=MAX_WORDS_PER_CUE_WIDE if landscape else MAX_WORDS_PER_CUE,
                     max_chars=(max(10, round((WRAP_CHARS_WIDE if landscape else WRAP_CHARS) * 80 / caption_style.font_size)) if caption_style and caption_style.font_size > 84 else (WRAP_CHARS_WIDE if landscape else WRAP_CHARS)),
                     style=caption_style,
+                    hook_text=effective_hook or None,
+                    hook_duration_sec=min(2.8, duration),
+                    facecam=bool(box),
                 )
             )
 
-    duration = max(0.5, moment.end - moment.start)
     head = [
         "ffmpeg",
         "-y",
@@ -1154,7 +1186,8 @@ def _render_one(
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        "160k" if loudnorm else "128k",
+        *(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "44100"] if loudnorm else []),
         "-movflags",
         "+faststart",
         "-sn",
@@ -1171,26 +1204,16 @@ def _render_one(
     vf: Optional[str] = None
     if two_speakers:
         base_graph, base_label = _two_speaker_graph(
-            video, moment, ass_path if burn_captions else None
+            video, moment, ass_path if burn_ass else None
         )
+    elif box:
+        base_graph, base_label = _facecam_graph(box, ass_path if burn_ass else None)
     else:
-        graph: Optional[tuple[List[str], str]] = None
-        if facecam:
-            try:
-                box = _facecam_box_for(video)
-            except Exception as exc:
-                log.warning("facecam: deteksi wajah gagal, fallback reframe biasa: %s", exc)
-                box = None
-            if box:
-                graph = _facecam_graph(box, ass_path if burn_captions else None)
-        if graph:
-            base_graph, base_label = graph
-        else:
-            filters = _reframe_filters(reframe, video, moment, width, height, landscape)
-            if burn_captions:
-                filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
-            vf = ",".join(filters)
-            base_graph, base_label = [f"[0:v]{vf}[base]"], "[base]"
+        filters = _reframe_filters(reframe, video, moment, width, height, landscape)
+        if burn_ass:
+            filters.append("subtitles=" + _ffmpeg_filter_path(ass_path))
+        vf = ",".join(filters)
+        base_graph, base_label = [f"[0:v]{vf}[base]"], "[base]"
 
     def command(use_watermark: bool) -> List[str]:
         if use_watermark and resolved_wms:
@@ -1228,15 +1251,9 @@ def _render_one(
 def _clip_report(clip: ClipResult) -> Dict[str, Any]:
     """Payload `clip` untuk progress: sama dengan ClipResult.to_dict tanpa
     caption/hashtags (caption baru dibuat setelah semua klip dirender)."""
-    payload: Dict[str, Any] = {
-        "title": clip.title,
-        "start": round(clip.start, 2),
-        "end": round(clip.end, 2),
-        "file": clip.file,
-    }
-    transcript = (clip.transcript or "").strip()[:CLIP_TRANSCRIPT_MAX].strip()
-    if transcript:
-        payload["transcript"] = transcript
+    payload = clip.to_dict()
+    payload.pop("caption", None)
+    payload.pop("hashtags", None)
     return payload
 
 
@@ -1286,6 +1303,9 @@ def _render_clip_sync(
         job.facecam,
         offset,
         job.aspect_ratio,
+        hook_banner=job.hook_banner,
+        hook_text=moment.hook_text,
+        normalize_audio=job.normalize_audio,
         **extra,
     )
     # Outro ditempel pada file final (setelah watermark/takarir); start/end klip tak berubah.
@@ -1296,6 +1316,8 @@ def _render_clip_sync(
         end=round(moment.end, 2),
         file=filename,
         transcript=llm.clip_transcript(subs, moment.start, moment.end) or None,
+        viral_score=moment.viral_score,
+        hook_text=moment.hook_text,
     )
 
 

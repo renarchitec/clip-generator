@@ -244,6 +244,10 @@ def test_ffmpeg_render_clip_sync_end_to_end_with_outro(tmp_path):
     ok_path, ok_res = render("outros/u/ok.mp4", "clip-01.mp4")
     assert _duration(ok_path) == pytest.approx(5.0, abs=0.3)
     assert _probe(ok_path, "stream=width,height", "v:0") == "1080,1920"
+    assert _probe(ok_path, "stream=sample_rate,channels", "a:0") == "44100,2"
+    audio_duration = float(_probe(ok_path, "stream=duration", "a:0"))
+    video_duration = float(_probe(ok_path, "stream=duration", "v:0"))
+    assert audio_duration == pytest.approx(video_duration, abs=0.041)
     assert (ok_res.start, ok_res.end) == (0.0, 3.0)
 
     bad_path, bad_res = render("outros/u/bad.mp4", "clip-02.mp4")

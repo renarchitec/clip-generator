@@ -6,6 +6,8 @@ export type ReviewDraft = {
   mode: "auto" | "manual"
   reframe: Reframe
   captions: boolean
+  hookBanner?: boolean
+  normalizeAudio?: boolean
   twoSpeakers?: boolean
   facecam?: boolean
   aspectRatio?: AspectRatio
@@ -16,7 +18,7 @@ export type ReviewDraft = {
   captionLanguage?: CaptionLanguage
   captionStyle?: CaptionStyle
   customHashtags?: string
-  ranges: { start: string; end: string; title?: string; reason?: string }[]
+  ranges: { start: string; end: string; title?: string; reason?: string; hookText?: string }[]
   reviewFirst: boolean
   previewId: string | null
   selectedCandidates: number[]
@@ -39,7 +41,18 @@ export function loadReviewDraft(): ReviewDraft | null {
     if (d.cueRanges.length > 10) return null
     if (!Array.isArray(d.ranges) || d.ranges.some((r) => typeof r?.start !== "string" || typeof r?.end !== "string")) return null
     if (!["face_tracking", "blurred_fill", "black_bars"].includes(d.reframe)) return null
-    return { ...d, twoSpeakers: typeof d.twoSpeakers === "boolean" ? d.twoSpeakers : false, facecam: typeof d.facecam === "boolean" ? d.facecam : false, aspectRatio: ["9:16", "1:1", "16:9"].includes(d.aspectRatio ?? "") ? d.aspectRatio as AspectRatio : "9:16", maxSourceSec: d.maxSourceSec === null || d.maxSourceSec === undefined ? null : Number.isInteger(d.maxSourceSec) && d.maxSourceSec >= 60 && d.maxSourceSec <= 36000 ? d.maxSourceSec : null, captionLanguage: d.captionLanguage === "id" || d.captionLanguage === "en" ? d.captionLanguage : "auto", customHashtags: typeof d.customHashtags === "string" ? d.customHashtags.slice(0, 500) : "", selectedCandidates: Array.isArray(d.selectedCandidates) ? d.selectedCandidates.filter((i) => Number.isInteger(i)) : [] }
+    return {
+      ...d,
+      ...(typeof d.hookBanner === "boolean" ? { hookBanner: d.hookBanner } : {}),
+      ...(typeof d.normalizeAudio === "boolean" ? { normalizeAudio: d.normalizeAudio } : {}),
+      twoSpeakers: typeof d.twoSpeakers === "boolean" ? d.twoSpeakers : false,
+      facecam: typeof d.facecam === "boolean" ? d.facecam : false,
+      aspectRatio: ["9:16", "1:1", "16:9"].includes(d.aspectRatio ?? "") ? d.aspectRatio as AspectRatio : "9:16",
+      maxSourceSec: d.maxSourceSec === null || d.maxSourceSec === undefined ? null : Number.isInteger(d.maxSourceSec) && d.maxSourceSec >= 60 && d.maxSourceSec <= 36000 ? d.maxSourceSec : null,
+      captionLanguage: d.captionLanguage === "id" || d.captionLanguage === "en" ? d.captionLanguage : "auto",
+      customHashtags: typeof d.customHashtags === "string" ? d.customHashtags.slice(0, 500) : "",
+      selectedCandidates: Array.isArray(d.selectedCandidates) ? d.selectedCandidates.filter((i) => Number.isInteger(i)) : [],
+    }
   } catch {
     return null
   }

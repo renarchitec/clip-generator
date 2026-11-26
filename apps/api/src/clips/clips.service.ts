@@ -48,6 +48,8 @@ export class ClipsService {
         endSec: true,
         caption: true,
         hashtags: true,
+        viralScore: true,
+        hookText: true,
         createdAt: true,
         job: { select: { id: true, url: true, aspectRatio: true } },
         publications: CLIP_PUBLICATION_SELECT,

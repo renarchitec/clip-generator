@@ -11,6 +11,8 @@ export interface JobSnapshot {
   mode: string;
   reframe: string;
   captions: boolean;
+  hookBanner: boolean;
+  normalizeAudio: boolean;
   twoSpeakers: boolean;
   facecam: boolean;
   aspectRatio: string;
@@ -43,6 +45,8 @@ export interface ClipSnapshot {
   endSec: number;
   caption: string | null;
   hashtags: string[];
+  viralScore?: number | null;
+  hookText?: string | null;
   downloadedAt: Date | null;
   deletedAt: Date | null;
   /** Ringkasan publikasi terbaru per akun untuk badge kartu. */

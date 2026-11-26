@@ -122,7 +122,7 @@ def test_manual_streaming_falls_back_to_full_video_mid_job(tmp_path):
         return str(path)
 
     def fake_render_one(video, moment, subs, outdir, filename, reframe, captions,
-                        two_speakers, facecam, timeline_offset=0.0, aspect_ratio="9:16"):
+                        two_speakers, facecam, timeline_offset=0.0, aspect_ratio="9:16", **kwargs):
         seen["renders"].append(
             (filename, os.path.basename(video), moment.start, timeline_offset)
         )

@@ -51,6 +51,11 @@ export class ManualRangeDto {
   @IsString()
   @MaxLength(200)
   reason?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  hookText?: string;
 }
 
 /** Pengaturan chroma key (greenscreen) untuk video watermark. */
@@ -130,6 +135,14 @@ export class CreateJobDto {
   @IsOptional()
   @IsBoolean()
   captions: boolean = true;
+
+  @IsOptional()
+  @IsBoolean()
+  hookBanner?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  normalizeAudio?: boolean;
 
   /** Tata letak dua pembicara (panel atas/bawah); default false. Hanya berlaku untuk aspectRatio 9:16. */
   @IsOptional()

@@ -119,14 +119,15 @@ export interface CaptionStyle {
   /** Posisi vertikal kustom (0.05..0.95 dari tinggi frame, dari atas); absen/null = ikuti preset position. */
   positionY?: number | null;
   italic: boolean;
+  animate: boolean;
 }
 
 export const CAPTION_PRESET_STYLES: Record<Exclude<CaptionPreset, 'custom'>, CaptionStyle> = {
-  hook: { preset: 'hook', fontFamily: 'Anton', fontSize: 80, primaryColor: '#FFFFFF', highlightColor: '#FFFF00', outlineColor: '#000000', effect: 'outline', uppercase: true, position: 'bottom', italic: false },
-  beast: { preset: 'beast', fontFamily: 'Montserrat', fontSize: 84, primaryColor: '#FFFFFF', highlightColor: '#22C55E', outlineColor: '#000000', effect: 'outline', uppercase: true, position: 'bottom', italic: false },
-  boxed: { preset: 'boxed', fontFamily: 'Plus Jakarta Sans', fontSize: 68, primaryColor: '#FFFFFF', highlightColor: '#FACC15', outlineColor: '#000000', effect: 'box', uppercase: false, position: 'bottom', italic: false },
-  neon: { preset: 'neon', fontFamily: 'Bebas Neue', fontSize: 92, primaryColor: '#FFFFFF', highlightColor: '#5CE1C4', outlineColor: '#09090B', effect: 'shadow', uppercase: true, position: 'bottom', italic: false },
-  cinema: { preset: 'cinema', fontFamily: 'Oswald', fontSize: 68, primaryColor: '#FEF08A', highlightColor: '#FFFFFF', outlineColor: '#000000', effect: 'shadow', uppercase: false, position: 'bottom', italic: false },
+  hook: { preset: 'hook', fontFamily: 'Anton', fontSize: 80, primaryColor: '#FFFFFF', highlightColor: '#FFFF00', outlineColor: '#000000', effect: 'outline', uppercase: true, position: 'bottom', italic: false, animate: true },
+  beast: { preset: 'beast', fontFamily: 'Montserrat', fontSize: 84, primaryColor: '#FFFFFF', highlightColor: '#22C55E', outlineColor: '#000000', effect: 'outline', uppercase: true, position: 'bottom', italic: false, animate: true },
+  boxed: { preset: 'boxed', fontFamily: 'Plus Jakarta Sans', fontSize: 68, primaryColor: '#FFFFFF', highlightColor: '#FACC15', outlineColor: '#000000', effect: 'box', uppercase: false, position: 'bottom', italic: false, animate: false },
+  neon: { preset: 'neon', fontFamily: 'Bebas Neue', fontSize: 92, primaryColor: '#FFFFFF', highlightColor: '#5CE1C4', outlineColor: '#09090B', effect: 'shadow', uppercase: true, position: 'bottom', italic: false, animate: false },
+  cinema: { preset: 'cinema', fontFamily: 'Oswald', fontSize: 68, primaryColor: '#FEF08A', highlightColor: '#FFFFFF', outlineColor: '#000000', effect: 'shadow', uppercase: false, position: 'bottom', italic: false, animate: false },
 };
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = CAPTION_PRESET_STYLES.hook;
 
@@ -151,7 +152,8 @@ export function normalizeCaptionStyle(raw: unknown): CaptionStyle | null {
     result.positionY = Math.round(clamped * 10000) / 10000;
   }
   if (typeof value.italic === 'boolean') result.italic = value.italic;
-  const fields: (keyof Omit<CaptionStyle, 'preset'>)[] = ['fontFamily', 'fontSize', 'primaryColor', 'highlightColor', 'outlineColor', 'effect', 'uppercase', 'position', 'italic'];
+  if (typeof value.animate === 'boolean') result.animate = value.animate;
+  const fields: (keyof Omit<CaptionStyle, 'preset'>)[] = ['fontFamily', 'fontSize', 'primaryColor', 'highlightColor', 'outlineColor', 'effect', 'uppercase', 'position', 'italic', 'animate'];
   result.preset = (Object.keys(CAPTION_PRESET_STYLES) as Exclude<CaptionPreset, 'custom'>[]).find((preset) => result.positionY === undefined && fields.every((field) => result[field] === CAPTION_PRESET_STYLES[preset][field])) ?? 'custom';
   return result;
 }
@@ -165,6 +167,7 @@ export interface ManualRange {
   title?: string;
   /** alasan momen hasil tinjauan LLM; opsional */
   reason?: string;
+  hookText?: string;
 }
 
 export interface JobParams {
@@ -179,6 +182,8 @@ export interface JobData {
   reframe: ReframeMode;
   /** apakah subtitle dibakar ke clip; default true */
   captions: boolean;
+  hookBanner: boolean;
+  normalizeAudio: boolean;
   /** tata letak dua pembicara (panel atas/bawah 1080x960 vstack); default false; hanya berlaku untuk 9:16 */
   twoSpeakers: boolean;
   /** tata letak streamer (facecam di atas, gameplay di bawah); default false; hanya 9:16 dan eksklusif dengan twoSpeakers */
@@ -229,6 +234,8 @@ export interface ClipResult {
   hashtags?: string[];
   /** Cuplikan transkrip klip (≤ 2000 karakter); tidak ada bila kosong. */
   transcript?: string;
+  viralScore?: number | null;
+  hookText?: string | null;
 }
 
 /** Payload job BullMQ antrean `captions` (regenerasi caption satu klip). */
@@ -307,6 +314,7 @@ export interface FrameJobData {
   twoSpeakers: boolean;
   facecam: boolean;
   captions: boolean;
+  hookBanner?: boolean;
   captionSample: string;
   captionStyle?: CaptionStyle | null;
   outPath: string;
