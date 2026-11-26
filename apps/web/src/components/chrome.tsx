@@ -72,7 +72,7 @@ export function WorkspaceShell({ children, user }: { children: React.ReactNode; 
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const editorWorkspace = pathname === "/" || pathname.startsWith("/reference")
   return <div className="min-h-screen bg-background md:grid md:grid-cols-[184px_minmax(0,1fr)]">
-    <aside className="hidden border-r border-sidebar-border bg-sidebar px-3 py-5 md:flex md:min-h-screen md:flex-col">
+    <aside className="hidden border-r border-sidebar-border bg-sidebar px-3 py-5 md:sticky md:top-0 md:flex md:h-dvh md:flex-col md:self-start md:overflow-y-auto">
       <div><Brand/><nav aria-label={t.mainNavigation} className="mt-8 space-y-1">{navItems.map(({ to, exact, icon: Icon, key }) => <Link key={to} to={to} activeOptions={{ exact }} className="group relative flex min-h-10 items-center gap-3 rounded-md px-3 text-sm transition-colors" inactiveProps={{ className: "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" }} activeProps={{ className: "bg-accent/10 font-medium text-foreground before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-accent dark:bg-accent/15" }}><Icon className="size-4 group-data-[status=active]:text-accent" aria-hidden="true"/>{t[key]}</Link>)}</nav></div>
     </aside>
     <div className="flex min-h-screen min-w-0 flex-col">
