@@ -4,6 +4,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   url TEXT NOT NULL,
+  transcript_source TEXT NOT NULL DEFAULT 'youtube',
   status TEXT NOT NULL DEFAULT 'queued',
   stage TEXT,
   progress REAL NOT NULL DEFAULT 0,

@@ -481,6 +481,31 @@ impl JobParams {
 }
 tolerant!(JobParams, |v| Some(JobParams::from_value(v)));
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptSource {
+    #[default]
+    Youtube,
+    Auto,
+    LiveChatStt,
+}
+
+impl TranscriptSource {
+    fn from_value(value: &Value) -> Self {
+        match value
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "auto" => Self::Auto,
+            "live_chat_stt" => Self::LiveChatStt,
+            _ => Self::Youtube,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobData {
@@ -493,6 +518,7 @@ pub struct JobData {
     pub facecam: bool,
     pub aspect_ratio: AspectRatio,
     pub caption_language: String,
+    pub transcript_source: TranscriptSource,
     pub custom_hashtags: Vec<String>,
     pub max_source_sec: Option<u32>,
     pub description: Option<String>,
@@ -517,6 +543,7 @@ impl Default for JobData {
             facecam: false,
             aspect_ratio: AspectRatio::Portrait,
             caption_language: "auto".into(),
+            transcript_source: TranscriptSource::default(),
             custom_hashtags: vec![],
             max_source_sec: None,
             description: None,
@@ -597,6 +624,10 @@ impl JobData {
             ))
             .unwrap_or_default(),
             caption_language: to_caption_language(get(&["captionLanguage", "caption_language"])),
+            transcript_source: TranscriptSource::from_value(get(&[
+                "transcriptSource",
+                "transcript_source",
+            ])),
             custom_hashtags: to_custom_hashtags(get(&["customHashtags", "custom_hashtags"])),
             max_source_sec: max_source(get(&["maxSourceSec", "max_source_sec"])),
             description: text(&v["description"], 500),
@@ -777,12 +808,19 @@ pub struct PreviewRequest {
     pub params: JobParams,
     pub description: Option<String>,
     pub max_source_sec: Option<u32>,
+    pub transcript_source: TranscriptSource,
+    pub caption_language: String,
 }
 tolerant!(PreviewRequest, |v: &Value| Some(Self {
     url: v["url"].as_str().filter(|s| !s.trim().is_empty())?.into(),
     params: JobParams::from_value(v),
     description: text(&v["description"], 500),
-    max_source_sec: max_source(first(v, &["maxSourceSec", "max_source_sec"]))
+    max_source_sec: max_source(first(v, &["maxSourceSec", "max_source_sec"])),
+    transcript_source: TranscriptSource::from_value(first(
+        v,
+        &["transcriptSource", "transcript_source"]
+    )),
+    caption_language: to_caption_language(first(v, &["captionLanguage", "caption_language"])),
 }));
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PreviewResult {
@@ -885,6 +923,49 @@ mod tests {
         assert_eq!(
             serde_json::to_value(p).unwrap(),
             json!({"stage":"render","percent":100.,"clip":{"title":"Title","start":1.24,"end":3.24,"file":"clip-01.mp4","transcript":"words"}})
+        );
+    }
+}
+
+#[cfg(test)]
+mod transcript_source_tests {
+    use super::*;
+    #[test]
+    fn payloads_accept_both_keys_default_and_serialize_camel_case() {
+        for (key, value, expected) in [
+            ("transcriptSource", "auto", TranscriptSource::Auto),
+            (
+                "transcript_source",
+                " LIVE_CHAT_STT ",
+                TranscriptSource::LiveChatStt,
+            ),
+            (
+                "transcript_source",
+                "unsupported",
+                TranscriptSource::Youtube,
+            ),
+            ("irrelevant", "auto", TranscriptSource::Youtube),
+        ] {
+            let raw = serde_json::json!({"jobId":"a", "url":"https://example.com", (key):value, "caption_language":"id"});
+            let job = JobData::from_json(raw.clone()).unwrap();
+            let preview: PreviewRequest = serde_json::from_value(raw).unwrap();
+            assert_eq!(job.transcript_source, expected);
+            assert_eq!(preview.transcript_source, expected);
+            assert_eq!(preview.caption_language, "id");
+            let serialized = serde_json::to_value(expected).unwrap();
+            assert_eq!(
+                serde_json::to_value(job).unwrap()["transcriptSource"],
+                serialized
+            );
+            assert_eq!(
+                serde_json::to_value(preview).unwrap()["transcriptSource"],
+                serialized
+            );
+        }
+        assert_eq!(TranscriptSource::default(), TranscriptSource::Youtube);
+        assert_eq!(
+            serde_json::to_value(TranscriptSource::LiveChatStt).unwrap(),
+            "live_chat_stt"
         );
     }
 }

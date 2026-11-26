@@ -1,6 +1,9 @@
 use super::*;
 use anyhow::Context;
-use dartclip_core::llm::{LlmClient, LlmConfig, LlmEndpoint, LlmStatusTracker};
+use dartclip_core::{
+    llm::{LlmClient, LlmConfig, LlmEndpoint, LlmStatusTracker},
+    stt::SttConfig,
+};
 use serde::{Deserialize, Serialize};
 use std::{io::Write, time::Duration};
 
@@ -163,6 +166,55 @@ impl Store {
             },
         })
         .collect()
+    }
+    pub(crate) fn stt_config(&self) -> Option<SttConfig> {
+        let prefs = &self.prefs;
+        let secrets = &self.secrets;
+        if !prefs.nine_router_url.is_empty() && !secrets.nine_router_api_key.is_empty() {
+            return Some(SttConfig::new(
+                &prefs.nine_router_url,
+                &secrets.nine_router_api_key,
+            ));
+        }
+
+        let openai = !secrets.openai_api_key.is_empty();
+        let gemini = !secrets.gemini_api_key.is_empty();
+        if !(openai || gemini && !prefs.gemini_model.is_empty()) {
+            return None;
+        }
+        let (base_url, api_key, model) = if openai {
+            (
+                "https://api.openai.com/v1",
+                secrets.openai_api_key.as_str(),
+                "whisper-1",
+            )
+        } else {
+            ("", "", "")
+        };
+        let mut config = SttConfig::new(base_url, api_key);
+        config.model = model.into();
+        Some(if gemini {
+            config.with_fallback(
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                &secrets.gemini_api_key,
+                &prefs.gemini_model,
+            )
+        } else {
+            config.with_fallback("", "", "")
+        })
+    }
+    pub(crate) fn stt_status(&self) -> (bool, Option<String>) {
+        match self.stt_config() {
+            Some(cfg) if cfg.is_configured() => {
+                let model = if cfg.whisper_configured() {
+                    cfg.model
+                } else {
+                    cfg.fallback_model
+                };
+                (true, Some(model))
+            }
+            _ => (false, None),
+        }
     }
     fn view(&self, clips: &Path) -> Value {
         fn hint(key: &str) -> Option<String> {
@@ -341,9 +393,16 @@ pub(crate) async fn status(State(state): State<AppState>) -> Json<Value> {
         .tracker
         .as_ref()
         .and_then(|tracker| tracker.snapshot().last_call);
-    Json(
-        json!({"workerOnline":true,"configured":!providers.is_empty(), "model":providers.first().map(|p| &p.endpoint.model), "lastCall":last,"updatedAt":now()}),
-    )
+    let (stt_configured, stt_model) = store.stt_status();
+    Json(json!({
+        "workerOnline": true,
+        "configured": !providers.is_empty(),
+        "model": providers.first().map(|p| &p.endpoint.model),
+        "lastCall": last,
+        "updatedAt": now(),
+        "sttConfigured": stt_configured,
+        "sttModel": stt_model,
+    }))
 }
 pub(crate) async fn test(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let providers = state.settings().providers();

@@ -1,6 +1,6 @@
 import { Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
-import { PublicationStatus } from '@prisma/client';
+import { PublicationStatus, type Prisma } from '@prisma/client';
 import { Job, Queue } from 'bullmq';
 import { stat } from 'node:fs/promises';
 import type { PublishJobData } from '@clipper/shared';
@@ -28,6 +28,9 @@ import {
   PROCESSING_CHECK_DELAY_MS,
   PublishError,
   RECONNECT_MESSAGE,
+  coverAppliedFromOptions,
+  coverFilePathFromOptions,
+  coverTimestampFromOptions,
   shortsUrl,
   STALE_UPLOAD_MS,
   uploadPercent,
@@ -204,6 +207,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       );
     }
     const options = this.tiktokOptions(publication.options);
+    const coverTimestampMs = coverTimestampFromOptions(publication.options);
     if (mode === 'direct' && options.brandContent && publication.privacy === 'SELF_ONLY') {
       throw new PublishError('Branded content cannot use TikTok privacy SELF_ONLY');
     }
@@ -222,6 +226,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
             title: publication.caption,
             privacyLevel: publication.privacy,
             ...options,
+            videoCoverTimestampMs: coverTimestampMs ?? undefined,
           }
         : null,
       size,
@@ -270,12 +275,11 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
     if (!publication.externalId) return;
 
     if (publication.platform === 'youtube') {
+      let accessToken: string;
       let outcome;
       try {
-        outcome = await this.uploader.videoStatus(
-          await this.accessToken(publication.socialAccountId, 'youtube'),
-          publication.externalId,
-        );
+        accessToken = await this.accessToken(publication.socialAccountId, 'youtube');
+        outcome = await this.uploader.videoStatus(accessToken, publication.externalId);
       } catch (error) {
         if (error instanceof PublishError && error.transient && checks < MAX_PROCESSING_CHECKS) {
           await this.scheduleCheck(publicationId, checks + 1);
@@ -283,15 +287,35 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
         }
         throw error;
       }
-      if (outcome.state === 'published') return this.markPublished(publicationId);
       if (outcome.state === 'failed') {
         return this.markFailed(publicationId, outcome.reason, [PublicationStatus.processing]);
       }
-      if (checks >= MAX_PROCESSING_CHECKS) {
+      if (outcome.state !== 'published') {
+        if (checks < MAX_PROCESSING_CHECKS) return this.scheduleCheck(publicationId, checks + 1);
         this.logger.warn(`publikasi ${publicationId}: batas cek status tercapai, dianggap published`);
+      }
+
+      const coverFilePath = coverFilePathFromOptions(publication.options);
+      if (!coverFilePath || coverAppliedFromOptions(publication.options)) {
         return this.markPublished(publicationId);
       }
-      return this.scheduleCheck(publicationId, checks + 1);
+
+      const options = { ...asRecord(publication.options) };
+      try {
+        const absolutePath = resolveClipPath(this.config.clipsDir, coverFilePath);
+        if (!absolutePath) throw new PublishError('Cover thumbnail file is missing');
+        await this.uploader.setThumbnail(accessToken, publication.externalId, absolutePath);
+        options.coverApplied = true;
+        options.coverError = null;
+      } catch (error) {
+        if (error instanceof PublishError && error.transient && checks < MAX_PROCESSING_CHECKS) {
+          return this.scheduleCheck(publicationId, checks + 1);
+        }
+        const message = error instanceof PublishError ? error.message : 'Could not set the cover thumbnail';
+        this.logger.warn(`publikasi ${publicationId}: ${message}`);
+        options.coverError = message;
+      }
+      return this.markPublished(publicationId, options);
     }
 
     if (publication.platform === 'instagram') {
@@ -345,10 +369,10 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
     await this.scheduleCheck(publicationId, checks + 1);
   }
 
-  private async markPublished(publicationId: string): Promise<void> {
+  private async markPublished(publicationId: string, options?: Prisma.InputJsonObject): Promise<void> {
     await this.prisma.publication.updateMany({
       where: { id: publicationId, status: PublicationStatus.processing },
-      data: { status: PublicationStatus.published, publishedAt: new Date() },
+      data: { status: PublicationStatus.published, publishedAt: new Date(), ...(options && { options }) },
     });
   }
 
@@ -468,11 +492,13 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       publication.caption,
       publication.clip.hashtags,
     );
+    const coverTimestampMs = coverTimestampFromOptions(publication.options);
     const containerId = await this.instagramUploader.createContainer({
       accessToken,
       igUserId,
       videoUrl,
       caption,
+      thumbOffsetMs: coverTimestampMs ?? undefined,
     });
     await this.prisma.publication.updateMany({
       where: { id: publicationId, status: PublicationStatus.uploading },

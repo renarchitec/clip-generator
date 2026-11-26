@@ -1,7 +1,8 @@
 use crate::{
-    hook_thumbnail,
+    hook_thumbnail, live_chat,
     llm::{self, LlmClient},
     models::*,
+    stt::{self, SttConfig, Transcriber},
     subtitles,
     tools::{self, ToolPaths},
 };
@@ -13,7 +14,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::process::Command;
+use tokio::{process::Command, task::JoinSet};
 pub use tokio_util::sync::CancellationToken;
 
 pub type FacecamBox = (u32, u32, u32, u32);
@@ -89,6 +90,7 @@ pub struct Pipeline {
     pub config: PipelineConfig,
     faces: Arc<dyn FaceAnalyzer>,
     llm: Option<LlmClient>,
+    stt_config: Option<SttConfig>,
 }
 impl Pipeline {
     pub fn new(config: PipelineConfig) -> Self {
@@ -96,6 +98,7 @@ impl Pipeline {
             config,
             faces: Arc::new(NoopFaceAnalyzer),
             llm: None,
+            stt_config: None,
         }
     }
     pub fn with_face_analyzer(mut self, faces: Arc<dyn FaceAnalyzer>) -> Self {
@@ -105,6 +108,16 @@ impl Pipeline {
     pub fn with_llm(mut self, llm: LlmClient) -> Self {
         self.llm = Some(llm);
         self
+    }
+    pub fn with_stt(mut self, stt: SttConfig) -> Self {
+        self.stt_config = Some(stt);
+        self
+    }
+    fn transcriber(&self) -> Result<Transcriber> {
+        let cfg = self.stt_config.as_ref().filter(|cfg| cfg.is_configured()).ok_or_else(|| {
+            anyhow!("Transkripsi audio belum dikonfigurasi. Atur provider STT atau STT_BASE_URL dan STT_API_KEY.")
+        })?;
+        Transcriber::new(cfg.clone(), self.config.tools.clone())
     }
     fn workdir(&self, prefix: &str) -> Result<tempfile::TempDir> {
         let mut b = tempfile::Builder::new();
@@ -194,6 +207,14 @@ pub fn cut_crop_filter(segments: &[SpeakerSegment], w: u32, h: u32) -> String {
 pub fn panel_crop_filter(cx: f64) -> String {
     format!("crop=w='min(ih*1.125,in_w)':h='if(gt(ih*1.125,in_w),in_w*0.88889,ih)':x='max(0,min({:.5}*in_w-out_w/2,in_w-out_w))':y='max(0,(in_h-out_h)/2)',scale=1080:960,setsar=1",center(cx))
 }
+fn standard_video_filter(base: &str, subtitle: Option<&str>) -> String {
+    let mut filter = format!("setpts=PTS-STARTPTS,{base}");
+    if let Some(sub) = subtitle {
+        filter.push(',');
+        filter.push_str(sub);
+    }
+    filter
+}
 fn add_subtitles(
     mut graph: Vec<String>,
     base: &str,
@@ -213,7 +234,7 @@ pub fn two_speaker_graph(
 ) -> (Vec<String>, String) {
     add_subtitles(
         vec![
-            "[0:v]split=2[s0][s1]".into(),
+            "[0:v]setpts=PTS-STARTPTS,split=2[s0][s1]".into(),
             format!("[s0]{}[top]", panel_crop_filter(left)),
             format!("[s1]{}[bottom]", panel_crop_filter(right)),
             "[top][bottom]vstack=inputs=2[vstacked]".into(),
@@ -226,7 +247,7 @@ pub fn facecam_graph(
     (x, y, w, h): FacecamBox,
     subtitle_filter: Option<&str>,
 ) -> (Vec<String>, String) {
-    add_subtitles(vec!["[0:v]split=2[fc0][fc1]".into(),format!("[fc0]crop={w}:{h}:{x}:{y},scale=1080:840,setsar=1[top]"),"[fc1]crop=w='min(ih*1080/1080,in_w)':h=ih:x='(in_w-out_w)/2':y=0,scale=1080:1080,setsar=1[bot]".into(),"[top][bot]vstack=inputs=2[v]".into()],"[v]",subtitle_filter)
+    add_subtitles(vec!["[0:v]setpts=PTS-STARTPTS,split=2[fc0][fc1]".into(),format!("[fc0]crop={w}:{h}:{x}:{y},scale=1080:840,setsar=1[top]"),"[fc1]crop=w='min(ih*1080/1080,in_w)':h=ih:x='(in_w-out_w)/2':y=0,scale=1080:1080,setsar=1[bot]".into(),"[top][bot]vstack=inputs=2[v]".into()],"[v]",subtitle_filter)
 }
 pub fn chroma_key_filters(ck: &WatermarkChromaKey) -> Vec<String> {
     let hex = ck.color.trim_start_matches('#');
@@ -459,7 +480,7 @@ impl Pipeline {
         let abs_start = moment.start + options.timeline_offset;
         let abs_end = moment.end + options.timeline_offset;
         let clip_cues = if options.captions {
-            subtitles::clip_cues(cues, abs_start, abs_end)
+            subtitles::clip_caption_cues(cues, abs_start, abs_end)
         } else {
             vec![]
         };
@@ -524,17 +545,14 @@ impl Pipeline {
         } else if let Some(b) = facebox {
             facecam_graph(b, subtitle.as_deref())
         } else {
-            let mut vf = if landscape || reframe == ReframeMode::BlurredFill {
+            let vf = if landscape || reframe == ReframeMode::BlurredFill {
                 blurred_fill(w, h)
             } else if reframe == ReframeMode::BlackBars {
                 black_bars(w, h)
             } else {
                 format!("{},setsar=1", cut_crop_filter(&segments, w, h))
             };
-            if let Some(sub) = subtitle {
-                vf.push(',');
-                vf.push_str(&sub);
-            }
+            let vf = standard_video_filter(&vf, subtitle.as_deref());
             let graph = vec![format!("[0:v]{vf}[base]")];
             simple = Some(vf);
             (graph, "[base]".into())
@@ -707,6 +725,8 @@ impl Pipeline {
     }
 }
 
+const NO_LIVE_CHAT_LONG_VIDEO_ERROR: &str = "Live chat dan heatmap YouTube tidak tersedia. Transkripsi audio penuh dibatasi 20 menit; batasi durasi sumber atau pilih rentang secara manual.";
+const NO_STT_CUES_ERROR: &str = "Transkripsi audio tidak menemukan dialog yang bisa digunakan.";
 const NO_SUBTITLE_ERROR: &str = "Subtitle YouTube tidak tersedia untuk video ini.";
 const SECTION_FORMAT:&str="bv*[ext=mp4][protocol^=http]+ba[ext=m4a][protocol^=http]/bv*[ext=mp4][protocol^=http]+ba[ext=mp4][protocol^=http]/b[ext=mp4][protocol^=http]";
 const FULL_FORMAT: &str = "bv*[ext=mp4]+ba[ext=m4a]/bv*[ext=mp4]+ba[ext=mp4]/b[ext=mp4]/b";
@@ -811,6 +831,205 @@ impl Pipeline {
             }
         }
         bail!(NO_SUBTITLE_ERROR)
+    }
+    async fn optional_cues(
+        &self,
+        source: TranscriptSource,
+        url: &str,
+        dir: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<TranscriptCue>> {
+        if source == TranscriptSource::LiveChatStt {
+            return Ok(vec![]);
+        }
+        let result = self.fetch_cues(url, dir, cancel).await;
+        check_cancel(cancel)?;
+        match (source, result) {
+            (_, Ok(cues)) if !cues.is_empty() => Ok(cues),
+            (TranscriptSource::Youtube, Err(err)) => Err(err),
+            (TranscriptSource::Youtube, Ok(_)) => bail!(NO_SUBTITLE_ERROR),
+            _ => Ok(vec![]),
+        }
+    }
+    async fn video_metadata(
+        &self,
+        url: &str,
+        cancel: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        let mut cmd = self.ytdlp();
+        cmd.args([
+            "--dump-single-json",
+            "--skip-download",
+            "--no-warnings",
+            "--no-playlist",
+            "--",
+            url,
+        ]);
+        let out = tools::run(&mut cmd, Duration::from_secs(60), cancel).await?;
+        Ok(serde_json::from_slice(&out.stdout)?)
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn auto_stt<F, Fut>(
+        &self,
+        source: TranscriptSource,
+        url: &str,
+        dir: &Path,
+        video: Option<&Path>,
+        limit: Option<u32>,
+        clip_count: usize,
+        language: &str,
+        cancel: &CancellationToken,
+        mut progress: F,
+    ) -> Result<Vec<TranscriptCue>>
+    where
+        F: FnMut(JobProgress) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let transcriber = self.transcriber()?;
+        let stage = |percent, message| JobProgress {
+            stage: "transcribe".into(),
+            percent,
+            message,
+            clip: None,
+        };
+        progress(stage(0., "memindai live chat...".into())).await;
+        let meta = if video.is_none() {
+            self.video_metadata(url, cancel).await?
+        } else {
+            serde_json::Value::Null
+        };
+        let duration = if let Some(video) = video {
+            transcriber.duration(video, cancel).await?
+        } else {
+            live_chat::number(&meta["duration"]).unwrap_or_default()
+        };
+        let max_windows = clip_count.saturating_mul(2).clamp(6, 10);
+        let mut windows = live_chat::discover_windows(
+            url,
+            duration,
+            limit,
+            max_windows,
+            Some(&meta["heatmap"]),
+            cancel,
+        )
+        .await;
+        check_cancel(cancel)?;
+        if windows.is_empty() && video.is_some() {
+            if let Ok(meta) = self.video_metadata(url, cancel).await {
+                windows =
+                    live_chat::windows_from_heatmap(&meta["heatmap"], duration, limit, max_windows);
+            }
+            check_cancel(cancel)?;
+        }
+        if windows.is_empty() {
+            if let Some(window) = live_chat::full_audio_window(duration, limit) {
+                windows.push(window);
+            } else {
+                if source == TranscriptSource::LiveChatStt {
+                    // The worker makes one last VTT attempt for long sources with no radar data.
+                    let cues = self
+                        .optional_cues(TranscriptSource::Auto, url, dir, cancel)
+                        .await?;
+                    if !cues.is_empty() {
+                        progress(stage(100., format!("{} cue dari subtitle", cues.len()))).await;
+                        return Ok(cues);
+                    }
+                }
+                bail!(NO_LIVE_CHAT_LONG_VIDEO_ERROR);
+            }
+        }
+        let stream = stt::pick_hls_audio(&meta);
+        let total = windows.len();
+        let mut pending = windows.into_iter().enumerate();
+        let mut tasks = JoinSet::new();
+        let mut results: Vec<(usize, Result<Vec<TranscriptCue>>)> = Vec::new();
+        let mut completed = 0;
+        let spawn = |tasks: &mut JoinSet<_>, (i, (start, end))| {
+            let transcriber = transcriber.clone();
+            let (url, language, base, video, stream, cancel) = (
+                url.to_owned(),
+                language.to_owned(),
+                dir.to_owned(),
+                video.map(Path::to_owned),
+                stream.clone(),
+                cancel.clone(),
+            );
+            tasks.spawn(async move {
+                let result = async {
+                    let dir = tempfile::Builder::new()
+                        .prefix("stt-window-")
+                        .tempdir_in(&base)?;
+                    if let Some(video) = video {
+                        transcriber
+                            .media(
+                                &video,
+                                Some((start, end)),
+                                start,
+                                &language,
+                                dir.path(),
+                                &cancel,
+                            )
+                            .await
+                    } else {
+                        transcriber
+                            .remote_window(
+                                &url,
+                                stream.as_ref(),
+                                (start, end),
+                                &language,
+                                dir.path(),
+                                &cancel,
+                            )
+                            .await
+                    }
+                }
+                .await;
+                (i, result)
+            });
+        };
+        for window in pending.by_ref().take(stt::MAX_STT_WINDOW_CONCURRENCY) {
+            spawn(&mut tasks, window);
+        }
+        let mut join_error = None;
+        // Drain every sibling before returning an error, so the parent working directory stays alive.
+        while let Some(item) = tasks.join_next().await {
+            match item {
+                Ok((index, result)) => {
+                    if result.is_ok() {
+                        completed += 1;
+                        progress(stage(
+                            completed as f64 * 100. / total as f64,
+                            format!("mentranskrip segmen {completed}/{total}..."),
+                        ))
+                        .await;
+                    }
+                    results.push((index, result));
+                }
+                Err(err) => {
+                    join_error = Some(err);
+                }
+            }
+            if !cancel.is_cancelled() {
+                if let Some(window) = pending.next() {
+                    spawn(&mut tasks, window);
+                }
+            }
+        }
+        check_cancel(cancel)?;
+        if let Some(err) = join_error {
+            return Err(err.into());
+        }
+        results.sort_by_key(|(index, _)| *index);
+        let mut cues = Vec::new();
+        for (_, result) in results {
+            cues.extend(result?);
+        }
+        if cues.is_empty() {
+            bail!(NO_STT_CUES_ERROR)
+        }
+        cues.sort_by(|a, b| a.start.total_cmp(&b.start));
+        progress(stage(100., format!("{} cue dari audio", cues.len()))).await;
+        Ok(cues)
     }
     async fn stream_start(
         &self,
@@ -942,11 +1161,46 @@ impl Pipeline {
         request: &PreviewRequest,
         cancel: &CancellationToken,
     ) -> Result<PreviewResult> {
+        self.run_preview_with_progress(request, cancel, |_| std::future::ready(()))
+            .await
+    }
+    pub async fn run_preview_with_progress<F, Fut>(
+        &self,
+        request: &PreviewRequest,
+        cancel: &CancellationToken,
+        mut progress: F,
+    ) -> Result<PreviewResult>
+    where
+        F: FnMut(JobProgress) -> Fut,
+        Fut: Future<Output = ()>,
+    {
         validate_url(&request.url)?;
         let dir = self.workdir("preview-")?;
-        let cues = self.fetch_cues(&request.url, dir.path(), cancel).await?;
+        let mut cues = self
+            .optional_cues(request.transcript_source, &request.url, dir.path(), cancel)
+            .await?;
         if cues.is_empty() {
-            bail!(NO_SUBTITLE_ERROR);
+            cues = self
+                .auto_stt(
+                    request.transcript_source,
+                    &request.url,
+                    dir.path(),
+                    None,
+                    request.max_source_sec,
+                    request.params.clip_count,
+                    &request.caption_language,
+                    cancel,
+                    progress,
+                )
+                .await?;
+        } else {
+            progress(JobProgress {
+                stage: "transcribe".into(),
+                percent: 100.,
+                message: format!("{} cue dari subtitle", cues.len()),
+                clip: None,
+            })
+            .await;
         }
         let cues = within_limit(cues, request.max_source_sec);
         let candidates = self
@@ -1165,6 +1419,9 @@ impl Pipeline {
         let limit = (!manual).then_some(job.max_source_sec).flatten();
         let timeout = Duration::from_secs(1800);
         let mut full = None;
+        if job.transcript_source == TranscriptSource::LiveChatStt {
+            self.transcriber()?;
+        }
         let message = if manual {
             format!("mengunduh subtitle untuk {} rentang", valid_ranges.len())
         } else if let Some(n) = limit {
@@ -1194,11 +1451,13 @@ impl Pipeline {
                 );
             }
         }
-        let cues = self.fetch_cues(&job.url, dir.path(), cancel).await?;
+        let mut cues = self
+            .optional_cues(job.transcript_source, &job.url, dir.path(), cancel)
+            .await?;
         on_progress(stage(
             "download",
             100.,
-            if manual {
+            if manual && !cues.is_empty() {
                 "subtitle siap"
             } else {
                 "media siap dirender"
@@ -1208,18 +1467,36 @@ impl Pipeline {
         ))
         .await;
         check_cancel(cancel)?;
-        on_progress(stage("transcribe", 0., "menyiapkan transkrip".into(), None)).await;
-        if cues.is_empty() {
-            bail!(NO_SUBTITLE_ERROR);
+        let manual_stt = if cues.is_empty() && manual {
+            Some(self.transcriber()?)
+        } else {
+            None
+        };
+        if cues.is_empty() && !manual {
+            cues = self
+                .auto_stt(
+                    job.transcript_source,
+                    &job.url,
+                    dir.path(),
+                    full.as_deref(),
+                    limit,
+                    job.params.clip_count,
+                    &job.caption_language,
+                    cancel,
+                    &mut on_progress,
+                )
+                .await?;
+        } else if !cues.is_empty() {
+            on_progress(stage("transcribe", 0., "menyiapkan transkrip".into(), None)).await;
+            on_progress(stage(
+                "transcribe",
+                100.,
+                format!("{} cue dari subtitle", cues.len()),
+                None,
+            ))
+            .await;
         }
-        on_progress(stage(
-            "transcribe",
-            100.,
-            format!("{} cue dari subtitle", cues.len()),
-            None,
-        ))
-        .await;
-        let cues = within_limit(cues, limit);
+        let mut cues = within_limit(cues, limit);
         on_progress(stage("select", 0., "memilih momen".into(), None)).await;
         let moments = if manual {
             valid_ranges
@@ -1350,10 +1627,42 @@ impl Pipeline {
                 end: moment.end - offset,
                 ..moment.clone()
             };
+            let range_cues = if let Some(stt) = &manual_stt {
+                on_progress(stage(
+                    "transcribe",
+                    0.,
+                    format!("mentranskrip clip {n}/{total}..."),
+                    None,
+                ))
+                .await;
+                let bounds = section.is_none().then_some((moment.start, moment.end));
+                let speech = stt
+                    .media(
+                        video,
+                        bounds,
+                        moment.start,
+                        &job.caption_language,
+                        dir.path(),
+                        cancel,
+                    )
+                    .await?;
+                cues.extend(speech.iter().cloned());
+                on_progress(stage(
+                    "transcribe",
+                    100.,
+                    format!("{} cue dari audio", speech.len()),
+                    None,
+                ))
+                .await;
+                Some(speech)
+            } else {
+                None
+            };
+            let active_cues = range_cues.as_deref().unwrap_or(&cues);
             let file = format!("clip-{n:02}.mp4");
             let clip = outdir.join(&file);
             if let Some(b) = self
-                .render_window(video, &window, &cues, &clip, &opts, cached, cancel)
+                .render_window(video, &window, active_cues, &clip, &opts, cached, cancel)
                 .await?
             {
                 cached = Some(b);
@@ -1369,7 +1678,7 @@ impl Pipeline {
             if let Some(section) = section {
                 let _ = fs::remove_file(section);
             }
-            let transcript = llm::clip_transcript(&cues, moment.start, moment.end);
+            let transcript = llm::clip_transcript(active_cues, moment.start, moment.end);
             let result = ClipResult {
                 title: moment.title.clone(),
                 start: moment.start,
@@ -1486,6 +1795,78 @@ fn clean_frames(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preview_routes_sources_and_rejects_missing_stt_config() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ytdlp = dir.path().join("yt-dlp");
+        fs::write(
+            &ytdlp,
+            r#"#!/bin/sh
+case "$1" in --ffmpeg-location) shift 2;; esac
+output=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '-o' ]; then output="$2"; shift; fi
+  url="$1"
+  shift
+done
+case "$url" in
+  */vtt) printf 'WEBVTT\n\n00:05.000 --> 00:07.000\nSpeech\n' > "${output%.*}.en.vtt";;
+  */empty) printf 'WEBVTT\n' > "${output%.*}.en.vtt";;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&ytdlp, fs::Permissions::from_mode(0o755)).unwrap();
+        let tool_paths = ToolPaths {
+            ytdlp,
+            ffmpeg: "unused".into(),
+            ffprobe: "unused".into(),
+        };
+        let pipeline = Pipeline::new(PipelineConfig::new(tool_paths, dir.path()));
+        let cancel = CancellationToken::new();
+        for (source, url, expected) in [
+            ("youtube", "vtt", "LLM tidak dikonfigurasi"),
+            ("youtube", "empty", NO_SUBTITLE_ERROR),
+            ("auto", "vtt", "LLM tidak dikonfigurasi"),
+            ("auto", "empty", "STT_BASE_URL"),
+            ("auto", "missing", "STT_BASE_URL"),
+            ("live_chat_stt", "vtt", "STT_BASE_URL"),
+        ] {
+            let req = serde_json::from_value(serde_json::json!({"url":format!("https://example.test/{url}"), "transcriptSource":source})).unwrap();
+            let error = pipeline
+                .run_preview(&req, &cancel)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{source} {url}: {error}");
+        }
+    }
+
+    #[test]
+    fn caption_filters_reset_pts_before_burning_subtitles() {
+        let sf = Some("subtitles=caption.ass");
+        for base in [
+            black_bars(1080, 1920),
+            blurred_fill(1920, 1080),
+            cut_crop_filter(&[(0., 5., 0.5)], 1080, 1920),
+        ] {
+            let filter = standard_video_filter(&base, sf);
+            assert!(filter.starts_with("setpts=PTS-STARTPTS,"));
+            assert!(filter.ends_with(",subtitles=caption.ass"));
+        }
+        for (graph, output) in [
+            two_speaker_graph(0.25, 0.75, sf),
+            facecam_graph((10, 10, 200, 200), sf),
+        ] {
+            assert!(graph[0].starts_with("[0:v]setpts=PTS-STARTPTS,split"));
+            assert!(graph.last().unwrap().contains("subtitles=caption.ass"));
+            assert_eq!(output, "[vout]");
+        }
+        // Preview frames use render_one -> render_window, the same filter path.
+    }
+
     #[test]
     fn reframe_graphs_match_worker_dimensions() {
         assert_eq!(black_bars(1080,1920),"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1");

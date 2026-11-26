@@ -11,11 +11,12 @@ import logging
 import os
 import signal
 from datetime import datetime, timezone
+from typing import Mapping
 
 import redis.asyncio as redis
 from bullmq import Worker
 
-from . import llm, models, pipeline, reference_pipeline
+from . import llm, models, pipeline, stt
 
 log = logging.getLogger("clipper.worker")
 
@@ -30,15 +31,13 @@ CAPTION_CONCURRENCY = 2
 # Satu frame JPEG untuk posisi watermark di UI.
 FRAME_QUEUE_NAME = models.FRAME_QUEUE_NAME
 FRAME_CONCURRENCY = int(os.getenv("FRAME_CONCURRENCY", "1"))
+
+
 def clips_dir() -> str:
     return os.getenv("CLIPS_DIR", "/data/clips")
 
 
-# Reference Edit: antrean dan konkurensi worker tersendiri.
-REFERENCE_QUEUE_NAME = models.REFERENCE_QUEUE_NAME
-REFERENCE_CONCURRENCY = 1
 DEFAULT_CLIPS_DIR = clips_dir()
-DEFAULT_TEMP_ROOT = os.getenv("TEMP_ROOT") or None
 
 # Kunci status LLM untuk UI. Harus sama dengan apps/api/src/system/llm-status.constants.ts.
 LLM_STATUS_KEY = "worker:status:llm"
@@ -46,15 +45,19 @@ LLM_STATUS_TTL = 90
 LLM_STATUS_INTERVAL = 30
 
 
-def build_llm_status_payload() -> dict:
-    base_url = (os.getenv("LLM_BASE_URL") or "").strip()
-    api_key = (os.getenv("LLM_API_KEY") or "").strip()
-    model = (os.getenv("LLM_MODEL") or "").strip()
+def build_llm_status_payload(env: Mapping[str, str] | None = None) -> dict:
+    env = os.environ if env is None else env
+    base_url = env.get("LLM_BASE_URL", "").strip()
+    api_key = env.get("LLM_API_KEY", "").strip()
+    model = env.get("LLM_MODEL", "").strip()
     configured = bool(base_url and api_key and model)
+    stt_configured = stt.is_stt_configured(env)
 
     return {
         "configured": configured,
         "model": model or None,
+        "sttConfigured": stt_configured,
+        "sttModel": stt.stt_config(env).model if stt_configured else None,
         "lastCall": llm.last_llm_call(),
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -124,10 +127,18 @@ async def handle_job(job, token: str | None = None, redis_client: redis.Redis | 
 async def handle_preview_job(job, token: str | None = None, redis_client: redis.Redis | None = None):
     job_id = getattr(job, "id", None) or getattr(job, "jobId", None) or "preview"
     log.info("preview job %s mulai", job_id)
+
+    async def on_progress(stage: str, percent: float, message: str = "") -> None:
+        try:
+            await job.updateProgress(models.JobProgress(stage=stage, percent=percent, message=message).to_dict())
+        except Exception as exc:
+            log.warning("preview %s: gagal kirim progress: %s", job_id, exc)
+
     try:
         result = await pipeline.run_preview(
             job.data or {},
             temp_root=os.getenv("TEMP_ROOT") or None,
+            on_progress=on_progress,
         )
         log.info(
             "preview job %s selesai: %s kandidat, %s cue",
@@ -186,56 +197,6 @@ async def handle_frame_job(job, token: str | None = None, redis_client: redis.Re
         log.warning("frame job %s error tak terduga: %s", job_id, exc.__class__.__name__)
         raise RuntimeError("frame_render_failed") from None
     finally:
-        await write_llm_status(redis_client)
-
-
-async def handle_reference_job(
-    job,
-    _token: str | None = None,
-    *,
-    clips_dir: str = DEFAULT_CLIPS_DIR,
-    temp_root: str | None = DEFAULT_TEMP_ROOT,
-    redis_client: redis.Redis | None = None,
-):
-    """Job antrean reference-jobs: analisis referensi + footage, rencana, render."""
-    data = models.reference_job_data_from_dict(getattr(job, "data", None) or {})
-    log.info("reference job %s mulai (footage=%s)", data.job_id, len(data.footage))
-
-    async def should_cancel() -> bool:
-        if redis_client is None:
-            return False
-        try:
-            return bool(await redis_client.exists(models.CANCEL_KEY.format(data.job_id)))
-        except Exception as exc:
-            log.warning("gagal cek sinyal pembatalan: %s", exc)
-            return False
-
-    async def on_progress(progress: models.ReferenceJobProgress) -> None:
-        try:
-            await job.updateProgress(progress.to_dict())
-        except Exception as exc:  # progress gagal tidak boleh membatalkan render
-            log.warning("reference job %s: gagal kirim progress: %s", data.job_id, exc)
-
-    try:
-        result = await reference_pipeline.run_reference_job(
-            data,
-            clips_dir=clips_dir,
-            temp_root=temp_root,
-            on_progress=on_progress,
-            should_cancel=should_cancel,
-            env=os.environ,
-        )
-        log.info("reference job %s selesai: %s", data.job_id, result.output_file_path)
-        return result.to_dict()
-    except pipeline.JobCancelled:
-        log.info("reference job %s dihentikan aman karena dibatalkan", data.job_id)
-        raise
-    finally:
-        if redis_client is not None:
-            try:
-                await redis_client.delete(models.CANCEL_KEY.format(data.job_id))
-            except Exception:
-                pass
         await write_llm_status(redis_client)
 
 
@@ -328,23 +289,10 @@ async def main() -> None:
         },
     )
 
-    async def _handle_reference(job, token: str | None = None):
-        return await handle_reference_job(job, token, redis_client=redis_client)
-
-    reference_worker = Worker(
-        REFERENCE_QUEUE_NAME,
-        _handle_reference,
-        {
-            "connection": redis_client,
-            "concurrency": REFERENCE_CONCURRENCY,
-        },
-    )
-
-    log.info("worker menunggu job di antrean %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s)",
+    log.info("worker menunggu job di antrean %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s), %s (concurrency=%s)",
              QUEUE_NAME, CONCURRENCY, PREVIEW_QUEUE_NAME, PREVIEW_CONCURRENCY,
              CAPTION_QUEUE_NAME, CAPTION_CONCURRENCY,
-             FRAME_QUEUE_NAME, FRAME_CONCURRENCY,
-             REFERENCE_QUEUE_NAME, REFERENCE_CONCURRENCY)
+             FRAME_QUEUE_NAME, FRAME_CONCURRENCY)
     try:
         await stop.wait()
     finally:
@@ -359,7 +307,6 @@ async def main() -> None:
             preview_worker.close(),
             caption_worker.close(),
             frame_worker.close(),
-            reference_worker.close(),
             return_exceptions=True,
         )
 

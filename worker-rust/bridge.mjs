@@ -26,9 +26,32 @@ redis.on('error', () => {}); // Commands and the startup probe report failures.
 let queueRedis;
 let heartbeat;
 const envText = (name) => (process.env[name] || '').trim();
+const envUrl = (name) => envText(name).replace(/\/+$/, '');
+
+// Mirror SttConfig::from_env() until a Rust worker reports its status.
+function initialSttStatus() {
+  const llmUrl = envUrl('LLM_BASE_URL');
+  const llmKey = envText('LLM_API_KEY');
+  const sttUrl = envUrl('STT_BASE_URL') || llmUrl;
+  const sttKey = envText('STT_API_KEY') || llmKey;
+  const whisperModel = envText('STT_MODEL') || 'groq/whisper-large-v3-turbo';
+  const fallbackUrl = envUrl('STT_FALLBACK_BASE_URL') || llmUrl || sttUrl;
+  const fallbackKey = envText('STT_FALLBACK_API_KEY') || llmKey || sttKey;
+  const fallbackModel = process.env.STT_FALLBACK_MODEL === undefined
+    ? 'ag/gemini-4-hydrogen-low'
+    : envText('STT_FALLBACK_MODEL');
+  const whisperConfigured = Boolean(sttUrl.trim() && sttKey && whisperModel);
+  const fallbackConfigured = Boolean(fallbackUrl.trim() && fallbackKey && fallbackModel);
+  return {
+    sttConfigured: whisperConfigured || fallbackConfigured,
+    sttModel: whisperConfigured ? whisperModel : fallbackConfigured ? fallbackModel : null,
+  };
+}
+
 let llmStatus = {
   configured: ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL'].every(envText),
   model: envText('LLM_MODEL') || null,
+  ...initialSttStatus(),
   lastCall: null,
 };
 
@@ -39,15 +62,16 @@ function recordStatus(status) {
   llmStatus = {
     configured: status.configured,
     model: status.model ?? null,
+    sttConfigured: typeof status.sttConfigured === 'boolean' ? status.sttConfigured : llmStatus.sttConfigured,
+    sttModel: typeof status.sttModel === 'string' || status.sttModel === null ? status.sttModel : llmStatus.sttModel,
     lastCall: next && (!last || Date.parse(next.at) >= Date.parse(last.at)) ? next : last,
   };
 }
 
 async function publishStatus() {
   try {
-    const { configured, model, lastCall } = llmStatus;
     await redis.set(statusKey, JSON.stringify({
-      configured, model, lastCall, updatedAt: new Date().toISOString(),
+      ...llmStatus, updatedAt: new Date().toISOString(),
     }), 'EX', 90);
   } catch (error) {
     warn('gagal memperbarui status LLM di Redis', error);

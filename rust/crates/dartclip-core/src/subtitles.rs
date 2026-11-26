@@ -6,7 +6,7 @@ static TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:([0-9]+):)?([0-9]{1,3}):([0-9]{1,2})[.,]([0-9]{1,3})").unwrap()
 });
 static INLINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<[0-9]+(?::[0-9]+){1,2}[.,][0-9]+>").unwrap());
+    LazyLock::new(|| Regex::new(r"<(?:(?:[0-9]+):)?[0-9]{1,3}:[0-9]{1,2}[.,][0-9]{1,3}>").unwrap());
 static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]*>").unwrap());
 pub const WRAP_CHARS: usize = 18;
 pub const MAX_WORDS_PER_CUE: usize = 4;
@@ -24,50 +24,185 @@ fn parse_timestamp(s: &str) -> Option<f64> {
     };
     Some(n(1)? * 3600. + n(2)? * 60. + n(3)? + n(4)? / 10_f64.powi(m[4].len() as i32))
 }
+pub const MAX_TAIL_WORD_SEC: f64 = 1.2;
+static CAPTION_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[♪♫♬♩]+|[^\s♪♫♬♩]+").unwrap());
+static ANNOTATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[[^\]]*\]|\(([^()\[\]]{1,40})\)").unwrap());
+static CENSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:_+|\*+)$").unwrap());
+static MASKED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]+\*+[A-Za-z*]*|\*+[A-Za-z]+[A-Za-z*]*)$").unwrap());
+const EXPRESSIONS: &[&str] = &[
+    "tertawa",
+    "tawa",
+    "musik",
+    "tepuk tangan",
+    "bersorak",
+    "sorakan",
+    "menangis",
+    "tangisan",
+    "menghela napas",
+    "napas",
+    "batuk",
+    "berdeham",
+    "hening",
+    "diam",
+    "sensor",
+    "disensor",
+    "bleep",
+    "bip",
+    "efek suara",
+    "laughter",
+    "laughs",
+    "laughing",
+    "chuckles",
+    "giggles",
+    "music",
+    "singing",
+    "applause",
+    "cheering",
+    "cheers",
+    "clapping",
+    "crying",
+    "sobbing",
+    "sighs",
+    "sighing",
+    "gasps",
+    "groans",
+    "coughs",
+    "clears throat",
+    "silence",
+    "inaudible",
+    "unintelligible",
+    "crosstalk",
+    "censored",
+    "expletive",
+    "beep",
+    "sound effect",
+    "foreign",
+    "speaking foreign language",
+];
+
+// Offsets are byte offsets into the decoded text. Hidden tokens are returned
+// as well: in an inline cue they still delimit adjacent spoken words.
+pub(crate) fn caption_tokens(text: &str) -> Vec<(usize, &str, bool)> {
+    let mut tokens = Vec::new();
+    let mut cursor = 0;
+    fn push<'a>(out: &mut Vec<(usize, &'a str, bool)>, text: &'a str, start: usize, end: usize) {
+        for found in CAPTION_TOKEN.find_iter(&text[start..end]) {
+            let token = found.as_str();
+            let core = token.trim_matches(|c| ".,!?;:\"'()—–-".contains(c));
+            let hidden = token.starts_with(['♪', '♫', '♬', '♩'])
+                || token.chars().all(|c| ".,;:!?".contains(c))
+                || (core.len() >= 2 && CENSOR.is_match(core))
+                || MASKED.is_match(core);
+            out.push((start + found.start(), token, !hidden));
+        }
+    }
+    for m in ANNOTATION.captures_iter(text) {
+        if let Some(inner) = m.get(1) {
+            let expr = inner
+                .as_str()
+                .to_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !EXPRESSIONS.contains(&expr.as_str()) && !CENSOR.is_match(&expr) {
+                continue;
+            }
+        }
+        let m = m.get(0).unwrap();
+        push(&mut tokens, text, cursor, m.start());
+        tokens.push((m.start(), m.as_str(), false));
+        cursor = m.end();
+    }
+    push(&mut tokens, text, cursor, text.len());
+    tokens
+}
+
 pub fn sanitize(s: &str) -> String {
-    TAG.replace_all(s, " ")
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .split_whitespace()
+    let untagged = TAG.replace_all(s, " ");
+    let decoded = html_escape::decode_html_entities(&untagged);
+    caption_tokens(&decoded)
+        .into_iter()
+        .filter_map(|(_, token, keep)| keep.then_some(token))
         .collect::<Vec<_>>()
         .join(" ")
 }
-fn word_timing(body: &[&str], end: f64) -> Vec<Word> {
-    let mut words = Vec::new();
-    let mut current = None;
-    for l in body {
-        let mut from = 0;
-        let mut push = |chunk: &str, current: Option<f64>| {
-            for text in TAG.replace_all(chunk, " ").split_whitespace() {
-                let Some(start) = current else {
-                    return false;
-                };
-                words.push(Word {
+
+fn word_timing(body: &[&str], start: f64, end: f64) -> Vec<Word> {
+    let Some(first) = body.iter().position(|line| INLINE.is_match(line)) else {
+        return vec![];
+    };
+    let raw = body[first..].join(" ");
+    let mut text = String::new();
+    let mut offsets = Vec::new();
+    let mut current = start;
+    let mut cursor = 0;
+    for tag in TAG.find_iter(&raw) {
+        offsets.push((text.len(), current));
+        text.push_str(&html_escape::decode_html_entities(
+            &raw[cursor..tag.start()],
+        ));
+        text.push(' ');
+        if INLINE
+            .find(tag.as_str())
+            .is_some_and(|m| m.len() == tag.len())
+        {
+            current = parse_timestamp(tag.as_str()).unwrap_or(current);
+        }
+        cursor = tag.end();
+    }
+    offsets.push((text.len(), current));
+    text.push_str(&html_escape::decode_html_entities(&raw[cursor..]));
+    let mut words: Vec<_> = caption_tokens(&text)
+        .into_iter()
+        .map(|(pos, token, keep)| {
+            let start = offsets[offsets.partition_point(|&(off, _)| off <= pos) - 1].1;
+            (
+                Word {
                     start,
                     end: start,
-                    text: text.into(),
-                });
-            }
-            true
-        };
-        for m in INLINE.find_iter(l) {
-            if !push(&l[from..m.start()], current) {
-                return vec![];
-            }
-            current = parse_timestamp(m.as_str());
-            from = m.end();
+                    text: token.into(),
+                },
+                keep,
+            )
+        })
+        .collect();
+    let mut i = 0;
+    while i < words.len() {
+        let start = words[i].0.start;
+        let j = i
+            + 1
+            + words[i + 1..]
+                .iter()
+                .take_while(|(w, _)| w.start <= start)
+                .count();
+        let group_end = words
+            .get(j)
+            .map_or(end.min(start + MAX_TAIL_WORD_SEC).max(start), |(w, _)| {
+                w.start
+            });
+        // As in worker captions, tied words share the interval by character weight.
+        let total = words[i..j]
+            .iter()
+            .map(|(w, _)| w.text.chars().count() + 1)
+            .sum::<usize>() as f64;
+        let mut cursor = start;
+        for (word, _) in &mut words[i..j] {
+            word.start = cursor;
+            cursor += (group_end - start) * (word.text.chars().count() + 1) as f64 / total;
+            word.end = cursor;
         }
-        if !push(&l[from..], current) {
-            return vec![];
-        }
-    }
-    for i in 0..words.len() {
-        words[i].end = words.get(i + 1).map_or(end, |w| w.start);
+        words[j - 1].0.end = group_end;
+        i = j;
     }
     words
+        .into_iter()
+        .filter_map(|(w, keep)| keep.then_some(w))
+        .collect()
 }
+
 fn tokens(c: &Cue) -> Vec<&str> {
     if c.words.is_empty() {
         c.text.split_whitespace().collect()
@@ -78,22 +213,30 @@ fn tokens(c: &Cue) -> Vec<&str> {
 fn append(cues: &mut Vec<Cue>, mut cue: Cue) {
     if let Some(prev) = cues.last_mut() {
         if prev.text == cue.text {
-            prev.end = prev.end.max(cue.end);
+            if prev.words.is_empty() {
+                prev.end = prev.end.max(cue.end);
+            }
             return;
         }
         let a = tokens(prev);
         let b = tokens(&cue);
+        if cue.words.is_empty() && cue.duration() <= 0.05 + 1e-12 && b.ends_with(&a) {
+            return;
+        }
         if let Some(n) = (1..=a.len().min(b.len()))
             .rev()
             .find(|&n| a[a.len() - n..] == b[..n])
         {
             if n == b.len() {
-                prev.end = prev.end.max(cue.end);
+                if prev.words.is_empty() {
+                    prev.end = prev.end.max(cue.end);
+                }
                 return;
             }
             cue.text = b[n..].join(" ");
             if !cue.words.is_empty() {
                 cue.words.drain(..n);
+                cue.start = cue.words[0].start;
             }
         }
     }
@@ -109,17 +252,21 @@ pub fn parse_vtt(text: &str, word_level: bool) -> Vec<Cue> {
         let l = raw.trim();
         if let Some((left, right)) = l.split_once("-->") {
             let body = i;
-            while i < lines.len() && !lines[i].trim().is_empty() {
+            while i < lines.len() && !lines[i].is_empty() {
                 i += 1;
             }
             let times = parse_timestamp(left)
                 .zip(right.split_whitespace().next().and_then(parse_timestamp));
             if let Some((start, end)) = times.filter(|(s, e)| e > s) {
-                let words = if word_level {
-                    word_timing(&lines[body..i], end)
+                let timed = word_level && lines[body..i].iter().any(|line| INLINE.is_match(line));
+                let words = if timed {
+                    word_timing(&lines[body..i], start, end)
                 } else {
                     vec![]
                 };
+                if timed && words.is_empty() {
+                    continue;
+                }
                 let text = if words.is_empty() {
                     sanitize(&lines[body..i].join("\n"))
                 } else {
@@ -133,8 +280,8 @@ pub fn parse_vtt(text: &str, word_level: bool) -> Vec<Cue> {
                     append(
                         &mut cues,
                         Cue {
-                            start,
-                            end,
+                            start: words.first().map_or(start, |w| w.start),
+                            end: words.last().map_or(end, |w| w.end),
                             text,
                             words,
                         },
@@ -149,7 +296,7 @@ pub fn parse_vtt(text: &str, word_level: bool) -> Vec<Cue> {
                 .as_str(),
             "NOTE" | "STYLE" | "REGION"
         ) {
-            while i < lines.len() && !lines[i].trim().is_empty() {
+            while i < lines.len() && !lines[i].is_empty() {
                 i += 1;
             }
         }
@@ -194,29 +341,65 @@ pub fn clip_words(cues: &[Cue], start: f64, end: f64) -> Vec<Word> {
 pub fn clip_cues(cues: &[Cue], start: f64, end: f64) -> Vec<Cue> {
     cues.iter()
         .filter_map(|c| {
-            let s = c.start.max(start) - start;
-            let e = c.end.min(end) - start;
-            if e <= s {
-                return None;
-            }
-            let words = c
-                .words
-                .iter()
-                .cloned()
-                .filter_map(|mut w| {
-                    w.start = (w.start - start).max(0.);
-                    w.end = (w.end - start).min(end - start);
-                    (w.end > w.start).then_some(w)
-                })
-                .collect();
+            let words = clip_words(std::slice::from_ref(c), start, end);
             Some(Cue {
-                start: s,
-                end: e,
-                text: c.text.clone(),
+                start: words.first()?.start,
+                end: words.last()?.end,
+                text: words
+                    .iter()
+                    .map(|w| w.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 words,
             })
         })
         .collect()
+}
+
+fn render_words(cue: &Cue) -> Vec<Word> {
+    if cue.words.is_empty() {
+        return cue_to_words(&Cue {
+            text: sanitize(&cue.text),
+            ..cue.clone()
+        });
+    }
+    let mut text = String::new();
+    let mut offsets = Vec::new();
+    for word in &cue.words {
+        offsets.push(text.len());
+        text.push_str(&html_escape::decode_html_entities(&word.text));
+        text.push(' ');
+    }
+    let mut visible = vec![Vec::new(); cue.words.len()];
+    for (offset, token, keep) in caption_tokens(&text) {
+        if keep {
+            visible[offsets.partition_point(|&o| o <= offset) - 1].push(token);
+        }
+    }
+    cue.words
+        .iter()
+        .zip(visible)
+        .filter(|(_, tokens)| !tokens.is_empty())
+        .map(|(word, tokens)| Word {
+            text: tokens.join(" "),
+            ..word.clone()
+        })
+        .collect()
+}
+pub(crate) fn clip_caption_cues(cues: &[Cue], start: f64, end: f64) -> Vec<Cue> {
+    // Recognize annotations that cross the clip boundary before discarding their
+    // opening or closing tokens, without changing existing speech times.
+    let clean: Vec<_> = cues
+        .iter()
+        .filter_map(|cue| {
+            let words = render_words(cue);
+            (!words.is_empty()).then(|| Cue {
+                words,
+                ..cue.clone()
+            })
+        })
+        .collect();
+    clip_cues(&clean, start, end)
 }
 fn timestamp(t: f64) -> String {
     let cs = (t.max(0.) * 100.).round_ties_even() as u64;
@@ -256,7 +439,7 @@ fn render_parts(cues: &[Cue], max_words: usize, max_chars: usize) -> Vec<Vec<Wor
             end,
             ..(*cue).clone()
         };
-        for mut w in cue_to_words(&shortened) {
+        for mut w in render_words(&shortened) {
             w.start = w.start.max(cursor);
             w.end = w.end.min(end);
             if w.end <= w.start {
@@ -427,7 +610,7 @@ pub fn write_ass(
     std::fs::write(
         path,
         ass_text(
-            &clip_cues(cues, start, end),
+            &clip_caption_cues(cues, start, end),
             width,
             height,
             two_speakers,
@@ -439,6 +622,149 @@ pub fn write_ass(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spaces_and_rolling_lines_preserve_cue_start_and_cap_tail() {
+        let vtt = "WEBVTT\n\nNOTE\n \n00:01.000 --> 00:02.000\nignored\n\n\
+                   02:41.000 --> 02:43.000\n \nDean<02:42.239><c> KT.</c>\n\n\
+                   02:43.000 --> 02:43.010\nDean KT.\n\n\
+                   02:43.010 --> 02:50.000\nDean KT.\nAku<02:43.500><c> pergi</c>\n\n\
+                   02:50.000 --> 02:50.010\npergi\n\n\
+                   02:58.000 --> 02:58.500\n \nYa.\n";
+        let cues = parse_vtt(vtt, true);
+        assert_eq!(
+            cues.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+            ["Dean KT.", "Aku pergi", "Ya."]
+        );
+        assert_eq!((cues[0].start, cues[0].words[0].end), (161., 162.239));
+        assert_eq!(
+            (cues[1].start, cues[1].words[0].end, cues[1].end),
+            (163.01, 163.5, 164.7)
+        );
+        assert!(cues[2].words.is_empty());
+    }
+
+    #[test]
+    fn tied_words_and_suffix_snapshot() {
+        let vtt = "00:01.000 --> 00:02.000\nawal<00:01.500><c> kata</c>\n\n\
+                   00:02.000 --> 00:03.200\nawal kata\nkata<00:02.400><c> ada ada</c><00:03.000><c> lagi</c>\n\n\
+                   00:03.200 --> 00:03.210\nkata ada ada lagi\n \n";
+        let cues = parse_vtt(vtt, true);
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[1].text, "ada ada lagi");
+        assert_eq!(cues[1].start, 2.4);
+        assert!((cues[1].words[0].end - 2.7).abs() < 1e-10);
+        assert_eq!(cues[1].words[1].end, 3.);
+        let weighted = parse_vtt("00:01.0 --> 00:07.0\n<00:02.0>a longer<00:05.0>b", true);
+        assert!((weighted[0].words[0].end - (2. + 3. * 2. / 9.)).abs() < 1e-10);
+        assert_eq!(weighted[0].end, 6.2);
+    }
+
+    #[test]
+    fn annotations_censors_entities_and_hidden_word_boundaries() {
+        assert_eq!(sanitize("Halo [tertawa] [Musik] [laughter] [&nbsp;__&nbsp;] (APPLAUSE) (clears throat) (_) (***) ♪♫♬♩ f*** an***g __ *** b*tch! -*ck- ? , {kurung} &amp; (katanya) 2*3 &lt;3 &gt;2 &#39;ya&#39; &quot;oke&quot;"), "Halo {kurung} & (katanya) 2*3 <3 >2 'ya' \"oke\"");
+        for hidden in [
+            "[&nbsp;__&nbsp;]",
+            "[tertawa]",
+            "(tepuk tangan)",
+            "f***!",
+            "__",
+            "♪",
+        ] {
+            let vtt = format!("00:01.000 --> 00:04.000\nrollup\n{hidden}<00:01.500><c> sebelum</c><00:02.000><c> {hidden}</c><00:02.500><c> sesudah</c><00:03.000><c> [Musik]</c>");
+            let cues = parse_vtt(&vtt, true);
+            assert_eq!(cues[0].text, "sebelum sesudah");
+            assert_eq!(
+                cues[0]
+                    .words
+                    .iter()
+                    .map(|w| (w.start, w.end))
+                    .collect::<Vec<_>>(),
+                [(1.5, 2.), (2.5, 3.)]
+            );
+        }
+        assert!(parse_vtt(
+            "00:01.0 --> 00:04.0\nprior speech\n[Musik]<00:02.0><c> [__]</c>",
+            true
+        )
+        .is_empty());
+        let split = parse_vtt(
+            "00:01.0 --> 00:06.0\nHalo<00:02.0>[<00:02.5>__<00:03.0>]<00:04.0>lagi",
+            true,
+        );
+        assert_eq!(split[0].text, "Halo lagi");
+        assert_eq!((split[0].words[0].end, split[0].words[1].start), (2., 4.));
+    }
+
+    #[test]
+    fn clip_slices_words_and_discard_silence() {
+        let plain = Cue {
+            start: 0.,
+            end: 4.,
+            text: "aa bb cc dd".into(),
+            words: vec![],
+        };
+        let timed = Cue {
+            words: cue_to_words(&plain),
+            ..plain.clone()
+        };
+        for cue in [plain, timed] {
+            let c = clip_cues(&[cue], 1.5, 2.5);
+            assert_eq!(c[0].text, "bb cc");
+            assert_eq!(
+                c[0].words
+                    .iter()
+                    .map(|w| (w.start, w.end))
+                    .collect::<Vec<_>>(),
+                [(0., 0.5), (0.5, 1.)]
+            );
+        }
+        let cue = Cue {
+            start: 0.,
+            end: 20.,
+            text: "speech".into(),
+            words: vec![Word {
+                start: 6.,
+                end: 7.,
+                text: "speech".into(),
+            }],
+        };
+        assert!(clip_cues(std::slice::from_ref(&cue), 2., 5.).is_empty());
+        let c = clip_cues(&[cue], 5., 9.);
+        assert_eq!((c[0].start, c[0].end), (1., 2.));
+    }
+
+    #[test]
+    fn ass_filters_across_word_boundaries_without_moving_speech() {
+        let cue = Cue {
+            start: 0.,
+            end: 2.,
+            text: "[tertawa] halo [ __ ]".into(),
+            words: [
+                (0., 0.5, "[tertawa]"),
+                (0.5, 1., "halo"),
+                (1., 1.2, "["),
+                (1.2, 1.4, "__"),
+                (1.4, 2., "]"),
+            ]
+            .into_iter()
+            .map(|(start, end, text)| Word {
+                start,
+                end,
+                text: text.into(),
+            })
+            .collect(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.ass");
+        write_ass(&path, &[cue], 0., 2., 1080, 1920, false, None).unwrap();
+        let ass = std::fs::read_to_string(path).unwrap();
+        let events: Vec<_> = ass.lines().filter(|l| l.starts_with("Dialogue:")).collect();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].contains("0:00:00.50,0:00:01.00"));
+        assert!(events[0].contains("HALO"));
+        assert!(!events[0].contains(['[', ']']));
+    }
+
     #[test]
     fn youtube_rolling_and_inline_word_timings() {
         let v="WEBVTT\r\n\r\nNOTE skip\r\n00:01.0 --> 00:02.0\r\n\r\n1\r\n00:00.0 --> 00:02.0 align:start\r\n<00:00.100><c>hello</c> <00:01.200><c>there</c>\r\n\r\n00:02,0 --> 00:04,0\r\n<00:02.000>there <00:03.000>friend!";

@@ -3,7 +3,7 @@ use axum::{
     extract::{rejection::JsonRejection, Path as Param},
     response::sse::{Event, KeepAlive, Sse},
 };
-use dartclip_core::models::{AspectRatio, ClipResult, JobMode};
+use dartclip_core::models::{AspectRatio, ClipResult, JobMode, TranscriptSource};
 use rusqlite::{params, Connection};
 use std::convert::Infallible;
 
@@ -52,8 +52,21 @@ fn validate_params(raw: &Value) -> ApiResult<()> {
     }
     Ok(())
 }
-pub(crate) fn validate_preview(raw: &Value) -> ApiResult<()> {
-    validate_params(raw)
+pub(crate) fn validate_preview(raw: &Value) -> ApiResult<TranscriptSource> {
+    validate_params(raw)?;
+    transcript_source(&raw["transcriptSource"])
+}
+
+fn transcript_source(value: &Value) -> ApiResult<TranscriptSource> {
+    match value.as_str() {
+        Some("youtube") => Ok(TranscriptSource::Youtube),
+        Some("auto") => Ok(TranscriptSource::Auto),
+        Some("live_chat_stt") => Ok(TranscriptSource::LiveChatStt),
+        None if value.is_null() => Ok(TranscriptSource::default()),
+        _ => Err(ApiError::bad(
+            "transcriptSource must be youtube, auto, or live_chat_stt",
+        )),
+    }
 }
 
 async fn create(
@@ -63,6 +76,7 @@ async fn create(
     let Json(mut raw) = body.map_err(ApiError::bad)?;
     let url = source_url(&raw["url"])?;
     validate_params(&raw)?;
+    let source = transcript_source(&raw["transcriptSource"])?;
     let id = id();
     raw["jobId"] = json!(id);
     raw["url"] = json!(url);
@@ -81,6 +95,7 @@ async fn create(
     raw["watermarks"] = Value::Null;
     raw["outro"] = outro.clone();
     let mut job = JobData::from_json(raw).map_err(ApiError::bad)?;
+    job.transcript_source = source;
     if job.mode == JobMode::Manual {
         if job.ranges.is_empty()
             || job.ranges.len() > 10
@@ -127,7 +142,7 @@ fn enqueue(
         .as_ref()
         .map(|_| v["captionStyle"].to_string());
     let at = now();
-    db.execute("INSERT INTO jobs (id,url,mode,reframe,captions,two_speakers,facecam,aspect_ratio,caption_language,custom_hashtags_json,max_source_sec,description,clip_count,target_duration_sec,ranges_json,caption_style_json,watermark_json,outro_json,hook_banner,normalize_audio,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?21)", params![job.job_id, job.url, v["mode"].as_str(), v["reframe"].as_str(), job.captions, job.two_speakers, job.facecam, v["aspectRatio"].as_str(), job.caption_language, v["customHashtags"].to_string(), job.max_source_sec, job.description, job.params.clip_count, job.params.target_duration_sec, ranges, style, watermark.to_string(), outro.to_string(), job.hook_banner, job.normalize_audio, at])?;
+    db.execute("INSERT INTO jobs (id,url,mode,reframe,captions,two_speakers,facecam,aspect_ratio,caption_language,custom_hashtags_json,max_source_sec,description,clip_count,target_duration_sec,ranges_json,caption_style_json,watermark_json,outro_json,hook_banner,normalize_audio,created_at,updated_at,transcript_source) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?21,?22)", params![job.job_id, job.url, v["mode"].as_str(), v["reframe"].as_str(), job.captions, job.two_speakers, job.facecam, v["aspectRatio"].as_str(), job.caption_language, v["customHashtags"].to_string(), job.max_source_sec, job.description, job.params.clip_count, job.params.target_duration_sec, ranges, style, watermark.to_string(), outro.to_string(), job.hook_banner, job.normalize_audio, at, v["transcriptSource"].as_str()])?;
     let initial = db::snapshot(db, &job.job_id)?;
     state
         .0

@@ -22,6 +22,7 @@ export interface TiktokDirectPostInfo {
   disableStitch: boolean;
   brandContent: boolean;
   brandOrganic: boolean;
+  videoCoverTimestampMs?: number;
 }
 
 export interface TiktokPublishSession {
@@ -46,6 +47,7 @@ export class TiktokUploader {
       chunk_size: plan.chunkSize,
       total_chunk_count: plan.totalChunkCount,
     };
+    const coverTimestamp = post?.videoCoverTimestampMs;
     try {
       const data = await tiktokPost(
         mode === 'inbox'
@@ -63,6 +65,9 @@ export class TiktokUploader {
                 disable_stitch: post!.disableStitch,
                 brand_content_toggle: post!.brandContent,
                 brand_organic_toggle: post!.brandOrganic,
+                ...(typeof coverTimestamp === 'number' && Number.isFinite(coverTimestamp) && coverTimestamp >= 0
+                  ? { video_cover_timestamp_ms: Math.round(coverTimestamp) }
+                  : {}),
               },
               source_info: sourceInfo,
             },

@@ -6,16 +6,8 @@ import { AlertTriangle, CheckCircle2, CircleHelp, Cpu, LoaderCircle } from "luci
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { api } from "@/lib/api"
+import { api, type LlmStatus as LlmStatusData } from "@/lib/api"
 import { useLanguage, useT } from "@/lib/i18n"
-
-type LlmStatusData = {
-  workerOnline: boolean
-  configured: boolean
-  model: string | null
-  lastCall: null | { ok: boolean; at: string; error?: string }
-  updatedAt: string | null
-}
 
 type StatusState = "offline" | "unconfigured" | "failed" | "ready" | "untested" | "unavailable"
 
@@ -44,6 +36,11 @@ export function LlmStatus({ jobStatus, compact = false, prominent = false }: { j
   }, [jobStatus, queryClient])
   const data = query.data
   const state: StatusState = query.isError && !data ? "unavailable" : !data ? "unavailable" : !data.workerOnline ? "offline" : !data.configured ? "unconfigured" : data.lastCall?.ok === false ? "failed" : data.lastCall?.ok ? "ready" : "untested"
+  // Older backends, including the desktop local API, may omit STT status.
+  const sttStatus = data?.sttConfigured === true
+    ? `${t.sttConfigured}${data.sttModel ? ` · ${data.sttModel}` : ""}`
+    : data?.sttConfigured === false ? t.sttNotConfigured : null
+  const withSttStatus = (label: string) => sttStatus ? `${label} · ${sttStatus}` : label
   const labels: Record<StatusState, string> = {
     offline: t.llmWorkerOffline,
     unconfigured: t.llmNotConfigured,
@@ -69,11 +66,11 @@ export function LlmStatus({ jobStatus, compact = false, prominent = false }: { j
   )
 
   if (state === "offline" || state === "unconfigured" || state === "failed") {
-    if (compact && !prominent) return <p role="status" className="flex items-center gap-2 text-xs text-destructive"><span className="shrink-0">{icon}</span><span className="font-medium">{labels[state]}</span>{state === "failed" && <span className="min-w-0 truncate text-muted-foreground">{errorText} · {failedAt}</span>}{configureLink}</p>
-    if (prominent) return <Alert variant="destructive" className="rounded-md py-2"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <span className="truncate">{errorText} · {failedAt}</span>}{configureLink}</AlertDescription></Alert>
-    return <Alert variant="destructive" className="rounded-lg py-2.5"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <Tooltip><TooltipTrigger aria-label={`${t.llmFailed}: ${errorText}, ${t.llmFailureTime.toLowerCase()} ${failedAt}`} className="max-w-full cursor-help truncate rounded-sm text-left text-xs underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipContent></Tooltip>}{configureLink}</AlertDescription></Alert>
+    if (compact && !prominent) return <p role="status" className="flex items-center gap-2 text-xs text-destructive"><span className="shrink-0">{icon}</span><span className="font-medium">{labels[state]}</span>{state === "failed" && <span className="min-w-0 truncate text-muted-foreground">{errorText} · {failedAt}</span>}{sttStatus && <span className="text-muted-foreground">{sttStatus}</span>}{configureLink}</p>
+    if (prominent) return <Alert variant="destructive" className="rounded-md py-2"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <span className="truncate">{errorText} · {failedAt}</span>}{sttStatus && <span className="text-muted-foreground">{sttStatus}</span>}{configureLink}</AlertDescription></Alert>
+    return <Alert variant="destructive" className="rounded-lg py-2.5"><AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"><span className="inline-flex items-center gap-2 font-medium">{icon}{labels[state]}</span>{state === "failed" && <Tooltip><TooltipTrigger aria-label={`${t.llmFailed}: ${errorText}, ${t.llmFailureTime.toLowerCase()} ${failedAt}`} className="max-w-full cursor-help truncate rounded-sm text-left text-xs underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{errorText} · {t.llmFailureTime.toLowerCase()} {failedAt}</TooltipContent></Tooltip>}{sttStatus && <span className="text-muted-foreground">{sttStatus}</span>}{configureLink}</AlertDescription></Alert>
   }
 
-  if (compact) return <Tooltip><TooltipTrigger aria-label={`${labels[state]}${detail ? `, ${state === "ready" ? t.llmLastSuccess : ""} ${state === "ready" ? successAt : ""}` : ""}`} className="inline-flex min-h-8 max-w-full cursor-help items-center gap-1.5 text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className={state === "ready" ? "text-accent" : undefined}>{icon}</span><span className="truncate">{state === "ready" ? t.llmReady : labels[state]}</span></TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{detail ?? labels[state]}</TooltipContent></Tooltip>
-  return <Tooltip><TooltipTrigger aria-label={`${labels[state]}${detail ? `, ${state === "ready" ? t.llmLastSuccess : ""} ${state === "ready" ? successAt : ""}` : ""}`} className="inline-flex max-w-full cursor-help rounded-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Badge variant={state === "ready" ? "secondary" : "outline"} className="h-8 max-w-full gap-2 rounded-full px-3 text-xs font-normal">{state === "unavailable" ? icon : state === "untested" ? icon : state === "ready" ? icon : <Cpu aria-hidden="true" className="size-3.5"/>}<span className="truncate">{labels[state]}</span></Badge></TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{detail ?? labels[state]}</TooltipContent></Tooltip>
+  if (compact) return <Tooltip><TooltipTrigger aria-label={`${labels[state]}${detail ? `, ${state === "ready" ? t.llmLastSuccess : ""} ${state === "ready" ? successAt : ""}` : ""}`} className="inline-flex min-h-8 max-w-full cursor-help items-center gap-1.5 text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className={state === "ready" ? "text-accent" : undefined}>{icon}</span><span className="truncate">{state === "ready" ? t.llmReady : labels[state]}</span></TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{withSttStatus(labels[state])}{detail && <> · {detail}</>}</TooltipContent></Tooltip>
+  return <Tooltip><TooltipTrigger aria-label={`${labels[state]}${detail ? `, ${state === "ready" ? t.llmLastSuccess : ""} ${state === "ready" ? successAt : ""}` : ""}`} className="inline-flex max-w-full cursor-help rounded-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Badge variant={state === "ready" ? "secondary" : "outline"} className="h-8 max-w-full gap-2 rounded-full px-3 text-xs font-normal">{state === "unavailable" ? icon : state === "untested" ? icon : state === "ready" ? icon : <Cpu aria-hidden="true" className="size-3.5"/>}<span className="truncate">{labels[state]}</span></Badge></TooltipTrigger><TooltipContent side="top" className="max-w-sm whitespace-normal">{withSttStatus(labels[state])}{detail && <> · {detail}</>}</TooltipContent></Tooltip>
 }

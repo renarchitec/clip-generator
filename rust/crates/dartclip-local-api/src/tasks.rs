@@ -90,14 +90,15 @@ async fn create_preview(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let Json(mut raw) = body.map_err(ApiError::bad)?;
     raw["url"] = json!(source_url(&raw["url"])?);
-    jobs::validate_preview(&raw)?;
-    let req: PreviewRequest = serde_json::from_value(raw).map_err(ApiError::bad)?;
+    let transcript_source = jobs::validate_preview(&raw)?;
+    let mut req: PreviewRequest = serde_json::from_value(raw).map_err(ApiError::bad)?;
+    req.transcript_source = transcript_source;
     let permit = slot(&state.0.preview_slots, "Preview queue is busy")?;
     let id = id();
     insert(
         &state.0.previews,
         &id,
-        json!({"id":id,"url":req.url,"status":"queued","description":req.description,"error":null,"candidates":null,"cues":null}),
+        json!({"id":id,"url":req.url,"transcriptSource":req.transcript_source,"status":"queued","description":req.description,"error":null,"candidates":null,"cues":null}),
     );
     let task_id = id.clone();
     tokio::spawn(async move {

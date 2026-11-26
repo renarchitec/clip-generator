@@ -119,13 +119,16 @@ impl AppState {
         let mut config = PipelineConfig::new(tools, &self.0.config.clips_dir);
         config.temp_root = Some(self.0.config.data_dir.join("work"));
         config.font_dir = self.0.config.fonts_dir.clone();
-        let setup = {
+        let (providers, stt_config) = {
             let store = self.settings();
             config.video_encoder = store.encoder().to_owned();
-            store.providers()
+            (store.providers(), store.stt_config())
         };
         let mut pipeline = Pipeline::new(config).with_face_analyzer(Arc::new(OnnxFaceAnalyzer));
-        let llm = settings::PipelineLlm::new(setup).await?;
+        if let Some(stt) = stt_config {
+            pipeline = pipeline.with_stt(stt);
+        }
+        let llm = settings::PipelineLlm::new(providers).await?;
         if let Some(llm) = &llm {
             pipeline = pipeline.with_llm(llm.client.clone());
         }
@@ -198,7 +201,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/system/embed/youtube/{id}", get(youtube_embed))
         .route("/api/social/providers", get(empty))
         .route("/api/social/accounts", get(empty))
-        .route("/api/reference-jobs", get(empty))
         .merge(jobs::routes()).merge(media::routes()).merge(tasks::routes()).merge(assets::routes())
         .with_state(state)
         .layer(middleware::from_fn(check_origin))

@@ -101,9 +101,10 @@ async fn auth_runtime_tool_status_and_cors() {
         StatusCode::NOT_FOUND,
     )
     .await;
-    for path in ["/social/providers", "/social/accounts", "/reference-jobs"] {
+    for path in ["/social/providers", "/social/accounts"] {
         assert_eq!(ok(api.get(path)).await, json!([]));
     }
+    response(api.get("/reference-jobs"), StatusCode::NOT_FOUND).await;
     for origin in [
         "tauri://localhost",
         "http://tauri.localhost",
@@ -127,6 +128,45 @@ async fn auth_runtime_tool_status_and_cors() {
         StatusCode::FORBIDDEN,
     )
     .await;
+    api.stop();
+}
+
+#[tokio::test]
+async fn llm_status_reports_stt_configuration_and_provider_priority() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = Server::new(&dir).await;
+    for (patch, model) in [
+        (None, None),
+        (
+            Some(json!({"geminiApiKey":"test-gemini-key","geminiModel":"gemini-test-model"})),
+            Some("gemini-test-model"),
+        ),
+        (
+            Some(json!({"openaiApiKey":"test-openai-key"})),
+            Some("whisper-1"),
+        ),
+        (
+            Some(json!({"nineRouterApiKey":"test-router-key"})),
+            Some(dartclip_core::stt::DEFAULT_STT_MODEL),
+        ),
+        (
+            Some(json!({"nineRouterUrl":"","clearGeminiApiKey":true})),
+            Some("whisper-1"),
+        ),
+        (
+            Some(
+                json!({"clearOpenaiApiKey":true,"geminiApiKey":"test-gemini-key","geminiModel":""}),
+            ),
+            None,
+        ),
+    ] {
+        if let Some(patch) = patch {
+            ok(api.patch("/system/desktop-settings").json(&patch)).await;
+        }
+        let status = ok(api.get("/system/llm-status")).await;
+        assert_eq!(status["sttConfigured"], model.is_some());
+        assert_eq!(status.get("sttModel"), Some(&json!(model)));
+    }
     api.stop();
 }
 
@@ -341,6 +381,94 @@ async fn sse_frame(res: &mut reqwest::Response, buffer: &mut String) -> Value {
 }
 #[cfg(unix)]
 #[tokio::test]
+async fn transcript_source_is_validated_and_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    fake_tools(dir.path());
+    let api = Server::new(&dir).await;
+
+    for endpoint in ["/jobs", "/previews"] {
+        let error = data(
+            api.post(endpoint)
+                .json(&json!({"url":SOURCE,"transcriptSource":"invalid"})),
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
+        assert!(error.to_string().contains("transcriptSource"));
+    }
+
+    let preview = created(
+        api.post("/previews")
+            .json(&json!({"url":SOURCE,"transcriptSource":"auto"})),
+    )
+    .await;
+    let preview_path = format!("/previews/{}", preview["id"].as_str().unwrap());
+    assert_eq!(ok(api.get(&preview_path)).await["transcriptSource"], "auto");
+
+    let job = created(
+        api.post("/jobs")
+            .json(&json!({"url":SOURCE,"transcriptSource":"live_chat_stt"})),
+    )
+    .await;
+    let id = job["id"].as_str().unwrap();
+    let path = format!("/jobs/{id}");
+    assert_eq!(job["transcriptSource"], "live_chat_stt");
+    assert_eq!(
+        ok(api.get(&path)).await["transcriptSource"],
+        "live_chat_stt"
+    );
+    assert_eq!(
+        ok(api.get("/jobs")).await[0]["transcriptSource"],
+        "live_chat_stt"
+    );
+    let mut sse = response(api.get(&format!("{path}/events")), StatusCode::OK).await;
+    let snapshot = sse_frame(&mut sse, &mut String::new()).await;
+    assert_eq!(snapshot["transcriptSource"], "live_chat_stt");
+
+    created(api.post(&format!("{path}/cancel"))).await;
+    let retry = created(api.post(&format!("{path}/retry"))).await;
+    assert_ne!(retry["id"], job["id"]);
+    assert_eq!(retry["transcriptSource"], "live_chat_stt");
+    let retry_path = format!("/jobs/{}", retry["id"].as_str().unwrap());
+    assert_eq!(
+        ok(api.get(&retry_path)).await["transcriptSource"],
+        "live_chat_stt"
+    );
+    api.stop();
+}
+
+#[tokio::test]
+async fn existing_local_database_migrates_transcript_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    // When a Prisma database is present, the local API uses dartclip-local.db.
+    rusqlite::Connection::open(data_dir.join("dartclip.db"))
+        .unwrap()
+        .execute_batch("CREATE TABLE clips (jobId TEXT);")
+        .unwrap();
+    let db = rusqlite::Connection::open(data_dir.join("dartclip-local.db")).unwrap();
+    db.execute_batch(
+        &include_str!("../src/schema.sql")
+            .replace("  transcript_source TEXT NOT NULL DEFAULT 'youtube',\n", ""),
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO jobs (id,url,status,created_at,updated_at) VALUES ('old',?1,'done','2026-01-01','2026-01-01')",
+        [SOURCE],
+    )
+    .unwrap();
+    assert!(db.prepare("SELECT transcript_source FROM jobs").is_err());
+    drop(db);
+
+    let api = Server::new(&dir).await;
+    let old = ok(api.get("/jobs/old")).await;
+    assert_eq!(old["status"], "done");
+    assert_eq!(old["transcriptSource"], "youtube");
+    api.stop();
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn job_creation_sse_cancellation_retry_and_delete() {
     let dir = tempfile::tempdir().unwrap();
     fake_tools(dir.path());
@@ -350,6 +478,7 @@ async fn job_creation_sse_cancellation_retry_and_delete() {
     let id = job["id"].as_str().unwrap();
     let path = format!("/jobs/{id}");
     assert_eq!(job["status"], "queued");
+    assert_eq!(job["transcriptSource"], "youtube");
     assert_eq!(job["clips"], json!([]));
     assert_eq!(job["clipCount"], 2);
     assert_eq!(job["customHashtags"], json!(["Goal", "Cup"]));

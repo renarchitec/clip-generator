@@ -6,16 +6,34 @@ Tidak ada impor faster_whisper atau ffmpeg di sini supaya bisa dites murni.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from html import unescape
+from typing import Iterator, List, Optional, Sequence
 
 from .models import CaptionStyle
 
 # 00:00:01.000 / 0:01.000 / 01:02,5
 _TIMESTAMP_RE = re.compile(r"(?:(\d+):)?(\d{1,3}):(\d{1,2})[.,](\d{1,3})")
+_INLINE_TIMESTAMP_RE = re.compile(rf"<{_TIMESTAMP_RE.pattern}>")
 _TAG_RE = re.compile(r"<[^>]*>")
-_WS_RE = re.compile(r"\s+")
+_TOKEN_RE = re.compile(r"[♪♫♬♩]+|[^\s♪♫♬♩]+")
+_ANNOTATION_RE = re.compile(r"\[[^\]]*\]|\(([^()[\]]{1,40})\)")
+_CENSOR_MARK_RE = re.compile(r"_+|\*+")
+_MASKED_WORD_RE = re.compile(r"[A-Za-z]+\*+[A-Za-z*]*|\*+[A-Za-z]+[A-Za-z*]*")
+_ORPHAN_PUNCT_RE = re.compile(r"[.,;:!?]+")
+_EXPRESSION_TERMS = {
+    "tertawa", "tawa", "musik", "tepuk tangan", "bersorak", "sorakan",
+    "menangis", "tangisan", "menghela napas", "napas", "batuk", "berdeham",
+    "hening", "diam", "sensor", "disensor", "bleep", "bip", "efek suara",
+    "laughter", "laughs", "laughing", "chuckles", "giggles", "music", "singing",
+    "applause", "cheering", "cheers", "clapping", "crying", "sobbing", "sighs",
+    "sighing", "gasps", "groans", "coughs", "clears throat", "silence", "inaudible",
+    "unintelligible", "crosstalk", "censored", "expletive", "beep", "sound effect",
+    "foreign", "speaking foreign language",
+}
 _NON_CUE_BLOCKS = {"NOTE", "STYLE", "REGION"}
+MAX_TAIL_WORD_SEC = 1.2
 
 # Anton (condensed, huruf besar) jauh lebih lebar per karakter daripada DejaVu:
 # 4 kata / 18 karakter supaya takarir tetap satu baris di 1080px.
@@ -78,22 +96,43 @@ def _parse_timing(line: str) -> tuple[Optional[float], Optional[float]]:
     return _parse_timestamp(left), _parse_timestamp(end_token)
 
 
+def _caption_tokens(text: str) -> Iterator[tuple[int, str, bool]]:
+    """Yield each token's text offset and whether it should be displayed."""
+    def tokens(start: int, end: int) -> Iterator[tuple[int, str, bool]]:
+        for match in _TOKEN_RE.finditer(text, start, end):
+            token = match[0]
+            core = token.strip(".,!?;:\"'()—–-")
+            filtered = (
+                token[0] in "♪♫♬♩"
+                or _ORPHAN_PUNCT_RE.fullmatch(token)
+                or (len(core) >= 2 and _CENSOR_MARK_RE.fullmatch(core))
+                or _MASKED_WORD_RE.fullmatch(core)
+            )
+            yield match.start(), token, not filtered
+
+    cursor = 0
+    for match in _ANNOTATION_RE.finditer(text):
+        inner = match[1]
+        if inner is not None:
+            expression = " ".join(inner.lower().split())
+            if expression not in _EXPRESSION_TERMS and not _CENSOR_MARK_RE.fullmatch(expression):
+                continue
+        yield from tokens(cursor, match.start())
+        yield match.start(), match[0], False
+        cursor = match.end()
+    yield from tokens(cursor, len(text))
+
+
 def sanitize(text: str) -> str:
-    """Buang tag inline, rapikan spasi. Teks kosong jadi string kosong."""
+    """Remove VTT tags, annotations and censored words, and normalize whitespace."""
     if not text:
         return ""
-    cleaned = _TAG_RE.sub(" ", text)
-    cleaned = (
-        cleaned.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-    )
-    return _WS_RE.sub(" ", cleaned).strip()
+    cleaned = unescape(_TAG_RE.sub(" ", text))
+    return " ".join(token for _, token, keep in _caption_tokens(cleaned) if keep)
 
 
 def _is_auto_caption_line(line: str) -> bool:
-    return bool(_TIMESTAMP_RE.search(line))
+    return bool(_INLINE_TIMESTAMP_RE.search(line))
 
 
 def parse_vtt(text: str, word_level: bool = False) -> List[Cue]:
@@ -119,22 +158,25 @@ def parse_vtt(text: str, word_level: bool = False) -> List[Cue]:
             start, end = _parse_timing(line)
             index += 1
             body: List[str] = []
-            while index < total and lines[index].strip():
+            while index < total and lines[index] != "":
                 body.append(lines[index])
                 index += 1
-            words = _word_timing(body) if word_level else []
-            if words:
-                body_text = " ".join(word.text for word in words)
+            if start is None or end is None or end <= start:
+                continue
+            if word_level and any(_is_auto_caption_line(line) for line in body):
+                words = _word_timing(body, start, end)
+                if words:
+                    body_text = " ".join(word.text for word in words)
+                    _append_cue(cues, Cue(words[0].start, words[-1].end, body_text, words))
             else:
                 body_text = sanitize("\n".join(body))
-            if body_text and start is not None and end is not None and end > start:
-                _fill_word_ends(words, end)
-                _append_cue(cues, Cue(start=start, end=end, text=body_text, words=words))
+                if body_text:
+                    _append_cue(cues, Cue(start, end, body_text))
             continue
 
         keyword = line.split()[0].upper()
         if keyword in _NON_CUE_BLOCKS:
-            while index < total and lines[index].strip():
+            while index < total and lines[index] != "":
                 index += 1
             continue
 
@@ -149,11 +191,19 @@ def _append_cue(cues: List[Cue], cue: Cue) -> None:
     previous = cues[-1] if cues else None
     if previous is not None:
         if previous.text == cue.text:
-            previous.end = max(previous.end, cue.end)  # baris sama tampil lebih lama
+            if not previous.words:
+                previous.end = max(previous.end, cue.end)
             return
 
         prev_tokens = [word.text for word in previous.words] or previous.text.split()
         tokens = [word.text for word in cue.words] or cue.text.split()
+        if (
+            not cue.words
+            and cue.duration <= 0.05
+            and len(tokens) >= len(prev_tokens)
+            and tokens[-len(prev_tokens):] == prev_tokens
+        ):
+            return
         overlap = 0
         for size in range(min(len(prev_tokens), len(tokens)), 0, -1):
             if tokens[:size] == prev_tokens[-size:]:
@@ -162,42 +212,96 @@ def _append_cue(cues: List[Cue], cue: Cue) -> None:
         if overlap:
             remaining = tokens[overlap:]
             if not remaining:
-                previous.end = max(previous.end, cue.end)
+                if not previous.words:
+                    previous.end = max(previous.end, cue.end)
                 return
+            remaining_words = cue.words[overlap:]
             cue = Cue(
-                start=cue.start,
+                start=remaining_words[0].start if remaining_words else cue.start,
                 end=cue.end,
                 text=" ".join(remaining),
-                words=cue.words[overlap:] if cue.words else [],
+                words=remaining_words,
             )
     cues.append(cue)
 
 
-def _word_timing(lines: Sequence[str]) -> List[Word]:
-    """Timestamp inline per kata: "hi <00:01.500>there <00:02.000>you".
+def _word_timing(
+    lines: Sequence[str],
+    cue_start: Optional[float] = None,
+    cue_end: float = float("inf"),
+) -> List[Word]:
+    """Read inline timestamps, ignoring the previous line of rolling captions."""
+    first_ts_idx = next((i for i, line in enumerate(lines) if _is_auto_caption_line(line)), None)
+    if first_ts_idx is None:
+        return []
 
-    Hasil kosong bila cue tidak punya timestamp inline.
-    """
+    # Track offsets through tag removal so annotations can span inline timestamps.
+    chunks: List[str] = []
+    offsets: List[int] = []
+    starts: List[Optional[float]] = []
+    offset = 0
+    current = cue_start
+    raw = " ".join(lines[first_ts_idx:])
+    cursor = 0
+    for tag in _TAG_RE.finditer(raw):
+        chunk = unescape(raw[cursor:tag.start()])
+        offsets.append(offset)
+        starts.append(current)
+        chunks.append(chunk)
+        offset += len(chunk) + 1
+        if _INLINE_TIMESTAMP_RE.fullmatch(tag[0]):
+            current = _parse_timestamp(tag[0])
+        cursor = tag.end()
+    offsets.append(offset)
+    starts.append(current)
+    chunks.append(unescape(raw[cursor:]))
+
     words: List[Word] = []
-    current: Optional[float] = None
-    for line in lines:
-        for chunk in re.split(r"(<\d+(?::\d+){1,2}[.,]\d+>)", line):
-            if not chunk:
-                continue
-            if chunk.startswith("<") and _TIMESTAMP_RE.search(chunk):
-                current = _parse_timestamp(chunk)
-                continue
-            for word in _WS_RE.sub(" ", _TAG_RE.sub(" ", chunk)).split():
-                if current is None:
-                    return []  # timestamp inline tidak lengkap: pakai cue utuh
-                words.append(Word(start=current, end=current, text=word))
-    return words
+    visible: List[Word] = []
+    for token_offset, token, keep in _caption_tokens(" ".join(chunks)):
+        start = starts[bisect_right(offsets, token_offset) - 1]
+        if start is None:
+            return []
+        word = Word(start, start, token)
+        words.append(word)
+        if keep:
+            visible.append(word)
+    # A suppressed word still marks the end of the preceding spoken word.
+    if words:
+        _fill_word_ends(words, cue_end)
+    return visible
 
 
 def _fill_word_ends(words: Sequence[Word], cue_end: float) -> None:
-    """End tiap kata = start kata berikutnya; kata terakhir sampai cue_end."""
-    for index, word in enumerate(words):
-        word.end = words[index + 1].start if index + 1 < len(words) else cue_end
+    """End each word at the next start, splitting tied starts and capping tail silence."""
+    total = len(words)
+    index = 0
+    while index < total:
+        group_start = words[index].start
+        end_index = index + 1
+        while end_index < total and words[end_index].start <= group_start:
+            end_index += 1
+        if end_index < total:
+            group_end = max(group_start, words[end_index].start)
+        elif cue_end > group_start:
+            group_end = min(cue_end, group_start + MAX_TAIL_WORD_SEC)
+        else:
+            group_end = group_start
+
+        if end_index - index == 1:
+            words[index].end = group_end
+        else:
+            group = words[index:end_index]
+            weights = [len(word.text) + 1 for word in group]
+            weight_sum = float(sum(weights))
+            span = max(0.0, group_end - group_start)
+            cursor = group_start
+            for word, weight in zip(group, weights):
+                word.start = cursor
+                cursor += span * weight / weight_sum
+                word.end = cursor
+            group[-1].end = group_end
+        index = end_index
 
 
 def _timestamp(value: float) -> str:
@@ -258,6 +362,27 @@ def _non_overlapping_cues(cues: Sequence[Cue]) -> List[Cue]:
     return result
 
 
+def _render_words(cue: Cue) -> List[Word]:
+    if not cue.words:
+        return cue_to_words(Cue(cue.start, cue.end, sanitize(cue.text)))
+
+    # Filter across word boundaries as direct callers may split an annotation
+    # such as "[ __ ]" into separate timed words.
+    chunks = [unescape(word.text) for word in cue.words]
+    offsets = [0]
+    for chunk in chunks:
+        offsets.append(offsets[-1] + len(chunk) + 1)
+    visible: List[List[str]] = [[] for _ in cue.words]
+    for offset, token, keep in _caption_tokens(" ".join(chunks)):
+        if keep:
+            visible[bisect_right(offsets, offset) - 1].append(token)
+    return [
+        Word(word.start, word.end, " ".join(tokens))
+        for word, tokens in zip(cue.words, visible)
+        if tokens
+    ]
+
+
 def _render_cue_parts(
     cues: Sequence[Cue],
     max_words: int = MAX_WORDS_PER_CUE,
@@ -266,7 +391,7 @@ def _render_cue_parts(
     """Normalize overlaps and split oversized captions without losing word timing."""
     parts: List[Cue] = []
     for cue in _non_overlapping_cues(cues):
-        timed_words = cue_to_words(cue)
+        timed_words = _render_words(cue)
         words: List[Word] = []
         cursor = cue.start
         for word in timed_words:

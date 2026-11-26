@@ -2,7 +2,7 @@ import { useRuntime } from "@/lib/use-runtime"
 import { useId } from "react"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
-import { Film, Globe, Library, ListVideo, LogOut, Settings, WandSparkles } from "lucide-react"
+import { Film, Globe, Library, ListVideo, LogOut, Settings } from "lucide-react"
 import { isDesktopBuild } from "@/lib/desktop"
 import { api, type User } from "@/lib/api"
 import { useLanguage, useT } from "@/lib/i18n"
@@ -14,7 +14,6 @@ const navItems = [
   { to: "/", exact: true, icon: Film, key: "dashboard" },
   { to: "/jobs", exact: false, icon: ListVideo, key: "jobs" },
   { to: "/clips", exact: false, icon: Library, key: "clips" },
-  { to: "/reference", exact: false, icon: WandSparkles, key: "referenceEdit" },
 ] as const
 
 export function BrandMark({ className }: { className?: string }) {
@@ -58,7 +57,7 @@ function AccountMenu({ user }: { user: User }) {
 export function Topbar({ user }: { user?: User }) {
   const t = useT()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  const pageTitle = pathname.startsWith("/reference") ? t.referenceEdit : pathname === "/jobs/" || pathname === "/jobs" ? t.jobs : pathname.startsWith("/jobs/") ? t.jobDetails : pathname === "/clips" ? t.clips : pathname === "/settings" ? t.settings : t.dashboard
+  const pageTitle = pathname === "/jobs/" || pathname === "/jobs" ? t.jobs : pathname.startsWith("/jobs/") ? t.jobDetails : pathname === "/clips" ? t.clips : pathname === "/settings" ? t.settings : t.dashboard
   return <header className="sticky top-0 z-20 border-b border-border bg-background">
     <div className="px-4 sm:px-7">
       <div className="flex min-h-14 items-center justify-between gap-2">
@@ -73,7 +72,7 @@ export function Topbar({ user }: { user?: User }) {
 export function WorkspaceShell({ children, user }: { children: React.ReactNode; user: User }) {
   const t = useT()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  const editorWorkspace = pathname === "/" || pathname.startsWith("/reference")
+  const editorWorkspace = pathname === "/"
   return <div className="min-h-screen bg-background md:grid md:grid-cols-[184px_minmax(0,1fr)]">
     <aside className="hidden border-r border-sidebar-border bg-sidebar px-3 py-5 md:sticky md:top-0 md:flex md:h-dvh md:flex-col md:self-start md:overflow-y-auto">
       <div><Brand/><nav aria-label={t.mainNavigation} className="mt-8 space-y-1">{navItems.map(({ to, exact, icon: Icon, key }) => <Link key={to} to={to} activeOptions={{ exact }} className="group relative flex min-h-10 items-center gap-3 rounded-md px-3 text-sm transition-colors" inactiveProps={{ className: "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" }} activeProps={{ className: "bg-accent/10 font-medium text-foreground before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-accent dark:bg-accent/15" }}><Icon className="size-4 group-data-[status=active]:text-accent" aria-hidden="true"/>{t[key]}</Link>)}</nav></div>

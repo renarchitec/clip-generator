@@ -7,6 +7,7 @@ import glob
 import inspect
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-from . import llm
+from . import live_chat, llm, stt
 from . import reframe as reframe_mod
 from .hook_thumbnail import extract_cover_frame, prepend_hook_intro, render_hook_thumbnail
 from .models import (
@@ -28,12 +29,15 @@ from .models import (
     JobResult,
     ManualRange,
     Outro,
+    TranscriptSource,
     Watermark,
     WatermarkChromaKey,
     _first,
     _to_bool,
     job_data_from_dict,
+    to_caption_language,
     to_max_source_sec,
+    to_transcript_source,
 )
 from .subtitles import (
     MAX_WORDS_PER_CUE,
@@ -43,6 +47,7 @@ from .subtitles import (
     Cue,
     Word,
     clip_words,
+    cue_to_words,
     parse_vtt,
     write_ass,
 )
@@ -60,6 +65,14 @@ OUTPUT_SIZES = {
 }
 DEFAULT_MIN_FREE_GB = 5.0
 NO_SUBTITLE_ERROR = "Subtitle YouTube tidak tersedia untuk video ini."
+STT_NOT_CONFIGURED_ERROR = "Transkripsi audio belum dikonfigurasi di worker."
+NO_LIVE_CHAT_LONG_VIDEO_ERROR = (
+    "Live chat dan heatmap YouTube tidak tersedia. Transkripsi audio penuh dibatasi 20 menit; "
+    "batasi durasi sumber atau pilih rentang secara manual."
+)
+NO_STT_CUES_ERROR = "Transkripsi audio tidak menemukan dialog yang bisa digunakan."
+MAX_DIRECT_STT_SEC = 1200
+MAX_STT_WINDOW_CONCURRENCY = 4
 
 
 def _accepts_clip(callback) -> bool:
@@ -302,7 +315,7 @@ def _ensure_opencv_readable(path: str) -> str:
 
 
 async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
-    """yt-dlp: mp4 terbaik + subtitle asli; tanpa subtitle job gagal.
+    """Unduh video dan, sesuai sumber transkrip, subtitle YouTube.
 
     Mode manual: hanya subtitle yang diunduh di sini; section per rentang
     diunduh satu per satu oleh _download_one_section (dipanggil dari loop
@@ -322,11 +335,14 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
 
     # --- Mode manual: hanya ambil subtitle di sini; section diunduh streaming ---
     if ranges:
+        if job.transcript_source == "live_chat_stt":
+            return Downloaded()
         await _emit(on_progress, "download", 0, f"mengunduh subtitle untuk {len(ranges)} rentang")
         subtitles = await asyncio.to_thread(_fetch_subtitles, job.url, workdir)
-        if not subtitles:
+        if not subtitles and job.transcript_source == "youtube":
             raise RuntimeError(NO_SUBTITLE_ERROR)
-        await _emit(on_progress, "download", 100, "subtitle siap")
+        if subtitles:
+            await _emit(on_progress, "download", 100, "subtitle siap")
         return Downloaded(video=None, subtitles=subtitles)
 
     # --- Mode auto: section batas sumber atau video penuh ---
@@ -373,9 +389,11 @@ async def download(job: JobData, workdir: str, on_progress=None) -> Downloaded:
         if not video:
             raise RuntimeError("yt-dlp selesai tanpa menghasilkan file video")
 
-    subtitles = await asyncio.to_thread(_fetch_subtitles, job.url, workdir)
-    if not subtitles:
-        raise RuntimeError(NO_SUBTITLE_ERROR)
+    subtitles = None
+    if job.transcript_source != "live_chat_stt":
+        subtitles = await asyncio.to_thread(_fetch_subtitles, job.url, workdir)
+        if not subtitles and job.transcript_source == "youtube":
+            raise RuntimeError(NO_SUBTITLE_ERROR)
 
     await _emit(on_progress, "download", 100, "media siap dirender")
     return Downloaded(video=video, subtitles=subtitles)
@@ -445,6 +463,162 @@ async def _download_one_section(
     return path, item.start
 
 
+def _fetch_video_meta(url: str) -> Dict[str, Any]:
+    out = _run(["yt-dlp", "--dump-single-json", "--skip-download", "--no-warnings",
+                "--no-playlist", url], timeout=60)
+    meta = json.loads(out)
+    return meta if isinstance(meta, dict) else {}
+
+
+def _probe_duration(path: str) -> float:
+    out = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "csv=p=0", path], timeout=20)
+    return float(out.strip())
+
+
+def _pick_hls_audio_stream(meta: Mapping[str, Any]) -> Optional[Tuple[str, Dict[str, str]]]:
+    candidates = []
+    for fmt in meta.get("formats") or ():
+        if not isinstance(fmt, Mapping):
+            continue
+        url = fmt.get("url")
+        if (fmt.get("vcodec") != "none" or fmt.get("acodec") == "none"
+                or fmt.get("audio_ext") == "none" or "m3u8" not in str(fmt.get("protocol")).lower()
+                or not isinstance(url, str) or not url.strip()):
+            continue
+        bitrate = float("inf")
+        for key in ("abr", "tbr"):
+            try:
+                value = float(fmt.get(key))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                bitrate = value
+                break
+        candidates.append((bitrate, str(fmt.get("format_id") or ""), url, fmt.get("http_headers")))
+    if not candidates:
+        return None
+    _, _, url, headers = min(candidates, key=lambda item: item[:2])
+    return url, dict(headers) if isinstance(headers, Mapping) else {}
+
+
+def _extract_remote_hls_audio(
+    stream_url: str, headers: Mapping[str, str], start: float, end: float, outdir: str, index: int,
+) -> Optional[str]:
+    out_path = os.path.join(outdir, f"stt-hls-{index:02d}.mp3")
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+    if headers:
+        cmd += ["-headers", "".join(f"{key}: {value}\r\n" for key, value in headers.items())]
+    cmd += ["-ss", f"{start:.3f}", "-t", f"{max(0.5, end - start):.3f}", "-i", stream_url,
+            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k", out_path]
+    try:
+        _run(cmd, timeout=60)
+        if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+    except Exception as exc:
+        # ffmpeg errors may include the signed stream URL or request headers.
+        log.warning("gagal ekstrak audio HLS segmen %s (%s)", index, type(exc).__name__)
+    return None
+
+
+def _download_audio_section(url: str, start: float, end: float, outdir: str, index: int) -> Optional[str]:
+    cmd = _yt_dlp_base(sections=True)
+    cmd[cmd.index("-f") + 1] = "ba[ext=m4a]/ba/b"
+    merge_option = cmd.index("--merge-output-format")
+    del cmd[merge_option:merge_option + 2]
+    prefix = f"stt-section-{index:02d}"
+    cmd += ["--download-sections", f"*{start:.3f}-{end:.3f}",
+            "-o", os.path.join(outdir, prefix + ".%(ext)s"), url]
+    try:
+        _run(cmd, timeout=300)
+    except Exception as exc:
+        log.warning("gagal unduh audio segmen %s: %s", index, exc)
+        return None
+    return next((path for path in sorted(glob.glob(os.path.join(outdir, prefix + ".*")))
+                 if os.path.isfile(path) and path.lower().endswith(
+                     (".m4a", ".mp4", ".webm", ".opus", ".ogg", ".mp3", ".aac", ".mkv", ".ts", ".wav")
+                 )), None)
+
+
+async def _transcribe_auto_windows(
+    url: str, workdir: str, local_video: Optional[str], max_source_sec: Optional[int],
+    clip_count: int, transcript_source: TranscriptSource, caption_language: str, on_progress=None,
+) -> List[Cue]:
+    if not stt.is_stt_configured():
+        raise RuntimeError(STT_NOT_CONFIGURED_ERROR)
+
+    log.debug("memindai kandidat transkripsi untuk mode %s", transcript_source)
+    await _emit(on_progress, "transcribe", 0, "memindai live chat...")
+    meta: Dict[str, Any] = {}
+    if local_video:
+        duration = await asyncio.to_thread(_probe_duration, local_video)
+    else:
+        meta = await asyncio.to_thread(_fetch_video_meta, url)
+        try:
+            duration = float(meta.get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0.0
+    options = {"max_source_sec": max_source_sec, "max_windows": min(10, max(6, clip_count * 2))}
+    windows = await asyncio.to_thread(live_chat.probe_live_chat_windows, url, duration, **options)
+    if not windows:
+        if local_video:
+            try:
+                meta = await asyncio.to_thread(_fetch_video_meta, url)
+            except Exception as exc:
+                log.warning("heatmap sumber tidak dapat diambil: %s", exc)
+        windows = live_chat.windows_from_heatmap(meta.get("heatmap"), duration, **options)
+    if not windows:
+        effective_end = min(duration, float(max_source_sec)) if max_source_sec else duration
+        if not math.isfinite(duration) or not 0 < effective_end <= MAX_DIRECT_STT_SEC:
+            raise RuntimeError(NO_LIVE_CHAT_LONG_VIDEO_ERROR)
+        windows = [(0.0, effective_end)]
+
+    hls_stream = _pick_hls_audio_stream(meta) if not local_video else None
+    total = len(windows)
+    completed = 0
+    slots = asyncio.Semaphore(MAX_STT_WINDOW_CONCURRENCY)
+    progress_lock = asyncio.Lock()
+
+    async def transcribe_window(index: int, start: float, end: float) -> List[Cue]:
+        nonlocal completed
+        async with slots:
+            if local_video:
+                segment = await asyncio.to_thread(
+                    stt.transcribe_media_file, local_video, workdir,
+                    start=start, end=end, offset_sec=start, language=caption_language,
+                )
+            else:
+                path = None
+                if hls_stream:
+                    path = await asyncio.to_thread(_extract_remote_hls_audio, *hls_stream,
+                                                   start, end, workdir, index)
+                if not path:
+                    path = await asyncio.to_thread(_download_audio_section, url, start, end, workdir, index)
+                segment = await asyncio.to_thread(
+                    stt.transcribe_media_file, path, workdir, offset_sec=start, language=caption_language,
+                ) if path else []
+            async with progress_lock:
+                completed += 1
+                await _emit(on_progress, "transcribe", completed * 100 / total,
+                            f"mentranskrip segmen {completed}/{total}...")
+            return segment
+
+    # Wait for siblings even if one fails so the caller cannot remove their workdir early.
+    results = await asyncio.gather(
+        *(transcribe_window(index, start, end) for index, (start, end) in enumerate(windows, 1)),
+        return_exceptions=True,
+    )
+    cues: List[Cue] = []
+    for segment in results:
+        if isinstance(segment, BaseException):
+            raise segment
+        cues.extend(segment)
+    if not cues:
+        raise RuntimeError(NO_STT_CUES_ERROR)
+    await _emit(on_progress, "transcribe", 100, f"{len(cues)} cue dari audio")
+    return sorted(cues, key=lambda cue: cue.start)
+
+
 def _read_vtt(path: str) -> List[Cue]:
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         return parse_vtt(handle.read(), word_level=True)
@@ -478,7 +652,7 @@ def _cues_within_limit(cues: Sequence[Cue], max_source_sec: Optional[int]) -> Li
 
 
 async def transcribe(subtitles: Optional[str], on_progress=None) -> List[Cue]:
-    """Caption selalu dari subtitle asli YouTube; tanpa subtitle = job gagal."""
+    """Baca transkrip subtitle asli YouTube atau laporkan subtitle tidak tersedia."""
     await _emit(on_progress, "transcribe", 0, "menyiapkan transkrip")
 
     if not subtitles or not os.path.exists(subtitles):
@@ -490,6 +664,41 @@ async def transcribe(subtitles: Optional[str], on_progress=None) -> List[Cue]:
 
     await _emit(on_progress, "transcribe", 100, f"{len(cues)} cue dari subtitle")
     return cues
+
+
+async def _optional_youtube_cues(subtitles: Optional[str], on_progress=None) -> List[Cue]:
+    if not subtitles:
+        return []
+    await _emit(on_progress, "transcribe", 0, "menyiapkan transkrip")
+    try:
+        cues = await asyncio.to_thread(_read_vtt, subtitles)
+    except OSError:
+        return []
+    if cues:
+        await _emit(on_progress, "transcribe", 100, f"{len(cues)} cue dari subtitle")
+    return cues
+
+
+async def _auto_job_cues(
+    transcript_source: TranscriptSource, url: str, workdir: str, local_video: Optional[str],
+    subtitles: Optional[str], max_source_sec: Optional[int], clip_count: int,
+    caption_language: str, on_progress=None,
+) -> List[Cue]:
+    if transcript_source == "auto":
+        cues = await _optional_youtube_cues(subtitles, on_progress)
+        if cues:
+            return cues
+    try:
+        return await _transcribe_auto_windows(url, workdir, local_video, max_source_sec, clip_count,
+                                              transcript_source, caption_language, on_progress)
+    except RuntimeError as exc:
+        if transcript_source != "live_chat_stt" or str(exc) != NO_LIVE_CHAT_LONG_VIDEO_ERROR:
+            raise
+        path = await asyncio.to_thread(_fetch_subtitles, url, workdir)
+        cues = await _optional_youtube_cues(path, on_progress)
+        if cues:
+            return cues
+        raise
 
 
 def _moments_from_ranges(cues: Sequence[Cue], ranges) -> List[llm.Moment]:
@@ -545,19 +754,14 @@ def _clip_cues(cues: Sequence[Cue], start: float, end: float) -> List[Cue]:
     limit = max(0.0, end - start)
     relative: List[Cue] = []
     for cue in cues:
-        if cue.end <= start or cue.start >= end:
-            continue
-        cue_start = max(0.0, cue.start - start)
-        cue_end = min(limit, cue.end - start)
-        if cue_end <= cue_start:
-            continue
         words: List[Word] = []
-        for word in cue.words:
+        for word in cue.words or cue_to_words(cue):
             word_start = max(0.0, word.start - start)
             word_end = min(limit, word.end - start)
             if word_end > word_start:
                 words.append(Word(start=word_start, end=word_end, text=word.text))
-        relative.append(Cue(start=cue_start, end=cue_end, text=cue.text, words=words))
+        if words:
+            relative.append(Cue(words[0].start, words[-1].end, " ".join(w.text for w in words), words))
     return relative
 
 
@@ -576,8 +780,10 @@ def _reframe_filters(
     Mode centered (black_bars, blurred_fill) lewat tanpa deteksi frame.
     face_tracking memanggil MediaPipe; dep hilang -> raise RuntimeError.
     """
+    reset_pts = "setpts=PTS-STARTPTS"
     if reframe == "black_bars" and not landscape:
         return [
+            reset_pts,
             f"scale={width}:{height}:force_original_aspect_ratio=decrease",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black",
             "setsar=1",
@@ -586,6 +792,7 @@ def _reframe_filters(
     # bar hitam, tapi potongan video yang sama diburamkan di belakangnya.
     if reframe == "blurred_fill" or landscape:
         return [
+            reset_pts,
             (
                 f"split=2[fg][bg];"
                 f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -600,8 +807,8 @@ def _reframe_filters(
     # Default / fallback eksplisit: face_tracking (cut per pembicara aktif)
     segments = reframe_mod.face_track_samples(video, moment.start, moment.end)
     if segments:
-        return [reframe_mod.cut_crop_filter(segments, width, height), "setsar=1"]
-    return [reframe_mod.portrait_crop_filter(0.5, width, height), "setsar=1"]
+        return [reset_pts, reframe_mod.cut_crop_filter(segments, width, height), "setsar=1"]
+    return [reset_pts, reframe_mod.portrait_crop_filter(0.5, width, height), "setsar=1"]
 
 
 def _two_speaker_graph(
@@ -618,7 +825,7 @@ def _two_speaker_graph(
     centers = reframe_mod.two_speaker_centers(video, moment.start, moment.end)
     left, right = centers if centers else (0.25, 0.75)
     graph = [
-        "[0:v]split=2[s0][s1]",
+        "[0:v]setpts=PTS-STARTPTS,split=2[s0][s1]",
         f"[s0]{reframe_mod.panel_crop_filter(left)}[top]",
         f"[s1]{reframe_mod.panel_crop_filter(right)}[bottom]",
         "[top][bottom]vstack=inputs=2[vstacked]",
@@ -747,7 +954,7 @@ def _facecam_graph(
     game_h = reframe_mod.FACECAM_GAMEPLAY_H
     x, y, w, h = box
     graph = [
-        "[0:v]split=2[fc0][fc1]",
+        "[0:v]setpts=PTS-STARTPTS,split=2[fc0][fc1]",
         f"[fc0]crop={w}:{h}:{x}:{y},scale={panel_w}:{panel_h},setsar=1[top]",
         f"[fc1]crop=w='min(ih*{panel_w}/{game_h},in_w)':h=ih:x='(in_w-out_w)/2':y=0,scale={panel_w}:{game_h},setsar=1[bot]",
         "[top][bot]vstack=inputs=2[v]",
@@ -1444,11 +1651,13 @@ async def render(
 async def render_manual(
     job: JobData,
     moments: Sequence[llm.Moment],
-    subs: Sequence[Cue],
+    subs: List[Cue],
     outdir: str,
     workdir: str,
     on_progress=None,
     should_cancel=None,
+    *,
+    use_stt_per_range: bool = False,
 ) -> List[ClipResult]:
     """Mode manual: unduh satu section → validasi → render → hapus, per rentang.
 
@@ -1462,6 +1671,8 @@ async def render_manual(
     """
     if not moments:
         raise ValueError("tidak ada momen untuk dirender")
+    if use_stt_per_range and not stt.is_stt_configured():
+        raise RuntimeError(STT_NOT_CONFIGURED_ERROR)
 
     os.makedirs(outdir, exist_ok=True)
     _clear_facecam_cache()
@@ -1528,8 +1739,21 @@ async def render_manual(
             raise RuntimeError("sumber video tidak tersedia untuk render")
 
         try:
+            range_cues = subs
+            if use_stt_per_range:
+                await _emit(on_progress, "transcribe", (index - 1) * 100 / total,
+                            f"mentranskrip segmen {index}/{total}...")
+                bounds = {} if section is not None else {"start": moment.start, "end": moment.end}
+                range_cues = await asyncio.to_thread(
+                    stt.transcribe_media_file, src_video, workdir, **bounds,
+                    offset_sec=offset if section is not None else moment.start,
+                    language=job.caption_language,
+                )
+                subs.extend(range_cues)
+                await _emit(on_progress, "transcribe", index * 100 / total,
+                            f"segmen {index}/{total} ditranskrip")
             clip = await asyncio.to_thread(
-                _render_clip_sync, job, moment, subs, src_video, filename, outdir, offset
+                _render_clip_sync, job, moment, range_cues, src_video, filename, outdir, offset
             )
         finally:
             # Section besar (ratusan MB) dibuang segera setelah dipakai.
@@ -1636,7 +1860,16 @@ async def run_job(
         await _check_cancel(should_cancel)
         media = await download(job, workdir, on_progress)
         await _check_cancel(should_cancel)
-        cues = await transcribe(media.subtitles, on_progress)
+        use_stt_per_range = False
+        if job.transcript_source == "youtube":
+            cues = await transcribe(media.subtitles, on_progress)
+        elif job.mode == "manual":
+            cues = await _optional_youtube_cues(media.subtitles, on_progress)
+            use_stt_per_range = not cues
+        else:
+            cues = await _auto_job_cues(job.transcript_source, job.url, workdir, media.video,
+                                       media.subtitles, job.max_source_sec, job.params.clip_count,
+                                       job.caption_language, on_progress)
         if job.mode == "auto" and job.max_source_sec:
             # Mode manual mengabaikan maxSourceSec: rentangnya sudah eksplisit.
             cues = _cues_within_limit(cues, job.max_source_sec)
@@ -1645,8 +1878,9 @@ async def run_job(
         await _check_cancel(should_cancel)
         if job.mode == "manual":
             # Streaming: satu section diunduh, dirender, lalu dihapus per rentang.
+            stt_options = {"use_stt_per_range": True} if use_stt_per_range else {}
             clips = await render_manual(
-                job, moments, cues, output_dir, workdir, on_progress, should_cancel
+                job, moments, cues, output_dir, workdir, on_progress, should_cancel, **stt_options
             )
         else:
             clips = await render(
@@ -1694,8 +1928,10 @@ async def run_job(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-async def run_preview(data: Mapping[str, Any], temp_root: Optional[str] = None) -> Dict[str, Any]:
-    """Pratinjau momen: subtitle + LLM saja, tanpa unduh video dan render.
+async def run_preview(
+    data: Mapping[str, Any], temp_root: Optional[str] = None, on_progress=None,
+) -> Dict[str, Any]:
+    """Pratinjau momen: transkrip subtitle atau segmen audio + LLM, tanpa render.
 
     Mengembalikan semua kandidat momen yang ditemukan tanpa batas `clipCount`
     dan daftar cue terdeduplikasi untuk transkrip di UI. Bila `maxSourceSec`
@@ -1716,18 +1952,25 @@ async def run_preview(data: Mapping[str, Any], temp_root: Optional[str] = None) 
         {key: data[key] for key in ("clipCount", "targetDurationSec") if data.get(key) is not None}
     )
     max_source_sec = to_max_source_sec(data.get("maxSourceSec"))
+    transcript_source = to_transcript_source(data.get("transcriptSource") or data.get("transcript_source"))
+    caption_language = to_caption_language(_first(data, "captionLanguage", "caption_language"))
 
     temp_root = temp_root or os.getenv("TEMP_ROOT") or tempfile.gettempdir()
     os.makedirs(temp_root, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix="preview-", dir=temp_root)
     try:
-        subtitles = await asyncio.to_thread(_fetch_subtitles, url, workdir)
-        if not subtitles:
-            raise RuntimeError(NO_SUBTITLE_ERROR)
-
-        cues = await asyncio.to_thread(_read_vtt, subtitles)
-        if not cues:
-            raise RuntimeError(NO_SUBTITLE_ERROR)
+        subtitles = None
+        if transcript_source != "live_chat_stt":
+            subtitles = await asyncio.to_thread(_fetch_subtitles, url, workdir)
+        if transcript_source == "youtube":
+            if not subtitles:
+                raise RuntimeError(NO_SUBTITLE_ERROR)
+            cues = await asyncio.to_thread(_read_vtt, subtitles)
+            if not cues:
+                raise RuntimeError(NO_SUBTITLE_ERROR)
+        else:
+            cues = await _auto_job_cues(transcript_source, url, workdir, None, subtitles,
+                                       max_source_sec, params.clip_count, caption_language, on_progress)
 
         cues = _cues_within_limit(cues, max_source_sec)
 

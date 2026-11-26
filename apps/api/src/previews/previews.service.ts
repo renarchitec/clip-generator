@@ -8,6 +8,7 @@ import type {
   PreviewJobData,
   PreviewStatus,
 } from '@clipper/shared';
+import { DEFAULT_TRANSCRIPT_SOURCE } from '@clipper/shared';
 import { PREVIEW_QUEUE_NAME } from '../queue/queue.constants';
 import { assertAllowedUrl, normalizeDescription } from '../jobs/validation';
 import { CreatePreviewDto } from './dto/create-preview.dto';
@@ -26,6 +27,7 @@ export class PreviewsService {
     const id = randomUUID();
     const data: PreviewJobData = {
       url: assertAllowedUrl(dto.url),
+      transcriptSource: dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE,
       userId,
       description: normalizeDescription(dto.description),
       clipCount: dto.clipCount,
@@ -57,6 +59,7 @@ export class PreviewsService {
     return {
       id,
       url: data.url,
+      transcriptSource: data.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE,
       description: data.description ?? null,
       status: toStatus(state),
       error:

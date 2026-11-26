@@ -30,6 +30,16 @@ pub(crate) fn open(dir: &Path) -> anyhow::Result<Connection> {
     let db = Connection::open(db_path)?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch(include_str!("schema.sql"))?;
+    let columns = db
+        .prepare("PRAGMA table_info(jobs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !columns.iter().any(|name| name == "transcript_source") {
+        db.execute(
+            "ALTER TABLE jobs ADD COLUMN transcript_source TEXT NOT NULL DEFAULT 'youtube'",
+            [],
+        )?;
+    }
     db.execute("UPDATE jobs SET status='failed', error='The desktop app closed before this job finished', finished_at=?1, updated_at=?1 WHERE status IN ('queued','running')", [now()])?;
     Ok(db)
 }
@@ -50,6 +60,7 @@ fn json_field(row: &Row<'_>, name: &str, default: Value) -> rusqlite::Result<Val
 pub(crate) fn job(row: &Row<'_>) -> rusqlite::Result<Value> {
     Ok(json!({
         "id":row.get::<_,String>("id")?, "url":row.get::<_,String>("url")?,
+        "transcriptSource": row.get::<_, String>("transcript_source")?,
         "status":row.get::<_,String>("status")?, "stage":row.get::<_,Option<String>>("stage")?,
         "progress":row.get::<_,f64>("progress")?, "mode":row.get::<_,String>("mode")?,
         "reframe":row.get::<_,String>("reframe")?, "captions":row.get::<_,bool>("captions")?,

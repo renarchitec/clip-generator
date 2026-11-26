@@ -18,6 +18,82 @@ fn event(output: &Output) -> Value {
 }
 
 #[test]
+fn llm_check_reports_stt_configuration() {
+    use dartclip_core::stt::{DEFAULT_STT_FALLBACK_MODEL, DEFAULT_STT_MODEL};
+    use serde_json::json;
+
+    let cases: &[(&[(&str, &str)], Option<&str>)] = &[
+        (&[], None),
+        (
+            &[
+                ("LLM_BASE_URL", "https://llm.example.test/v1"),
+                ("LLM_API_KEY", "test-key"),
+            ],
+            Some(DEFAULT_STT_MODEL),
+        ),
+        (
+            &[
+                ("STT_BASE_URL", "https://stt.example.test/v1"),
+                ("STT_API_KEY", "test-key"),
+                ("STT_MODEL", " custom/whisper "),
+            ],
+            Some("custom/whisper"),
+        ),
+        (
+            &[
+                ("STT_FALLBACK_BASE_URL", "https://fallback.example.test/v1"),
+                ("STT_FALLBACK_API_KEY", "test-key"),
+            ],
+            Some(DEFAULT_STT_FALLBACK_MODEL),
+        ),
+        (
+            &[
+                ("STT_FALLBACK_BASE_URL", "https://fallback.example.test/v1"),
+                ("STT_FALLBACK_API_KEY", "test-key"),
+                ("STT_FALLBACK_MODEL", " "),
+            ],
+            None,
+        ),
+    ];
+    for &(overrides, expected_model) in cases {
+        let mut command = worker();
+        // Keep external runner settings out of the check and don't ping a live LLM.
+        for name in [
+            "LLM_BASE_URL",
+            "LLM_API_KEY",
+            "LLM_MODEL",
+            "LLM_FALLBACK_BASE_URL",
+            "LLM_FALLBACK_API_KEY",
+            "LLM_FALLBACK_MODEL",
+            "STT_BASE_URL",
+            "STT_API_KEY",
+            "STT_MODEL",
+            "STT_FALLBACK_BASE_URL",
+            "STT_FALLBACK_API_KEY",
+            "STT_FALLBACK_MODEL",
+        ] {
+            command.env_remove(name);
+        }
+        let output = command
+            .envs(overrides.iter().copied())
+            .args(["--task", "llm-check"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let event = event(&output);
+        assert_eq!(event["type"], "result");
+        for status in [&event["data"], &event["llmStatus"]] {
+            assert_eq!(status["sttConfigured"], expected_model.is_some());
+            assert_eq!(status.get("sttModel"), Some(&json!(expected_model)));
+        }
+    }
+}
+
+#[test]
 fn self_check_loads_embedded_face_model() {
     let output = worker()
         .env_remove("FONTS_DIR")

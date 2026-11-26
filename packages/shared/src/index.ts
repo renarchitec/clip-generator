@@ -37,6 +37,10 @@ export const CAPTION_LANGUAGES = ['auto', 'id', 'en'] as const;
 export type CaptionLanguage = (typeof CAPTION_LANGUAGES)[number];
 export const DEFAULT_CAPTION_LANGUAGE: CaptionLanguage = 'auto';
 
+export const TRANSCRIPT_SOURCES = ['youtube', 'auto', 'live_chat_stt'] as const;
+export type TranscriptSource = (typeof TRANSCRIPT_SOURCES)[number];
+export const DEFAULT_TRANSCRIPT_SOURCE: TranscriptSource = 'youtube';
+
 /** Batas jumlah dan panjang hashtag kustom per job. */
 export const CUSTOM_HASHTAGS_MAX = 15;
 export const CUSTOM_HASHTAG_MAX_LENGTH = 50;
@@ -192,6 +196,7 @@ export interface JobData {
   aspectRatio: AspectRatio;
   /** bahasa caption sosial; default 'auto' (worker memakai 'auto' bila absent) */
   captionLanguage: CaptionLanguage;
+  transcriptSource?: TranscriptSource;
   /** hashtag kustom per job; bila diisi, worker tidak membuat hashtag otomatis */
   customHashtags?: string[];
   captionStyle?: CaptionStyle | null;
@@ -295,6 +300,7 @@ export type PreviewStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface PreviewJobData {
   url: string;
+  transcriptSource?: TranscriptSource;
   userId: string;
   description?: string | null;
   clipCount: number;
@@ -329,6 +335,7 @@ export type FrameStatus = 'queued' | 'running' | 'done' | 'failed';
 export interface PreviewResponse {
   id: string;
   url: string;
+  transcriptSource?: TranscriptSource;
   status: PreviewStatus;
   error: string | null;
   candidates: PreviewCandidate[] | null;
@@ -442,6 +449,15 @@ export interface TiktokCreatorInfoResponse {
 export interface PublishRequest {
   targets: PublishTarget[];
   scheduledAt?: string | null;
+  /** Posisi frame cover bersama dalam milidetik (opsional; dipakai IG thumb_offset, TikTok Direct video_cover_timestamp_ms, dan YouTube bila coverId dikirim). */
+  coverTimestampMs?: number | null;
+  /** ID gambar cover hasil POST /api/clips/:id/cover (dipakai YouTube Shorts thumbnails.set). */
+  coverId?: string | null;
+}
+
+/** Respons POST /api/clips/:id/cover. */
+export interface ClipCoverUploadResponse {
+  coverId: string;
 }
 
 /** Body POST /api/jobs/:id/schedule-publish. */
@@ -487,6 +503,8 @@ export interface PublicationResponse {
   commentCount: number | null;
   metricsUpdatedAt: string | null;
   metricsError: string | null;
+  coverTimestampMs?: number | null;
+  coverError?: string | null;
 }
 
 /** Ringkasan publikasi untuk badge kartu klip (terbaru per akun). */
@@ -520,119 +538,3 @@ export interface BulkRefreshMetricsResponse {
 export type PublishJobData =
   | { publicationId: string; kind: 'upload' | 'check'; checks?: number }
   | { kind: 'sync-metrics' };
-
-/** Antrean BullMQ modul Reference Edit (analisis referensi + footage + rencana edit + render). */
-export const REFERENCE_QUEUE_NAME = 'reference-jobs';
-
-export const REFERENCE_STAGES = [
-  'analyze_reference',
-  'analyze_footage',
-  'plan_edit',
-  'render',
-  'save',
-] as const;
-
-export type ReferenceStage = (typeof REFERENCE_STAGES)[number];
-export type ReferenceJobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
-
-export const REFERENCE_MAX_FOOTAGE_FILES = 12;
-export const REFERENCE_MAX_FILE_BYTES = 100 * 1024 * 1024;
-
-export interface ReferenceFootageItem {
-  id: string;
-  name: string;
-  /** path relatif di bawah CLIPS_DIR, mis. reference/<jobId>/footage-01.mp4 */
-  filePath: string;
-  mimeType: string;
-  sizeBytes: number;
-  durationSec: number;
-  width: number;
-  height: number;
-}
-
-export interface ReferenceTemplateSlot {
-  index: number;
-  startSec: number;
-  endSec: number;
-  durationSec: number;
-  shotType: string;
-  description: string;
-  overlayText?: string | null;
-  zoom?: 'none' | 'in' | 'out';
-  beatSync?: boolean;
-}
-
-export interface ReferencePlanSlot {
-  slotIndex: number;
-  footageId: string;
-  footageName: string;
-  sourceStartSec: number;
-  sourceEndSec: number;
-  targetDurationSec: number;
-  shotType: string;
-  reason: string;
-  overlayText?: string | null;
-  zoom?: 'none' | 'in' | 'out';
-}
-
-export interface ReferenceJobData {
-  jobId: string;
-  userId: string;
-  title: string;
-  brief?: string | null;
-  aspectRatio: AspectRatio;
-  reframe: ReframeMode;
-  captions: boolean;
-  beatSync: boolean;
-  /** URL referensi (YouTube/TikTok/IG) atau null bila memakai file upload */
-  referenceUrl?: string | null;
-  /** Path relatif di bawah CLIPS_DIR bila video referensi di-upload */
-  referenceFilePath?: string | null;
-  referenceDurationSec?: number | null;
-  footage: ReferenceFootageItem[];
-}
-
-export interface ReferenceJobProgress {
-  stage: ReferenceStage;
-  percent: number;
-  message?: string;
-  templateSlots?: ReferenceTemplateSlot[];
-  planSlots?: ReferencePlanSlot[];
-}
-
-export interface ReferenceJobResult {
-  outputFilePath: string;
-  durationSec: number;
-  templateSlots: ReferenceTemplateSlot[];
-  planSlots: ReferencePlanSlot[];
-  caption?: string;
-  hashtags?: string[];
-}
-
-export interface ReferenceJobResponse {
-  id: string;
-  title: string;
-  brief: string | null;
-  aspectRatio: AspectRatio;
-  reframe: ReframeMode;
-  captions: boolean;
-  beatSync: boolean;
-  referenceUrl: string | null;
-  referenceFilePath: string | null;
-  referenceDurationSec: number | null;
-  footage: ReferenceFootageItem[];
-  status: ReferenceJobStatus;
-  stage: ReferenceStage | null;
-  progress: number;
-  message: string | null;
-  error: string | null;
-  templateSlots: ReferenceTemplateSlot[] | null;
-  planSlots: ReferencePlanSlot[] | null;
-  outputFilePath: string | null;
-  outputDurationSec: number | null;
-  caption: string | null;
-  hashtags: string[];
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-}

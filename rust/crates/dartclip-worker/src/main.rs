@@ -15,6 +15,7 @@ use dartclip_core::{
     llm::{LlmClient, LlmConfig},
     models::{CaptionRequest, FrameRequest, JobData, PreviewRequest},
     pipeline::{CancellationToken, Pipeline, PipelineConfig},
+    stt::SttConfig,
     tools::ToolPaths,
 };
 use serde_json::{json, Value};
@@ -156,10 +157,31 @@ impl Args {
             }
         }
         // run_job applies MIN_FREE_GB itself.
-        Ok(Pipeline::new(config)
+        let mut pipeline = Pipeline::new(config)
             .with_face_analyzer(Arc::new(face::YuNet))
-            .with_llm(llm))
+            .with_llm(llm);
+        let stt = SttConfig::from_env();
+        if stt.is_configured() {
+            pipeline = pipeline.with_stt(stt);
+        }
+        Ok(pipeline)
     }
+}
+
+fn llm_status(llm: &LlmClient) -> Value {
+    let stt = SttConfig::from_env();
+    let configured = stt.is_configured();
+    let model = configured.then(|| {
+        if stt.whisper_configured() {
+            stt.model.as_str()
+        } else {
+            stt.fallback_model.as_str()
+        }
+    });
+    let mut status = json!(llm.status());
+    status["sttConfigured"] = json!(configured);
+    status["sttModel"] = json!(model);
+    status
 }
 
 fn emit(event: Value) -> Result<()> {
@@ -286,7 +308,7 @@ async fn run(args: &Args, cancel: &CancellationToken, llm: Option<&LlmClient>) -
                 _ = cancel.cancelled() => bail!("job dibatalkan"),
                 result = llm.ping() => result.is_ok(),
             };
-            let mut status = json!(llm.status());
+            let mut status = llm_status(llm);
             status["ok"] = json!(ok);
             status
         }
@@ -342,9 +364,7 @@ async fn main() -> ExitCode {
             Some(LlmClient::new(LlmConfig::from_env())?)
         };
         let result = run(&args, &cancel, llm.as_ref()).await;
-        let status = llm
-            .as_ref()
-            .map_or(Value::Null, |client| json!(client.status()));
+        let status = llm.as_ref().map_or(Value::Null, llm_status);
         Ok::<_, anyhow::Error>((result, status))
     }
     .await;

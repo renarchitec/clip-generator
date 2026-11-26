@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { StoredWatermarkValue } from '../watermarks/watermark-helpers';
 import type { StoredOutro } from '../outros/outro-helpers';
 import { Observable, Subject } from 'rxjs';
-import type { CaptionStyle, ClipPublicationSummary, PlatformCaptions } from '@clipper/shared';
+import type { CaptionStyle, ClipPublicationSummary, PlatformCaptions, TranscriptSource } from '@clipper/shared';
 
 export interface JobSnapshot {
   id: string;
@@ -18,6 +18,7 @@ export interface JobSnapshot {
   aspectRatio: string;
   /** Bahasa caption sosial: auto | id | en. */
   captionLanguage: string;
+  transcriptSource: TranscriptSource;
   /** Hashtag kustom job; bila diisi, caption klip memakainya tanpa hashtag otomatis. */
   customHashtags?: string[];
   captionStyle?: CaptionStyle | null;

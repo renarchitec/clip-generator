@@ -2,7 +2,7 @@ import { useRuntime } from "@/lib/use-runtime"
 import { apiUrl } from "@/lib/desktop"
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, AudioLines, CalendarClock, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Trash2, Users, Video } from "lucide-react"
+import { ArrowLeft, AudioLines, CalendarClock, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Radio, Sparkles, Subtitles, Trash2, Users, Video } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldTitle } from "@/components/ui/field"
 import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, type Job, type JobSnapshot, type User } from "@/lib/api"
+import { api, isTranscriptSource, type Job, type JobSnapshot, type TranscriptSource, type User } from "@/lib/api"
 import { DEFAULT_CAPTION_STYLE, detectCaptionPreset, normalizeCaptionStyle } from "@/lib/caption-style"
 import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
@@ -40,6 +40,11 @@ export const Route = createFileRoute("/jobs/$jobId")({
 type Copy = ReturnType<typeof useT>
 
 const aspectShapes = { "9:16": "h-5 w-3", "1:1": "size-4", "16:9": "w-6 h-3.5" } as const
+const transcriptSourceIcons: Record<TranscriptSource, typeof Subtitles> = {
+  youtube: Subtitles,
+  auto: Sparkles,
+  live_chat_stt: Radio,
+}
 
 function formatTime(seconds: number) {
   const safeSeconds = Math.max(0, Math.floor(seconds))
@@ -205,6 +210,20 @@ function JobDetail() {
                   <div className="mt-2 flex min-h-11 items-center rounded-md border border-border bg-muted/40 px-3 text-sm text-foreground">{scanDurationLabel(snapshot.maxSourceSec, t)}</div>
                   <FieldDescription>{t.scanDurationHint}</FieldDescription>
                 </Field>}
+
+                {isTranscriptSource(snapshot.transcriptSource) && (() => {
+                  const SourceIcon = transcriptSourceIcons[snapshot.transcriptSource]
+                  return <Field>
+                    <FieldTitle>{t.transcriptSource}</FieldTitle>
+                    <div className="mt-2 flex min-w-0 items-start gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+                      <SourceIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium leading-5 text-foreground">{t.transcriptSourceOptions[snapshot.transcriptSource]}</span>
+                        <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{t.transcriptSourceHints[snapshot.transcriptSource]}</span>
+                      </span>
+                    </div>
+                  </Field>
+                })()}
 
                 <Field>
                   <FieldTitle>{t.outputFormat}</FieldTitle>

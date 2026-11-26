@@ -489,15 +489,20 @@ pub fn parse_llm_object(raw: &str) -> Result<Value> {
         .ok_or_else(|| anyhow!("tidak ada JSON object yang valid di jawaban LLM"))
 }
 pub fn parse_llm_json(raw: &str) -> Result<Vec<Value>> {
+    parse_llm_list(
+        raw,
+        &["moments", "clips", "results", "result", "data", "captions"],
+        false,
+    )
+}
+pub(crate) fn parse_llm_list(raw: &str, keys: &[&str], allow_empty: bool) -> Result<Vec<Value>> {
     for v in candidates(raw, '[', ']').into_iter().filter_map(load) {
-        let values = v.as_array().or_else(|| {
-            ["moments", "clips", "results", "result", "data", "captions"]
-                .iter()
-                .find_map(|k| v[*k].as_array())
-        });
+        let values = v
+            .as_array()
+            .or_else(|| keys.iter().find_map(|k| v[*k].as_array()));
         if let Some(values) = values {
             let objects: Vec<_> = values.iter().filter(|v| v.is_object()).cloned().collect();
-            if objects.is_empty() {
+            if objects.is_empty() && !(allow_empty && values.is_empty()) {
                 bail!("JSON list jawaban LLM tidak berisi object");
             }
             return Ok(objects);

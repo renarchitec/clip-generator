@@ -8,8 +8,8 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
 import { Queue, QueueEvents } from 'bullmq';
-import type { ClipResult, JobData, JobProgress, JobResult } from '@clipper/shared';
-import { normalizeCaptionStyle } from '@clipper/shared';
+import type { ClipResult, JobData, JobProgress, JobResult, TranscriptSource } from '@clipper/shared';
+import { DEFAULT_TRANSCRIPT_SOURCE, normalizeCaptionStyle } from '@clipper/shared';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { PrismaService } from '../prisma/prisma.service';
 import { latestPerAccount } from '../publish/publish-helpers';
@@ -362,6 +362,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       facecam: job.facecam,
       aspectRatio: job.aspectRatio,
       captionLanguage: job.captionLanguage,
+      transcriptSource: (job.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE) as TranscriptSource,
       customHashtags: job.customHashtags,
       captionStyle: normalizeCaptionStyle(job.captionStyle),
       clipCount: job.clipCount,

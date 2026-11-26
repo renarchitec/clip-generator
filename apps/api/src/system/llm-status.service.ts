@@ -14,6 +14,8 @@ export interface LlmStatus {
   workerOnline: boolean;
   configured: boolean;
   model: string | null;
+  sttConfigured?: boolean;
+  sttModel?: string | null;
   lastCall: LlmLastCall | null;
   updatedAt: string | null;
 }
@@ -42,6 +44,8 @@ export class LlmStatusService {
         workerOnline: true,
         configured: Boolean(parsed.configured),
         model: parsed.model ?? null,
+        ...(typeof parsed.sttConfigured === 'boolean' && { sttConfigured: parsed.sttConfigured }),
+        ...((typeof parsed.sttModel === 'string' || parsed.sttModel === null) && { sttModel: parsed.sttModel }),
         lastCall: parsed.lastCall ?? null,
         updatedAt: parsed.updatedAt ?? null,
       };

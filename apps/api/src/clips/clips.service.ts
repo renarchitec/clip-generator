@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { createReadStream } from 'node:fs';
-import { stat, unlink } from 'node:fs/promises';
+import { rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Response } from 'express';
 import { JobStatus, type Clip } from '@prisma/client';
@@ -139,6 +139,7 @@ export class ClipsService {
     }
 
     await this.prisma.clip.deleteMany({ where: { id, job: { userId } } });
+    await rm(path.join(this.config.clipsDir, 'covers', clip.id), { recursive: true, force: true }).catch(() => undefined);
   }
 
   /** Path selalu dibentuk dari id database, lalu diverifikasi tetap di dalam CLIPS_DIR. */

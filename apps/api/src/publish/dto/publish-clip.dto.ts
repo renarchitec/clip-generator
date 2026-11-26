@@ -6,10 +6,12 @@ import {
   IsBoolean,
   IsIn,
   IsISO8601,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -91,6 +93,16 @@ export class PublishTargetDto {
 }
 
 export class PublishClipDto {
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(86_400_000)
+  coverTimestampMs?: number;
+
+  @IsOptional()
+  @IsUUID()
+  coverId?: string;
+
   @IsOptional()
   @IsISO8601()
   scheduledAt?: string;

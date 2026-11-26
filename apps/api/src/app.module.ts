@@ -10,7 +10,6 @@ import { FramesModule } from './frames/frames.module';
 import { PreviewsModule } from './previews/previews.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PublishModule } from './publish/publish.module';
-import { ReferenceJobsModule } from './reference-jobs/reference-jobs.module';
 import { SocialModule } from './social/social.module';
 import { SystemModule } from './system/system.module';
 import { OutrosModule } from './outros/outros.module';
@@ -31,7 +30,6 @@ import { WatermarksModule } from './watermarks/watermarks.module';
     BriefsModule,
     SocialModule,
     PublishModule,
-    ReferenceJobsModule,
     SystemModule,
   ],
 })

@@ -310,7 +310,7 @@ def test_render_one_plain_path_uses_filter_complex(tmp_path):
     assert cmd.index("-ss") < cmd.index("-i") < wm_i
 
     graph = cmd[cmd.index("-filter_complex") + 1]
-    assert graph.startswith("[0:v]scale=1080:1920")
+    assert graph.startswith("[0:v]setpts=PTS-STARTPTS,scale=1080:1920")
     assert "[base]" in graph and "[1:v]scale=w=216:h=-2" in graph
     assert graph.endswith("[wmout]")
     maps = [cmd[i + 1] for i, part in enumerate(cmd) if part == "-map"]

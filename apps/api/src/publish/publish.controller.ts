@@ -1,9 +1,11 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
-import type { BatchSchedulePublishResponse, BulkRefreshMetricsResponse, PublicationResponse, RefreshMetricsResponse } from '@clipper/shared';
+import { Body, Controller, Get, HttpCode, Param, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { BatchSchedulePublishResponse, BulkRefreshMetricsResponse, ClipCoverUploadResponse, PublicationResponse, RefreshMetricsResponse } from '@clipper/shared';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { BatchSchedulePublishDto, PublishClipDto } from './dto/publish-clip.dto';
 import { RefreshMetricsDto } from './dto/refresh-metrics.dto';
 import { PublicationMetricsService } from './publication-metrics.service';
+import { MAX_COVER_IMAGE_BYTES } from './publish-helpers';
 import { PublishService } from './publish.service';
 
 @Controller()
@@ -21,6 +23,20 @@ export class PublishController {
     @CurrentUser() user: { id: string },
   ): Promise<PublicationResponse[]> {
     return this.publish.publish(id, dto, user.id);
+  }
+
+  @Post('clips/:id/cover')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_COVER_IMAGE_BYTES, files: 1, fields: 2 },
+    }),
+  )
+  uploadCover(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: { id: string },
+  ): Promise<ClipCoverUploadResponse> {
+    return this.publish.uploadCover(user.id, id, file);
   }
 
   @Get('clips/:id/publications')
