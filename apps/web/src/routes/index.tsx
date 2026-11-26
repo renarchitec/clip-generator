@@ -242,7 +242,7 @@ function Dashboard() {
   const firstReviewedStart = (preview.data?.candidates ?? []).reduce<number | null>((first, candidate) => first === null ? candidate.start : Math.min(first, candidate.start), null)
   const firstManualStart = formValues.ranges.map(({ start }) => Number(start)).find((start) => Number.isFinite(start) && start >= 0)
   const suggestedFrameSec = firstReviewedStart ?? (mode === "manual" ? firstManualStart : null) ?? FRAME_DEFAULT_SEC
-  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam, hookBanner }, suggestedFrameSec)
+  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam }, suggestedFrameSec)
   const initializedPreview = useRef<string | null>(draft?.previewId ?? null)
   const { from, job: selectedJobId } = useSearch({ from: "/" })
   const source = useQuery({ queryKey: ["jobs", from], queryFn: () => api<JobSnapshot>(`/jobs/${from}`), enabled: !!from })

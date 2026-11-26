@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import llm
 from . import reframe as reframe_mod
+from .hook_thumbnail import extract_cover_frame, prepend_hook_intro, render_hook_thumbnail
 from .models import (
     JOB_ID_RE,
     MAX_DESCRIPTION_CHARS,
@@ -985,6 +986,30 @@ def append_outro(clip_path: str, outro_path: str, timeout: Optional[float] = OUT
                 pass
 
 
+def _apply_hook_intro_for_job(
+    job: JobData, src_video: str, render_moment: llm.Moment, outdir: str, filename: str
+) -> None:
+    if not job.hook_banner:
+        return
+    text = (render_moment.hook_text or render_moment.title or "").strip()
+    if not text:
+        return
+    clip_path = os.path.join(outdir, filename)
+    png_path = clip_path + ".hook.png"
+    try:
+        frame = extract_cover_frame(src_video, render_moment.start, render_moment.end)
+        width, height = OUTPUT_SIZES.get(str(job.aspect_ratio), OUTPUT_SIZES["9:16"])
+        render_hook_thumbnail(frame, text, width, height, png_path)
+        prepend_hook_intro(clip_path, png_path)
+    except Exception as exc:
+        log.warning("hook intro dilewati karena error: %s", exc)
+    finally:
+        try:
+            os.remove(png_path)
+        except OSError:
+            pass
+
+
 def _apply_outro_for_job(job: JobData, outdir: str, filename: str) -> None:
     """Tempel outro job (bila ada) ke klip final; satu helper untuk semua jalur render."""
     if not job.outro:
@@ -1060,8 +1085,6 @@ async def run_frame(payload: Mapping[str, Any], clips_dir: str, temp_root: Optio
         extra: Dict[str, Any] = {}
         if data["captionStyle"] is not None:
             extra["caption_style"] = data["captionStyle"]
-        if data["hookBanner"]:
-            extra.update(hook_banner=True, hook_text="WAIT FOR THIS MOMENT")
         await asyncio.to_thread(
             _render_one, video, moment, cues, workdir, "render.mp4", data["reframe"],
             data["captions"], data["twoSpeakers"], data["facecam"], offset,
@@ -1100,8 +1123,6 @@ def _render_one(
     run_timeout: Optional[float] = None,
     caption_style: Optional[CaptionStyle] = None,
     watermarks: Sequence[tuple[Watermark, str]] = (),
-    hook_text: str | None = None,
-    hook_banner: bool = False,
     normalize_audio: bool = False,
 ) -> None:
     resolved_wms: list[tuple[Watermark, str]] = []
@@ -1129,10 +1150,7 @@ def _render_one(
     absolute_start = moment.start + timeline_offset
     absolute_end = moment.end + timeline_offset
     clip_cues = _clip_cues(cues, absolute_start, absolute_end) if captions else []
-    if hook_text is None:
-        hook_text = moment.hook_text
-    effective_hook = (hook_text or "").strip() if hook_banner else ""
-    burn_ass = bool(clip_cues or effective_hook)
+    burn_ass = bool(clip_cues)
     duration = max(0.5, moment.end - moment.start)
     loudnorm = normalize_audio and _has_audio(video)
     box = None
@@ -1155,9 +1173,6 @@ def _render_one(
                     max_words=MAX_WORDS_PER_CUE_WIDE if landscape else MAX_WORDS_PER_CUE,
                     max_chars=(max(10, round((WRAP_CHARS_WIDE if landscape else WRAP_CHARS) * 80 / caption_style.font_size)) if caption_style and caption_style.font_size > 84 else (WRAP_CHARS_WIDE if landscape else WRAP_CHARS)),
                     style=caption_style,
-                    hook_text=effective_hook or None,
-                    hook_duration_sec=min(2.8, duration),
-                    facecam=bool(box),
                 )
             )
 
@@ -1303,12 +1318,11 @@ def _render_clip_sync(
         job.facecam,
         offset,
         job.aspect_ratio,
-        hook_banner=job.hook_banner,
-        hook_text=moment.hook_text,
         normalize_audio=job.normalize_audio,
         **extra,
     )
-    # Outro ditempel pada file final (setelah watermark/takarir); start/end klip tak berubah.
+    _apply_hook_intro_for_job(job, src_video, render_moment, outdir, filename)
+    # Outro ditempel setelah intro; start/end klip tak berubah.
     _apply_outro_for_job(job, outdir, filename)
     return ClipResult(
         title=moment.title,

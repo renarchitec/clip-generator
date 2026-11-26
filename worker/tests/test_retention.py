@@ -5,7 +5,7 @@ import pytest
 
 from clipper import llm, pipeline
 from clipper.models import CaptionStyle, ClipResult, JobParams, job_data_from_dict
-from clipper.subtitles import Cue, write_ass
+from clipper.subtitles import Cue
 
 
 @pytest.mark.parametrize("hook_key,audio_key,text_key", [
@@ -90,23 +90,8 @@ def test_select_moments_ranks_before_overlap_filter_and_preserves_metadata(monke
     assert all(term in prompts[1] for term in ("oke jadi", "eh tunggu", "payoff"))
 
 
-@pytest.mark.parametrize("facecam,cues", [(True, []), (False, [Cue(0, 3, "Teks klip")])])
-def test_hook_banner_ass_layers_and_positions(facecam, cues):
-    ass = write_ass(cues, hook_text="Tunggu sampai bagian berikut", facecam=facecam)
-    style = next(line for line in ass.splitlines() if line.startswith("Style: Hook"))
-    assert style.startswith("Style: Hook,Montserrat,54,&H00FFFFFF,")
-    assert "&H26000000,&H26000000,-1" in style
-    assert style.endswith(",3,14,0,5,80,80,0,1" if facecam else ",3,14,0,8,80,80,307,1")
-    events = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
-    assert len(events) == (3 if cues else 1)
-    assert events[0].startswith("Dialogue: 2,0:00:00.00,0:00:02.80,Hook,")
-    assert (r"\an5\pos(540,844)" if facecam else r"\an8") in events[0]
-    assert r"\fad(120,250)\fscx104\fscy104\t(0,120,\fscx100\fscy100)" in events[0]
-    assert events[0].endswith(r"Tunggu sampai bagian\Nberikut")
-
-
 @pytest.mark.parametrize("normalize_audio,audio_present", [(True, True), (True, False), (False, True)])
-def test_render_one_normalization_and_banner_without_captions(tmp_path, monkeypatch, normalize_audio, audio_present):
+def test_render_one_normalization_without_ass_when_captions_disabled(tmp_path, monkeypatch, normalize_audio, audio_present):
     commands = []
     ass = tmp_path / "clip.ass"
 
@@ -114,18 +99,16 @@ def test_render_one_normalization_and_banner_without_captions(tmp_path, monkeypa
         commands.append(cmd)
         if cmd[0] == "ffprobe":
             return "1\n" if audio_present else ""
-        text = ass.read_text()
-        assert "Dialogue: 2,0:00:00.00,0:00:01.50,Hook," in text
-        assert "Dialogue: 0," not in text
+        assert not ass.exists()
         return ""
 
     monkeypatch.setattr(pipeline, "_run", run)
-    pipeline._render_one("src.mp4", llm.Moment(0, 1.5, "Clip"), [Cue(0, 2, "Teks klip")],
-                         str(tmp_path), "clip.mp4", reframe="black_bars", captions=False,
-                         hook_banner=True, hook_text="Tunggu sebentar", normalize_audio=normalize_audio)
+    pipeline._render_one("src.mp4", llm.Moment(0, 1.5, "Clip", hook_text="Tunggu sebentar"),
+                         [Cue(0, 2, "Teks klip")], str(tmp_path), "clip.mp4",
+                         reframe="black_bars", captions=False, normalize_audio=normalize_audio)
     assert [cmd[0] for cmd in commands] == (["ffprobe", "ffmpeg"] if normalize_audio else ["ffmpeg"])
     cmd = commands[-1]
-    assert "subtitles=" in cmd[cmd.index("-vf") + 1]
+    assert "subtitles=" not in cmd[cmd.index("-vf") + 1]
     if normalize_audio and audio_present:
         assert cmd[cmd.index("-af") + 1] == "loudnorm=I=-14:TP=-1.5:LRA=11"
         assert cmd[cmd.index("-ar") + 1] == "44100"
@@ -143,21 +126,30 @@ def test_clip_progress_and_result_include_retention_fields(mode, tmp_path, monke
     cues = [Cue(5, 15, "Isi clip.")]
     moment = (pipeline._moments_from_ranges(cues, job.ranges)[0] if mode == "manual"
               else llm.Moment(5, 15, "Clip", viral_score=92, hook_text="Hook auto"))
-    kwargs = {}
+    calls = []
 
-    def render(*args, **options):
-        kwargs.update(options)
+    def render(src, render_moment, *args, **options):
+        calls.append("render")
+        assert options == {"normalize_audio": False}
+        assert (render_moment.start, render_moment.end) == (0, 10)
+
+    def apply_hook(hook_job, src, render_moment, outdir, filename):
+        calls.append("intro")
+        assert (hook_job, src, outdir, filename) == (job, "src.mp4", str(tmp_path), "clip.mp4")
+        assert (render_moment.start, render_moment.end, render_moment.hook_text) == (0, 10, f"Hook {mode}")
 
     monkeypatch.setattr(pipeline, "_render_one", render)
+    monkeypatch.setattr(pipeline, "_apply_hook_intro_for_job", apply_hook)
+    monkeypatch.setattr(pipeline, "_apply_outro_for_job", lambda *args: calls.append("outro"))
     clip = pipeline._render_clip_sync(job, moment, cues, "src.mp4", "clip.mp4", str(tmp_path), 5)
     progress = pipeline._clip_report(clip)
-    assert kwargs == {"hook_banner": True, "hook_text": f"Hook {mode}", "normalize_audio": False}
+    assert calls == ["render", "intro", "outro"]
     assert progress == clip.to_dict()
     assert progress["hookText"] == f"Hook {mode}"
     assert progress.get("viralScore") == (92 if mode == "auto" else None)
 
 
-def test_frame_preview_passes_sample_hook_without_captions(tmp_path, monkeypatch):
+def test_frame_preview_stays_clean_when_hook_is_enabled(tmp_path, monkeypatch):
     async def download(*args):
         return "src.mp4", 0
 
@@ -171,4 +163,4 @@ def test_frame_preview_passes_sample_hook_without_captions(tmp_path, monkeypatch
     }, str(tmp_path)))
     args, kwargs = calls[0]
     assert args[2] == []
-    assert kwargs == {"hook_banner": True, "hook_text": "WAIT FOR THIS MOMENT"}
+    assert kwargs == {}
