@@ -53,7 +53,8 @@ def test_parse_frame_payload_normalizes_and_guards_paths():
         pipeline.parse_frame_payload({"atSec": 1})
 
 
-def test_run_frame_downloads_section_and_calls_render_with_job_args(tmp_path):
+@pytest.mark.parametrize("facecam, expected_kwargs", [(False, {}), (True, {"facecam_reuse_cache": False})])
+def test_run_frame_downloads_section_and_calls_render_with_job_args(tmp_path, facecam, expected_kwargs):
     calls = {"download": [], "render": [], "run": []}
 
     async def fake_download(url, at_sec, workdir):
@@ -72,7 +73,7 @@ def test_run_frame_downloads_section_and_calls_render_with_job_args(tmp_path):
          patch.object(pipeline, "_render_one", side_effect=fake_render), \
          patch.object(pipeline, "_run", side_effect=fake_run), \
          patch.object(pipeline, "_cleanup_old_frames") as cleanup:
-        result = asyncio.run(pipeline.run_frame(frame_payload(), str(tmp_path)))
+        result = asyncio.run(pipeline.run_frame(frame_payload(facecam=facecam), str(tmp_path)))
 
     assert result == {
         "file": os.path.join(".frames", "frame-1.jpg"),
@@ -87,9 +88,9 @@ def test_run_frame_downloads_section_and_calls_render_with_job_args(tmp_path):
     ]
     assert args[3] == calls["download"][0][2]
     assert args[4:] == (
-        "render.mp4", "black_bars", True, False, False, 11.5, "9:16", None, None, 100.0,
+        "render.mp4", "black_bars", True, False, facecam, 11.5, "9:16", None, None, 100.0,
     )
-    assert kwargs == {}
+    assert kwargs == expected_kwargs
     cmd = calls["run"][0]
     assert cmd[cmd.index("-ss") + 1] == "1.000"
     assert cmd[cmd.index("-q:v") + 1] == "3"

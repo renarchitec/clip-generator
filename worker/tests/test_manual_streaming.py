@@ -196,49 +196,69 @@ def test_manual_streaming_retries_section_once_on_403_before_succeeding(tmp_path
 def test_manual_streaming_reuses_cached_facecam_box_across_sections_and_full_fallback(
     tmp_path, fallback_full
 ):
-    box = (10, 20, 300, 200)
-    seen = {"boxes": {}, "sources": []}
+    scans, verifications, rendered = [], [], []
+    moments = _moments(4)
+    job = _job([ManualRange(moment.start, moment.end) for moment in moments])
+    job.facecam = True
 
     async def fake_section(job_arg, index, moment, workdir):
+        if fallback_full and index == 3:
+            raise RuntimeError("yt-dlp gagal")
         path = tmp_path / f"section-{index:02d}.mp4"
         path.write_text("sec")
-        if index == 1:
-            pipeline._FACECAM_BOX_CACHE[str(path)] = box
-        if fallback_full and index == 2:
-            raise RuntimeError("yt-dlp gagal")
-        return str(path), moment.start
+        return str(path), moment.start - 1
 
     async def fake_full(job_arg, workdir, on_progress=None):
         path = tmp_path / "source.mp4"
         path.write_text("full")
         return str(path)
 
-    def fake_render_one(video, moment, subs, outdir, filename, *args, **kwargs):
-        seen["sources"].append(os.path.basename(video))
-        seen["boxes"][os.path.basename(video)] = pipeline._FACECAM_BOX_CACHE.get(video)
-        (tmp_path / filename).write_text("clip")
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "ffprobe":
+            if "stream=width,height" in cmd:
+                return "640,360"
+            return "120" if cmd[-1].endswith("source.mp4") else "12"
+        with open(cmd[-1], "w") as output:
+            output.write("clip")
+
+    def scan(video, start, end, **kwargs):
+        scans.append((os.path.basename(video), start, end))
+        cx = 0.11 if video.endswith("section-01.mp4") else 0.89
+        return [(0, [(cx, 0.46, 0.08, 0.0)])]
+
+    def verify(video, start, end, box, src_w, src_h):
+        verifications.append((os.path.basename(video), start, end, box))
+        return video.endswith(("section-02.mp4", "section-04.mp4")) or start == 100
+
+    real_render_one = pipeline._render_one
+
+    def render_one(video, moment, subs, outdir, filename, *args, **kwargs):
+        if filename != "clip-04.mp4" or not fallback_full:
+            assert video not in pipeline._FACECAM_BOX_CACHE
+        real_render_one(video, moment, subs, outdir, filename, *args, **kwargs)
+        rendered.append((os.path.basename(video), moment.start, moment.end, pipeline._FACECAM_BOX_CACHE[video]))
 
     try:
         with patch.object(pipeline, "_download_one_section", side_effect=fake_section), \
              patch.object(pipeline, "_download_full", side_effect=fake_full), \
-             patch.object(pipeline, "_render_one", side_effect=fake_render_one):
-            asyncio.run(
-                pipeline.render_manual(
-                    _job([ManualRange(10, 20), ManualRange(40, 50)]),
-                    _moments(2),
-                    [],
-                    str(tmp_path),
-                    str(tmp_path),
-                )
-            )
+             patch.object(pipeline, "_run", side_effect=fake_run), \
+             patch.object(pipeline.reframe_mod, "facecam_face_frames", side_effect=scan), \
+             patch.object(pipeline.reframe_mod, "facecam_box_matches_window", side_effect=verify), \
+             patch.object(pipeline, "_render_one", side_effect=render_one):
+            asyncio.run(pipeline.render_manual(job, moments, [], str(tmp_path), str(tmp_path)))
     finally:
-        pipeline._FACECAM_BOX_CACHE.clear()
+        pipeline._clear_facecam_cache()
 
-    assert seen["sources"] == ["section-01.mp4", "section-02.mp4" if not fallback_full else "source.mp4"]
-    assert seen["boxes"] == {
-        "section-01.mp4": box,
-        "section-02.mp4" if not fallback_full else "source.mp4": box,
-    }
+    third = ("source.mp4", 70, 80) if fallback_full else ("section-03.mp4", 1, 11)
+    fourth = ("source.mp4", 100, 110) if fallback_full else ("section-04.mp4", 1, 11)
+    first_box, moved_box = rendered[0][3], rendered[2][3]
+    assert first_box != moved_box
+    assert rendered == [
+        ("section-01.mp4", 1, 11, first_box), ("section-02.mp4", 1, 11, first_box),
+        (*third, moved_box), (*fourth, moved_box),
+    ]
+    assert scans == [("section-01.mp4", 1, 11), third]
+    assert verifications == [("section-02.mp4", 1, 11, first_box), (*third, first_box), (*fourth, moved_box)]
 
 
 def test_manual_streaming_honours_cancel_between_clips(tmp_path):

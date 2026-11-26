@@ -1,3 +1,4 @@
+import sys
 import types
 
 import pytest
@@ -281,6 +282,99 @@ def test_facecam_candidate_needs_two_similar_occurrences():
     assert reframe._facecam_candidate([]) is None
 
 
+def test_facecam_candidate_rejects_fullscreen_scene_with_static_background():
+    background = (0.64, 0.18, 0.08, 0.0)
+    fullscreen = (0.5, 0.5, 0.30, 0.0)
+    assert reframe._facecam_candidate(
+        [background] * 6 + [fullscreen] * 4,
+        [0, 1, 2, 3, 4, 5, 0, 1, 2, 2],
+        total_keyframes=6,
+    ) is None
+
+
+def test_facecam_candidate_keeps_gameplay_facecam_with_one_large_npc_face():
+    cam = (0.11, 0.46, 0.08, 0.0)
+    assert reframe._facecam_candidate(
+        [cam] * 6 + [(0.5, 0.51, 0.34, 0.0)],
+        [0, 1, 2, 3, 4, 5, 3],
+        total_keyframes=6,
+    ) == cam
+
+
+@pytest.mark.parametrize(
+    "statuses, valid_size, expected",
+    [
+        ([(False, True)] * 3 + [(False, False)] * 2, True, True),
+        ([(False, True)] * 2 + [(False, False)] * 3, True, False),
+        ([(True, True)] * 3 + [(False, True)] * 2, True, False),
+        ([(False, True)], False, False),
+        ([], True, False),
+    ],
+)
+def test_facecam_box_matches_window(monkeypatch, statuses, valid_size, expected):
+    released, resized, processed = [], [], []
+    box = (10, 20, 150, 120)
+    capture = types.SimpleNamespace(isOpened=lambda: True, release=lambda: released.append(True))
+
+    class Frame:
+        shape = (360, 640 if valid_size else 1280, 3)
+
+        def __init__(self, fullscreen, facecam):
+            self.fullscreen, self.facecam = fullscreen, facecam
+
+        def __getitem__(self, key):
+            assert key == (slice(20, 140), slice(10, 160))
+            return self
+
+    def resize(frame, size, interpolation):
+        assert size == (300, 240) and interpolation == cv2.INTER_CUBIC
+        resized.append(frame)
+        return (frame, "region")
+
+    def process(image):
+        frame, kind = image
+        processed.append(kind)
+        if kind == "proxy":
+            detections = [_fake_detection(0.4, 0.3, 0.2, 0.34)] if frame.fullscreen else []
+        else:
+            height = 0.24 if frame.facecam else 0.06
+            detections = [_fake_detection(0.4, 0.3, 0.2, height)]
+        return types.SimpleNamespace(detections=detections)
+
+    class Detector:
+        def __init__(self, *, model_selection, min_detection_confidence):
+            assert (model_selection, min_detection_confidence) == (0, 0.5)
+
+        def __enter__(self):
+            return types.SimpleNamespace(process=process)
+
+        def __exit__(self, *exc):
+            pass
+
+    def iter_samples(cap, cv, start, end, fps, samples):
+        assert (cap, cv, start, end, fps, samples) == (capture, cv2, 10, 20, 0.5, 5)
+        return ((t, Frame(*status)) for t, status in enumerate(statuses))
+
+    cv2 = types.SimpleNamespace(
+        VideoCapture=lambda path: capture, resize=resize, cvtColor=lambda image, _: image,
+        COLOR_BGR2RGB=0, INTER_CUBIC=1,
+    )
+    monkeypatch.setitem(sys.modules, "cv2", cv2)
+    monkeypatch.setitem(sys.modules, "mediapipe", types.SimpleNamespace(solutions=types.SimpleNamespace(
+        face_detection=types.SimpleNamespace(FaceDetection=Detector),
+    )))
+    monkeypatch.setattr(reframe, "_iter_samples", iter_samples)
+    monkeypatch.setattr(reframe, "_facecam_proxy", lambda frame, _: (frame, "proxy"))
+
+    assert not reframe.facecam_box_matches_window("video.mp4", 10, 20, (630, 20, 150, 120), 640, 360)
+    assert not released
+    assert reframe.facecam_box_matches_window("video.mp4", 10, 20, box, 640, 360) is expected
+    checked = len(statuses) if valid_size else 0
+    assert len(resized) == checked
+    assert processed == ["proxy", "region"] * checked
+    assert released == [True]
+
+
 def test_iter_samples_seeks_instead_of_grabbing_when_step_is_large():
     # Video AV1 6,5 jam @60fps dengan sampling 240 sampel: step ~5840 frame.
     # Grab per frame akan membongkar ~1,4 juta frame; seek langsung tidak.
@@ -352,10 +446,17 @@ def test_facecam_sample_fps_spreads_max_samples_over_video():
         assert fps * duration <= reframe.FACECAM_MAX_SAMPLES + 1e-6
     assert pipeline._facecam_sample_fps(2400.0) == pytest.approx(0.1)
 
-def test_facecam_box_for_samples_whole_video_once(monkeypatch):
+@pytest.fixture
+def facecam_pipeline():
     from clipper import pipeline
 
-    pipeline._FACECAM_BOX_CACHE.clear()
+    pipeline._clear_facecam_cache()
+    yield pipeline
+    pipeline._clear_facecam_cache()
+
+
+def test_facecam_box_for_samples_whole_video_once(monkeypatch, facecam_pipeline):
+    pipeline = facecam_pipeline
     calls = []
 
     def fake_run(cmd):
@@ -374,6 +475,90 @@ def test_facecam_box_for_samples_whole_video_once(monkeypatch):
     assert first is not None and first == second
     # Satu deteksi untuk seluruh video, bukan per klip.
     assert calls == [(0.0, 600.0, pipeline._facecam_sample_fps(600.0))]
+
+
+def test_facecam_box_for_verifies_reuse_and_redetects_moved_facecam(monkeypatch, facecam_pipeline):
+    pipeline = facecam_pipeline
+    scans, verifications, probes = [], [], []
+
+    def probe(cmd):
+        probes.append(cmd)
+        return "640,360" if "stream=width,height" in cmd else "200"
+
+    def scan(video, start, end, *, sample_fps, max_samples):
+        scans.append((start, end, sample_fps, max_samples))
+        return [(0.0, [(0.11 if start == 0 else 0.89, 0.46, 0.08, 0.0)])]
+
+    def verify(video, start, end, box, width, height):
+        verifications.append((start, end, box, width, height))
+        return (start, box) in [(60, first), (140, moved), (160, first)]
+
+    monkeypatch.setattr(pipeline, "_run", probe)
+    monkeypatch.setattr(reframe, "facecam_face_frames", scan)
+    first = pipeline._facecam_box_for("video.mp4", -10, 60)
+    assert first is not None
+
+    # Gunakan kotak kiri pada klip kedua; klip ketiga pindah ke kanan.
+    moved = None
+    monkeypatch.setattr(reframe, "facecam_box_matches_window", verify)
+    assert pipeline._facecam_box_for("video.mp4", 60, 80) == first
+    moved = pipeline._facecam_box_for("video.mp4", 80, 140)
+    assert moved is not None and moved != first
+    assert pipeline._facecam_box_for("video.mp4", 140, 160) == moved
+    assert pipeline._facecam_box_for("video.mp4", 160, 250) == first
+    assert scans == [(0, 60, 0.5, 30), (80, 140, 0.5, 30)]
+    assert verifications == [
+        (60, 80, first, 640, 360), (80, 140, first, 640, 360),
+        (140, 160, moved, 640, 360), (160, 200, moved, 640, 360),
+        (160, 200, first, 640, 360),
+    ]
+    assert len(probes) == 2
+    assert pipeline._FACECAM_BOX_CACHE == {"video.mp4": first}
+    assert pipeline._FACECAM_KNOWN_BOXES == [(moved, 640, 360), (first, 640, 360)]
+
+
+def test_facecam_box_for_fullscreen_miss_does_not_poison_gameplay(monkeypatch, facecam_pipeline):
+    pipeline = facecam_pipeline
+    monkeypatch.setattr(pipeline, "_probe_video_meta", lambda _, *, cache: (640, 360, 60))
+    monkeypatch.setattr(reframe, "facecam_face_frames", lambda video, start, end, **kw: (
+        [] if start == 10 else [(0, [(0.11, 0.46, 0.08, 0.0)])]
+    ))
+
+    assert pipeline._facecam_box_for("video.mp4", 10, 20) is None
+    assert not pipeline._FACECAM_BOX_CACHE and not pipeline._FACECAM_KNOWN_BOXES
+    box = pipeline._facecam_box_for("video.mp4", 30, 40)
+    assert box is not None
+    assert pipeline._FACECAM_BOX_CACHE == {"video.mp4": box}
+    assert pipeline._FACECAM_KNOWN_BOXES == [(box, 640, 360)]
+
+
+def test_facecam_box_for_skips_cache_on_resolution_mismatch_or_preview(monkeypatch, facecam_pipeline):
+    pipeline = facecam_pipeline
+    def probe(cmd):
+        if "stream=width,height" in cmd:
+            return "1280,720" if cmd[-1] == "large.mp4" else "640,360"
+        return "60"
+
+    monkeypatch.setattr(pipeline, "_run", probe)
+    scans = []
+
+    def scan(video, start, end, **kwargs):
+        scans.append((video, start, end))
+        return [(0, [(0.11, 0.46, 0.08, 0.0)])]
+
+    def unexpected_verify(*args):
+        pytest.fail("kotak beda resolusi atau preview tidak boleh diverifikasi")
+
+    monkeypatch.setattr(reframe, "facecam_face_frames", scan)
+    monkeypatch.setattr(reframe, "facecam_box_matches_window", unexpected_verify)
+    small = pipeline._facecam_box_for("small.mp4", 10, 20)
+    large = pipeline._facecam_box_for("large.mp4", 10, 20)
+    assert small is not None and large is not None and small != large
+    assert pipeline._facecam_box_for("preview.mp4", 0, 0.1, reuse_known=False) == small
+    assert scans == [("small.mp4", 10, 20), ("large.mp4", 10, 20), ("preview.mp4", 0, 60)]
+    assert pipeline._FACECAM_KNOWN_BOXES == [(small, 640, 360), (large, 1280, 720)]
+    assert pipeline._FACECAM_BOX_CACHE == {"small.mp4": small, "large.mp4": large}
+    assert pipeline._VIDEO_META_CACHE == {"small.mp4": (640, 360, 60), "large.mp4": (1280, 720, 60)}
 
 
 def test_facecam_box_centers_corner_face_by_zooming_in():

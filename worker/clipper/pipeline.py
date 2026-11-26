@@ -631,25 +631,24 @@ def _two_speaker_graph(
 
 
 _FACECAM_BOX_CACHE: Dict[str, Optional[Tuple[int, int, int, int]]] = {}
+_FACECAM_KNOWN_BOXES: List[Tuple[Tuple[int, int, int, int], int, int]] = []
+_VIDEO_META_CACHE: Dict[str, Tuple[int, int, float]] = {}
 
 
-def _facecam_sample_fps(duration: float) -> float:
-    """Jarak sampling facecam sepanjang video, dibatasi jumlah sampel maksimum."""
-    return min(
-        reframe_mod.FACECAM_SAMPLE_FPS,
-        reframe_mod.FACECAM_MAX_SAMPLES / max(1.0, duration),
-    )
+def _clear_facecam_cache() -> None:
+    _FACECAM_BOX_CACHE.clear()
+    _FACECAM_KNOWN_BOXES.clear()
+    _VIDEO_META_CACHE.clear()
 
 
-def _facecam_box_for(video: str) -> Optional[Tuple[int, int, int, int]]:
-    """Kotak wajah facecam (piksel sumber); None -> fallback reframe biasa.
+def _facecam_sample_fps(duration: float, max_samples: int = reframe_mod.FACECAM_MAX_SAMPLES) -> float:
+    """Laju sampling facecam, dibatasi jumlah sampel maksimum."""
+    return min(reframe_mod.FACECAM_SAMPLE_FPS, max_samples / max(1.0, duration))
 
-    Dihitung sekali per file video, bukan per klip: panel facecam statis, jadi
-    satu kotak dipakai semua klip pada video itu. Deteksi per klip membuat
-    sebagian klip jatuh ke reframe biasa dan kotaknya bergeser antar klip.
-    """
-    if video in _FACECAM_BOX_CACHE:
-        return _FACECAM_BOX_CACHE[video]
+
+def _probe_video_meta(video: str, *, cache: bool = True) -> Tuple[int, int, float]:
+    if cache and video in _VIDEO_META_CACHE:
+        return _VIDEO_META_CACHE[video]
 
     out = _run(
         [
@@ -662,20 +661,75 @@ def _facecam_box_for(video: str) -> Optional[Tuple[int, int, int, int]]:
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", video]
     )
     duration = float(duration_out.strip() or 0.0) or 1.0
-    frames = reframe_mod.facecam_face_frames(
-        video, 0.0, duration, sample_fps=_facecam_sample_fps(duration)
-    )
+    meta = (src_w, src_h, duration)
+    if cache:
+        _VIDEO_META_CACHE[video] = meta
+    return meta
+
+
+def _remember_facecam_box(video: str, box: Tuple[int, int, int, int], src_w: int, src_h: int) -> None:
+    entry = (box, src_w, src_h)
+    if entry in _FACECAM_KNOWN_BOXES:
+        _FACECAM_KNOWN_BOXES.remove(entry)
+    _FACECAM_KNOWN_BOXES.append(entry)
+    _FACECAM_BOX_CACHE[video] = box
+
+
+def _facecam_box_for(
+    video: str,
+    start: Optional[float] = None,
+    end: Optional[float] = None,
+    *,
+    reuse_known: bool = True,
+) -> Optional[Tuple[int, int, int, int]]:
+    """Kotak facecam (piksel sumber); None berarti fallback reframe biasa."""
+    whole_video = start is None or end is None
+    if whole_video and video in _FACECAM_BOX_CACHE:
+        return _FACECAM_BOX_CACHE[video]
+
+    src_w, src_h, duration = _probe_video_meta(video, cache=reuse_known)
+    if start is None or end is None:
+        win_start, win_end = 0.0, duration
+        frames = reframe_mod.facecam_face_frames(
+            video, win_start, win_end, sample_fps=_facecam_sample_fps(duration)
+        )
+    else:
+        win_start, win_end = max(0.0, float(start)), min(duration, float(end))
+        if win_end <= win_start + 0.25:
+            win_start, win_end = 0.0, duration
+        if reuse_known:
+            for cand_box, cand_w, cand_h in reversed(_FACECAM_KNOWN_BOXES):
+                if (cand_w, cand_h) != (src_w, src_h):
+                    continue
+                if reframe_mod.facecam_box_matches_window(video, win_start, win_end, cand_box, src_w, src_h):
+                    log.info(
+                        "facecam: pakai ulang kotak cache %s (terverifikasi pada %.1f–%.1fs)",
+                        cand_box, win_start, win_end,
+                    )
+                    _remember_facecam_box(video, cand_box, src_w, src_h)
+                    return cand_box
+
+        win_dur = max(0.5, win_end - win_start)
+        max_samples = reframe_mod.FACECAM_CLIP_MAX_SAMPLES
+        frames = reframe_mod.facecam_face_frames(
+            video, win_start, win_end,
+            sample_fps=_facecam_sample_fps(win_dur, max_samples=max_samples),
+            max_samples=max_samples,
+        )
+
     box = reframe_mod.facecam_box(frames, src_w, src_h)
     seen = sum(1 for _, faces in frames if faces)
-    if box:
-        log.info("facecam: wajah di %d/%d sampel video, box=%s", seen, len(frames), box)
+    if box is not None:
+        log.info("facecam: wajah di %d/%d sampel pada %.1f–%.1fs, box=%s", seen, len(frames), win_start, win_end, box)
     else:
         log.info(
-            "facecam: wajah hanya di %d/%d sampel video (<50%%), fallback reframe biasa",
-            seen,
-            len(frames),
+            "facecam: wajah di %d/%d sampel pada %.1f–%.1fs, fallback reframe biasa",
+            seen, len(frames), win_start, win_end,
         )
-    _FACECAM_BOX_CACHE[video] = box
+    if box is not None and reuse_known:
+        _remember_facecam_box(video, box, src_w, src_h)
+    elif whole_video:
+        _FACECAM_BOX_CACHE[video] = box
     return box
 
 
@@ -1085,6 +1139,8 @@ async def run_frame(payload: Mapping[str, Any], clips_dir: str, temp_root: Optio
         extra: Dict[str, Any] = {}
         if data["captionStyle"] is not None:
             extra["caption_style"] = data["captionStyle"]
+        if data["facecam"]:
+            extra["facecam_reuse_cache"] = False
         await asyncio.to_thread(
             _render_one, video, moment, cues, workdir, "render.mp4", data["reframe"],
             data["captions"], data["twoSpeakers"], data["facecam"], offset,
@@ -1124,6 +1180,8 @@ def _render_one(
     caption_style: Optional[CaptionStyle] = None,
     watermarks: Sequence[tuple[Watermark, str]] = (),
     normalize_audio: bool = False,
+    *,
+    facecam_reuse_cache: bool = True,
 ) -> None:
     resolved_wms: list[tuple[Watermark, str]] = []
     if watermarks:
@@ -1156,7 +1214,7 @@ def _render_one(
     box = None
     if facecam:
         try:
-            box = _facecam_box_for(video)
+            box = _facecam_box_for(video, moment.start, moment.end, reuse_known=facecam_reuse_cache)
         except Exception as exc:
             log.warning("facecam: deteksi wajah gagal, fallback reframe biasa: %s", exc)
 
@@ -1358,7 +1416,7 @@ async def render(
         raise ValueError("sumber video tidak tersedia untuk render")
 
     os.makedirs(outdir, exist_ok=True)
-    _FACECAM_BOX_CACHE.clear()
+    _clear_facecam_cache()
     await _emit(on_progress, "render", 0, f"merender {len(moments)} clip")
 
     clips: List[ClipResult] = []
@@ -1406,7 +1464,7 @@ async def render_manual(
         raise ValueError("tidak ada momen untuk dirender")
 
     os.makedirs(outdir, exist_ok=True)
-    _FACECAM_BOX_CACHE.clear()
+    _clear_facecam_cache()
     total = len(moments)
     await _emit(on_progress, "render", 0, f"merender {total} clip")
 
@@ -1468,15 +1526,6 @@ async def render_manual(
             src_video = section
         else:  # pragma: no cover - tidak mungkin: section atau full video ada
             raise RuntimeError("sumber video tidak tersedia untuk render")
-
-        if src_video not in _FACECAM_BOX_CACHE:
-            # Facecam panel statis: pakai ulang kotak dari section/video lain
-            # pada job ini agar tidak memindai video lagi (termasuk fallback).
-            cached_box = next(
-                (b for b in _FACECAM_BOX_CACHE.values() if b is not None), None
-            )
-            if cached_box is not None:
-                _FACECAM_BOX_CACHE[src_video] = cached_box
 
         try:
             clip = await asyncio.to_thread(
