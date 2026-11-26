@@ -242,13 +242,14 @@ pub fn windows_from_heatmap(
 ) -> Vec<Window> {
     let mut samples = Vec::new();
     heatmap_samples(data, &mut samples);
+    let budget = (max_windows as f64 * WINDOW_SEC).max(900.);
     select_peak_windows(
         &samples,
         effective_end(duration, limit),
         max_windows,
         WINDOW_SEC,
         WINDOW_SEC / 2.,
-        900.,
+        budget,
     )
 }
 
@@ -295,6 +296,7 @@ pub async fn discover_windows(
     cancel: &CancellationToken,
 ) -> Vec<Window> {
     let end = effective_end(duration, limit);
+    let budget = (max_windows as f64 * WINDOW_SEC).max(900.);
     if !end.is_finite() || end <= 0. {
         return vec![];
     }
@@ -339,7 +341,7 @@ pub async fn discover_windows(
                     }
                 }
                 let windows =
-                    select_peak_windows(&samples, end, max_windows, WINDOW_SEC, 55., 900.);
+                    select_peak_windows(&samples, end, max_windows, WINDOW_SEC, 55., budget);
                 if !windows.is_empty() {
                     return windows;
                 }
@@ -394,6 +396,18 @@ mod tests {
         assert!((score - 4. / 60. * 1.6).abs() < 1e-12);
         assert_eq!(parse_chat_actions(&actions, 400., 30.), (0, 4., 0.));
     }
+    #[test]
+    fn heatmap_review_can_keep_twelve_full_windows() {
+        let samples = Value::Array(
+            (1..=12)
+                .map(|i| json!({"start_time": 100 * i, "end_time": 100 * i, "value": 1}))
+                .collect(),
+        );
+        let windows = windows_from_heatmap(&samples, 1300., None, 12);
+        assert_eq!(windows.len(), 12);
+        assert!(windows.iter().all(|&(s, e)| e - s == WINDOW_SEC));
+    }
+
     #[test]
     fn peak_nms_merge_budget_and_centered_heatmap() {
         assert_eq!(

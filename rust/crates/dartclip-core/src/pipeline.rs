@@ -450,7 +450,7 @@ impl Pipeline {
         options: &RenderOptions,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        self.render_window(video, moment, cues, out, options, None, cancel)
+        self.render_window(video, moment, cues, out, options, None, None, cancel)
             .await
             .map(|_| ())
     }
@@ -463,6 +463,7 @@ impl Pipeline {
         out: &Path,
         options: &RenderOptions,
         cached: Option<FacecamBox>,
+        hook_cover: Option<&Path>,
         cancel: &CancellationToken,
     ) -> Result<Option<FacecamBox>> {
         check_cancel(cancel)?;
@@ -538,25 +539,52 @@ impl Pipeline {
             (facebox, centers, segments)
         })
         .await?;
-        let mut simple = None;
-        let (graph, base) = if two {
-            let (left, right) = centers.unwrap_or((0.25, 0.75));
-            two_speaker_graph(left, right, subtitle.as_deref())
-        } else if let Some(b) = facebox {
-            facecam_graph(b, subtitle.as_deref())
-        } else {
-            let vf = if landscape || reframe == ReframeMode::BlurredFill {
-                blurred_fill(w, h)
-            } else if reframe == ReframeMode::BlackBars {
-                black_bars(w, h)
+        let reframe_graph = |subtitle| {
+            if two {
+                let (left, right) = centers.unwrap_or((0.25, 0.75));
+                let (graph, base) = two_speaker_graph(left, right, subtitle);
+                (graph, base, None)
+            } else if let Some(b) = facebox {
+                let (graph, base) = facecam_graph(b, subtitle);
+                (graph, base, None)
             } else {
-                format!("{},setsar=1", cut_crop_filter(&segments, w, h))
-            };
-            let vf = standard_video_filter(&vf, subtitle.as_deref());
-            let graph = vec![format!("[0:v]{vf}[base]")];
-            simple = Some(vf);
-            (graph, "[base]".into())
+                let vf = if landscape || reframe == ReframeMode::BlurredFill {
+                    blurred_fill(w, h)
+                } else if reframe == ReframeMode::BlackBars {
+                    black_bars(w, h)
+                } else {
+                    format!("{},setsar=1", cut_crop_filter(&segments, w, h))
+                };
+                let vf = standard_video_filter(&vf, subtitle);
+                (vec![format!("[0:v]{vf}[base]")], "[base]".into(), Some(vf))
+            }
         };
+        if let Some(dest) = hook_cover {
+            let (graph, base, simple) = reframe_graph(None);
+            let complex = graph.join(";");
+            let filter_args = match simple.as_deref() {
+                Some(vf) => ["-vf", vf, "-map", "0:v:0"],
+                None => ["-filter_complex", &complex, "-map", &base],
+            };
+            // Only face tracking populates segments. Multiple segments need clip-relative time.
+            if hook_thumbnail::cover_frame_filtered(
+                &self.config.tools.ffmpeg,
+                &video,
+                (moment.start, duration),
+                &filter_args,
+                segments.len() > 1,
+                dest,
+                cancel,
+            )
+            .await
+            .is_err()
+            {
+                // A missing cover falls back to source extraction in add_hook.
+                let _ = fs::remove_file(dest);
+            }
+            check_cancel(cancel)?;
+        }
+        let (graph, base, simple) = reframe_graph(subtitle.as_deref());
         let loudnorm = if options.normalize_audio {
             !tools::run(
                 Command::new(&self.config.tools.ffprobe)
@@ -876,7 +904,7 @@ impl Pipeline {
         dir: &Path,
         video: Option<&Path>,
         limit: Option<u32>,
-        clip_count: usize,
+        max_windows: usize,
         language: &str,
         cancel: &CancellationToken,
         mut progress: F,
@@ -903,7 +931,6 @@ impl Pipeline {
         } else {
             live_chat::number(&meta["duration"]).unwrap_or_default()
         };
-        let max_windows = clip_count.saturating_mul(2).clamp(6, 10);
         let mut windows = live_chat::discover_windows(
             url,
             duration,
@@ -1187,7 +1214,7 @@ impl Pipeline {
                     dir.path(),
                     None,
                     request.max_source_sec,
-                    request.params.clip_count,
+                    12,
                     &request.caption_language,
                     cancel,
                     progress,
@@ -1309,6 +1336,7 @@ impl Pipeline {
         source: &Path,
         moment: &Moment,
         clip: &Path,
+        pre_reframed_cover: Option<&Path>,
         cancel: &CancellationToken,
     ) -> Result<()> {
         let Some(text) = moment
@@ -1321,25 +1349,37 @@ impl Pipeline {
             return Ok(());
         };
         let dir = self.workdir("hook-")?;
-        let cover = dir.path().join("cover.png");
         let thumb = dir.path().join("hook.png");
-        hook_thumbnail::cover_frame(
-            &self.config.tools.ffmpeg,
-            source,
-            moment.start,
-            moment.end - moment.start,
-            &cover,
-            cancel,
-        )
-        .await?;
         let meta = tools::probe_media_cancel(&self.config.tools.ffprobe, clip, cancel).await?;
+        let pre_reframed_cover = pre_reframed_cover.filter(|&path| {
+            image::image_dimensions(path).is_ok_and(|dims| dims == (meta.width, meta.height))
+        });
+        let (cover, needs_focus) = if let Some(path) = pre_reframed_cover {
+            (path.to_owned(), false)
+        } else {
+            let cover = dir.path().join("cover.png");
+            hook_thumbnail::cover_frame(
+                &self.config.tools.ffmpeg,
+                source,
+                moment.start,
+                moment.end - moment.start,
+                &cover,
+                cancel,
+            )
+            .await?;
+            (cover, true)
+        };
         let faces = self.faces.clone();
         let fonts = self.config.font_dir.clone().unwrap_or_default();
         let text = text.to_owned();
         let thumb2 = thumb.clone();
         // The tempdir stays alive until the blocking task finishes.
         let _dir = tokio::task::spawn_blocking(move || {
-            let focus = faces.detect_cover_face_focus(&cover);
+            let focus = if needs_focus {
+                faces.detect_cover_face_focus(&cover)
+            } else {
+                None
+            };
             hook_thumbnail::render_hook_thumbnail(
                 &cover,
                 &text,
@@ -1480,7 +1520,7 @@ impl Pipeline {
                     dir.path(),
                     full.as_deref(),
                     limit,
-                    job.params.clip_count,
+                    job.params.clip_count.saturating_mul(2).clamp(6, 10),
                     &job.caption_language,
                     cancel,
                     &mut on_progress,
@@ -1661,14 +1701,29 @@ impl Pipeline {
             let active_cues = range_cues.as_deref().unwrap_or(&cues);
             let file = format!("clip-{n:02}.mp4");
             let clip = outdir.join(&file);
+            let cover_path = job
+                .hook_banner
+                .then(|| dir.path().join(format!("cover-{n:02}.png")));
             if let Some(b) = self
-                .render_window(video, &window, active_cues, &clip, &opts, cached, cancel)
+                .render_window(
+                    video,
+                    &window,
+                    active_cues,
+                    &clip,
+                    &opts,
+                    cached,
+                    cover_path.as_deref(),
+                    cancel,
+                )
                 .await?
             {
                 cached = Some(b);
             }
-            if job.hook_banner {
-                let _ = self.add_hook(video, &window, &clip, cancel).await;
+            if let Some(cover) = cover_path {
+                let _ = self
+                    .add_hook(video, &window, &clip, Some(&cover), cancel)
+                    .await;
+                let _ = fs::remove_file(cover);
                 check_cancel(cancel)?;
             }
             if let Some(outro) = &outro {
