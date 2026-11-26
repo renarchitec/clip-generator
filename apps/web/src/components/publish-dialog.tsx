@@ -40,7 +40,7 @@ export type PublicationResponse = {
   id: string
   clipId: string
   platform: SocialPlatform
-  accountId: string
+  accountId: string | null
   accountName: string
   title: string
   caption: string
@@ -253,6 +253,7 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
   const statusText = item.platform === "tiktok" && item.mode === "inbox" && item.status === "published" ? t.publishSentToInbox : item.status === "processing" && item.platform === "tiktok" ? t.publishProcessingTikTok : item.status === "processing" && item.platform === "instagram" ? t.publishProcessingInstagram : t.publishStatus[item.status]
   const privacyLabel = item.platform === "tiktok" ? (t.tiktokPrivacy[item.privacy as keyof typeof t.tiktokPrivacy] ?? item.privacy) : item.platform === "instagram" ? t.instagramPrivacyLabel : (t.privacyOptions[item.privacy as keyof typeof t.privacyOptions] ?? item.privacy)
   const PlatformIcon = item.platform === "tiktok" ? TikTokMark : item.platform === "instagram" ? InstagramMark : YouTubeMark
+  const accountLabel = item.accountName?.trim() || t.socialPlatforms[item.platform]
   const hasMetrics = item.viewCount !== null || item.likeCount !== null || item.commentCount !== null
   const errorHint = item.metricsError ? metricsErrorMessage(item.metricsError, t) : null
 
@@ -262,14 +263,14 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 truncate text-sm font-medium">
           <PlatformIcon className="size-3.5 shrink-0"/>
-          <span className="truncate">{item.accountName}</span>
+          <span className="truncate">{accountLabel}</span>
         </p>
         <p className="truncate text-xs text-muted-foreground">
           <span className={cn(item.status === "failed" && "text-destructive", item.status === "published" && "text-foreground")}>{statusText}{item.status === "uploading" && <span className="tabular-nums"> · {progress}%</span>}</span> · {privacyLabel} · {relativeAge(when, locale)}
         </p>
       </div>
       {item.status === "published" && item.externalUrl && <a href={item.externalUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted">{item.platform === "tiktok" ? t.openOnTikTok : item.platform === "instagram" ? t.openOnInstagram : t.openOnYouTube}<ExternalLink aria-hidden="true" className="size-3.5"/></a>}
-      {item.status === "failed" && <Button type="button" variant="outline" className="h-9 shrink-0 px-3" disabled={retry.isPending} onClick={() => retry.mutate()}>{retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin"/> : <RotateCcw aria-hidden="true" className="size-3.5"/>}{t.retryUpload}</Button>}
+      {item.status === "failed" && item.accountId !== null && <Button type="button" variant="outline" className="h-9 shrink-0 px-3" disabled={retry.isPending} onClick={() => retry.mutate()}>{retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin"/> : <RotateCcw aria-hidden="true" className="size-3.5"/>}{t.retryUpload}</Button>}
     </div>
     {item.status === "published" && hasMetrics && (
       <div className="mt-2 ml-11 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -320,6 +321,24 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
             <Separator orientation="vertical" className="h-3"/>
             <span className="text-[11px] text-muted-foreground/80">{t.statsUpdatedAgo.replace("{age}", relativeAge(item.metricsUpdatedAt, locale))}</span>
           </>
+        )}
+        {item.metricsError === "account_disconnected" && item.viewCount !== null && errorHint && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={errorHint}
+                className="size-5 text-muted-foreground/80 hover:text-foreground"
+              >
+                <Info aria-hidden="true" className="size-3.5"/>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="end">
+              {errorHint}
+            </TooltipContent>
+          </Tooltip>
         )}
       </div>
     )}

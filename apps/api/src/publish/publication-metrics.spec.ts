@@ -129,13 +129,23 @@ function publication(id: string, platform: string, externalId: string | null, mo
   };
 }
 
-function fixture(rows: ReturnType<typeof publication>[]) {
+type FixturePublication = Omit<ReturnType<typeof publication>, 'socialAccountId' | 'socialAccount'> & {
+  socialAccountId: string | null;
+  socialAccount: { displayName: string; scopes: string[] } | null;
+  accountName?: string;
+};
+
+function fixture(rows: FixturePublication[]) {
   const records = new Map(rows.map((row) => [row.id, row]));
   const lookups: string[] = [];
+  const queries: unknown[] = [];
   const prisma = {
     clip: { findFirst: async () => ({ id: 'clip-1' }) },
     publication: {
-      findMany: async () => [...records.values()],
+      findMany: async (query: { where: unknown }) => {
+        queries.push(query.where);
+        return [...records.values()];
+      },
       update: async ({ where, data }: { where: { id: string }; data: object }) => {
         const row = { ...records.get(where.id)!, ...data };
         records.set(row.id, row);
@@ -151,7 +161,7 @@ function fixture(rows: ReturnType<typeof publication>[]) {
   };
   type Dependencies = ConstructorParameters<typeof MetricsService>;
   return {
-    records, lookups,
+    records, lookups, queries,
     service: new PublicationMetricsService(
       prisma as unknown as Dependencies[0], social as unknown as Dependencies[1],
       { metricsSyncIntervalMs: 6 * 60 * 60 * 1000 } as Dependencies[2],
@@ -217,6 +227,30 @@ test('clip metrics refresh returns non-published rows in order without fetching 
   const updatedAt = publications[1].metricsUpdatedAt;
   assert.ok(updatedAt);
   assert.equal(nextAllowedAt, new Date(Date.parse(updatedAt) + METRICS_REFRESH_COOLDOWN_MS).toISOString());
+});
+
+test('clip metrics refresh returns disconnected publications with their saved account name and counts', async (t) => {
+  const { service, records, lookups, queries } = fixture([
+    {
+      ...publication('disconnected', 'youtube', 'video-1'),
+      socialAccountId: null, socialAccount: null, accountName: 'Saved channel',
+      viewCount: 42, likeCount: 3, commentCount: 1,
+    },
+  ]);
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('unexpected fetch'); });
+
+  const { publications, refreshed } = await service.refreshClipMetrics('user-1', 'clip-1');
+
+  assert.deepEqual(queries, [{ clipId: 'clip-1', clip: { job: { userId: 'user-1' } } }]);
+  assert.equal(refreshed, 1);
+  assert.equal(fetch.mock.callCount(), 0);
+  assert.deepEqual(lookups, []);
+  assert.equal(records.get('disconnected')?.metricsError, 'account_disconnected');
+  assert.equal(publications.length, 1);
+  const { accountId, accountName, viewCount, likeCount, commentCount, metricsError } = publications[0];
+  assert.deepEqual([accountId, accountName, viewCount, likeCount, commentCount, metricsError], [
+    null, 'Saved channel', 42, 3, 1, 'account_disconnected',
+  ]);
 });
 
 test('metrics service preserves Instagram views when permission is missing or insights are empty', async (t) => {

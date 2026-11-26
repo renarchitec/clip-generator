@@ -24,6 +24,10 @@ const METRICS_INCLUDE = {
 } as const satisfies Prisma.PublicationInclude;
 
 type MetricsPublication = Prisma.PublicationGetPayload<{ include: typeof METRICS_INCLUDE }>;
+type ConnectedPublication = MetricsPublication & {
+  socialAccountId: string;
+  socialAccount: NonNullable<MetricsPublication['socialAccount']>;
+};
 type MetricsUpdate = Partial<MetricCounts> & { metricsError: string | null };
 type VideoPublication = MetricsPublication & { externalId: string };
 const RECENT_PUBLICATION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -46,7 +50,7 @@ export class PublicationMetricsService {
     if (!clip) throw new NotFoundException(`Clip ${clipId} tidak ditemukan.`);
 
     const rows = await this.prisma.publication.findMany({
-      where: { clipId, socialAccount: { userId } },
+      where: { clipId, clip: { job: { userId } } },
       include: METRICS_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
@@ -61,7 +65,6 @@ export class PublicationMetricsService {
       where: {
         status: PublicationStatus.published,
         clip: { job: { userId } },
-        socialAccount: { userId },
         ...(clipIds ? { clipId: { in: clipIds.slice(0, 50) } } : {}),
       },
       include: METRICS_INCLUDE,
@@ -79,6 +82,7 @@ export class PublicationMetricsService {
     const rows = await this.prisma.publication.findMany({
       where: {
         status: PublicationStatus.published,
+        socialAccountId: { not: null },
         AND: [
           { OR: [{ publishedAt: { gte: recent } }, { publishedAt: null, createdAt: { gte: recent } }] },
           { OR: [{ metricsUpdatedAt: null }, { metricsUpdatedAt: { lt: stale } }] },
@@ -109,7 +113,11 @@ export class PublicationMetricsService {
     const save = async (publication: MetricsPublication, data: MetricsUpdate) => {
       try {
         const row = await this.prisma.publication.update({
-          where: { id: publication.id, status: PublicationStatus.published },
+          where: {
+            id: publication.id,
+            status: PublicationStatus.published,
+            socialAccountId: publication.socialAccountId,
+          },
           data: { ...data, metricsUpdatedAt: now },
           include: METRICS_INCLUDE,
         });
@@ -119,12 +127,18 @@ export class PublicationMetricsService {
       }
     };
 
-    const groups = new Map<string, MetricsPublication[]>();
+    const groups = new Map<string, ConnectedPublication[]>();
     for (const row of rows) {
-      const key = `${row.platform}:${row.socialAccountId}`;
+      if (!row.socialAccountId || !row.socialAccount) {
+        await save(row, { metricsError: 'account_disconnected' });
+        continue;
+      }
+      const { socialAccountId, socialAccount } = row;
+      const connected = { ...row, socialAccountId, socialAccount };
+      const key = `${row.platform}:${socialAccountId}`;
       const group = groups.get(key);
-      if (group) group.push(row);
-      else groups.set(key, [row]);
+      if (group) group.push(connected);
+      else groups.set(key, [connected]);
     }
     for (const group of groups.values()) {
       const account = group[0];

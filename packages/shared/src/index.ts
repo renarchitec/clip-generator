@@ -434,7 +434,7 @@ export interface PublicationResponse {
   id: string;
   clipId: string;
   platform: SocialPlatform;
-  accountId: string;
+  accountId: string | null;
   accountName: string;
   title: string;
   caption: string;

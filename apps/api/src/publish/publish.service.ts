@@ -79,7 +79,7 @@ export class PublishService {
     const accountIds = dto.targets.map((target) => target.accountId);
     const accounts = await this.prisma.socialAccount.findMany({
       where: { id: { in: accountIds }, userId },
-      select: { id: true, platform: true },
+      select: { id: true, platform: true, displayName: true, externalId: true },
     });
     const byId = new Map(accounts.map((account) => [account.id, account]));
     const invalid = validatePublishTargets(
@@ -119,6 +119,8 @@ export class PublishService {
             data: {
               clipId,
               socialAccountId: account.id,
+              accountName: account.displayName,
+              accountExternalId: account.externalId,
               platform: account.platform,
               title:
                 account.platform === 'tiktok' || account.platform === 'instagram'
@@ -183,7 +185,7 @@ export class PublishService {
     if (!clip) throw new NotFoundException(`Clip ${clipId} tidak ditemukan.`);
 
     const rows = await this.prisma.publication.findMany({
-      where: { clipId, socialAccount: { userId } },
+      where: { clipId, clip: { job: { userId } } },
       include: PUBLICATION_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
@@ -192,7 +194,7 @@ export class PublishService {
 
   async retry(id: string, userId: string): Promise<PublicationResponse> {
     const publication = await this.prisma.publication.findFirst({
-      where: { id, socialAccount: { userId }, clip: { job: { userId } } },
+      where: { id, clip: { job: { userId } } },
       select: {
         id: true,
         clipId: true,
@@ -203,6 +205,9 @@ export class PublishService {
     });
     if (!publication || publication.clip.deletedAt) {
       throw new NotFoundException(`Publikasi ${id} tidak ditemukan.`);
+    }
+    if (!publication.socialAccountId) {
+      throw new BadRequestException('social_account_disconnected');
     }
     if (publication.status !== PublicationStatus.failed) {
       throw new BadRequestException(
@@ -287,14 +292,14 @@ export class PublishService {
 }
 
 export function toPublicationResponse(
-  row: PublicationWithAccount,
+  row: Omit<PublicationWithAccount, 'accountName'> & { accountName?: string | null },
 ): PublicationResponse {
   return {
     id: row.id,
     clipId: row.clipId,
     platform: row.platform,
     accountId: row.socialAccountId,
-    accountName: row.socialAccount.displayName,
+    accountName: row.socialAccount?.displayName ?? row.accountName ?? '',
     title: row.title,
     caption: row.caption,
     privacy: row.privacy,

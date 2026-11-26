@@ -7,7 +7,9 @@ import type { Prisma } from '@prisma/client';
 export const CLIP_PUBLICATION_SELECT = {
   orderBy: { createdAt: 'desc' },
   select: {
+    id: true,
     socialAccountId: true,
+    accountExternalId: true,
     platform: true,
     status: true,
     externalUrl: true,

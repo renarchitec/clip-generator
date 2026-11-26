@@ -34,6 +34,20 @@ test('antrean publish sama di API dan shared; processor concurrency 2', async ()
   assert.match(app, /PublishModule/);
 });
 
+test('migrasi mempertahankan publikasi saat akun sosial diputus', async () => {
+  const schema = await read('apps/api/prisma/schema.prisma');
+  assert.match(schema, /socialAccountId\s+String\?/);
+  assert.match(schema, /socialAccount\s+SocialAccount\?\s+@relation\(fields: \[socialAccountId\], references: \[id\], onDelete: SetNull\)/);
+  const migration = await read(
+    'apps/api/prisma/migrations/20260204000000_publication_preserve_on_disconnect/migration.sql',
+  );
+  assert.match(migration, /SET "accountName" = sa\."displayName", "accountExternalId" = sa\."externalId"/);
+  assert.match(migration, /ALTER COLUMN "socialAccountId" DROP NOT NULL/);
+  assert.match(migration, /ON DELETE SET NULL ON UPDATE CASCADE/);
+  const shared = await read('packages/shared/src/index.ts');
+  assert.match(shared, /interface PublicationResponse\s*\{[^}]*accountId: string \| null;/);
+});
+
 test('migrasi menambah kolom YouTube pada publications', async () => {
   const migration = await read(
     'apps/api/prisma/migrations/20260123000000_publication_youtube_fields/migration.sql',

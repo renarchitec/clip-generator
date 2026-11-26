@@ -394,7 +394,9 @@ export function interpretVideoStatus(item: unknown): VideoStatusOutcome {
 }
 
 type PublicationBadgeRow = {
-  socialAccountId: string;
+  id?: string;
+  socialAccountId: string | null;
+  accountExternalId?: string | null;
   platform: string;
   status: string;
   externalUrl: string | null;
@@ -422,9 +424,12 @@ type PublicationBadge<T extends PublicationBadgeRow> = {
 export function latestPerAccount<T extends PublicationBadgeRow>(publications: T[]): PublicationBadge<T>[] {
   const seen = new Set<string>();
   const result: PublicationBadge<T>[] = [];
-  for (const publication of publications) {
-    if (seen.has(publication.socialAccountId)) continue;
-    seen.add(publication.socialAccountId);
+  for (const [index, publication] of publications.entries()) {
+    const key = publication.socialAccountId ?? (publication.accountExternalId
+      ? `${publication.platform}:${publication.accountExternalId}`
+      : `disconnected:${publication.id ?? publication.platform}:${publication.externalUrl ?? index}`);
+    if (seen.has(key)) continue;
+    seen.add(key);
     result.push({
       platform: publication.platform,
       status: publication.status,

@@ -206,34 +206,50 @@ export class SocialService {
             : INSTAGRAM_SCOPES
           : YOUTUBE_SCOPES)];
 
-    await this.prisma.socialAccount.upsert({
-      where: {
-        userId_platform_externalId: {
+    await this.prisma.$transaction(async (tx) => {
+      const saved = await tx.socialAccount.upsert({
+        where: {
+          userId_platform_externalId: {
+            userId,
+            platform,
+            externalId: external.externalId,
+          },
+        },
+        create: {
           userId,
           platform,
           externalId: external.externalId,
+          displayName: external.displayName,
+          avatarUrl: external.avatarUrl,
+          accessTokenEnc,
+          refreshTokenEnc: refreshTokenEnc ?? null,
+          expiresAt,
+          scopes,
         },
-      },
-      create: {
-        userId,
+        update: {
+          displayName: external.displayName,
+          avatarUrl: external.avatarUrl,
+          accessTokenEnc,
+          // Google sering tidak mengirim refresh_token pada connect berikutnya.
+          refreshTokenEnc: refreshTokenEnc ?? undefined,
+          expiresAt,
+          scopes,
+        },
+        select: { id: true },
+      });
+
+      const disconnected = {
+        socialAccountId: null,
         platform,
-        externalId: external.externalId,
-        displayName: external.displayName,
-        avatarUrl: external.avatarUrl,
-        accessTokenEnc,
-        refreshTokenEnc: refreshTokenEnc ?? null,
-        expiresAt,
-        scopes,
-      },
-      update: {
-        displayName: external.displayName,
-        avatarUrl: external.avatarUrl,
-        accessTokenEnc,
-        // Google sering tidak mengirim refresh_token pada connect berikutnya.
-        refreshTokenEnc: refreshTokenEnc ?? undefined,
-        expiresAt,
-        scopes,
-      },
+        accountExternalId: external.externalId,
+        clip: { job: { userId } },
+      };
+      const account = { socialAccountId: saved.id, accountName: external.displayName };
+      await tx.publication.updateMany({
+        where: { ...disconnected, metricsError: 'account_disconnected' },
+        data: { ...account, metricsError: null },
+      });
+      await tx.publication.updateMany({ where: disconnected, data: account });
     });
   }
 

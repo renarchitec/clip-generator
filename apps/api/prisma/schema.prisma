@@ -246,8 +246,10 @@ model Publication {
   id              String            @id @default(uuid())
   clipId          String
   clip            Clip              @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  socialAccountId String
-  socialAccount   SocialAccount     @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  socialAccountId String?
+  socialAccount   SocialAccount?    @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  accountName     String?
+  accountExternalId String?
   platform        SocialPlatform
   mode            String            @default("direct")
   title           String            @default("")

@@ -120,6 +120,9 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       include: { clip: true },
     });
     if (!publication) return;
+    if (!publication.socialAccountId) {
+      throw new PublishError('Social account was disconnected', false);
+    }
     if (publication.clip.deletedAt) {
       throw new PublishError('Clip was deleted');
     }
@@ -260,11 +263,11 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
         clipId: true,
       },
     });
-    if (
-      !publication ||
-      publication.status !== PublicationStatus.processing ||
-      !publication.externalId
-    ) return;
+    if (!publication || publication.status !== PublicationStatus.processing) return;
+    if (!publication.socialAccountId) {
+      throw new PublishError('Social account was disconnected', false);
+    }
+    if (!publication.externalId) return;
 
     if (publication.platform === 'youtube') {
       let outcome;
@@ -438,12 +441,15 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
     publication: {
       id: string;
       caption: string;
-      socialAccountId: string;
+      socialAccountId: string | null;
       options: PrismaJsonish;
       clip: { id: string; startSec: number; endSec: number; hashtags: string[] };
     },
     size: number,
   ): Promise<void> {
+    if (!publication.socialAccountId) {
+      throw new PublishError('Social account was disconnected', false);
+    }
     const accessToken = await this.accessToken(
       publication.socialAccountId,
       'instagram',
@@ -488,7 +494,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
     publicationId: string,
     publication: {
       externalId: string | null;
-      socialAccountId: string;
+      socialAccountId: string | null;
       options: PrismaJsonish;
       clipId: string;
     },
@@ -496,6 +502,9 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
   ): Promise<void> {
     const containerId = publication.externalId;
     if (!containerId) return;
+    if (!publication.socialAccountId) {
+      throw new PublishError('Social account was disconnected', false);
+    }
     const accessToken = await this.accessToken(
       publication.socialAccountId,
       'instagram',

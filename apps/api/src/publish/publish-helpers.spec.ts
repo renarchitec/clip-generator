@@ -175,3 +175,18 @@ test('ringkasan publikasi terbaru per akun', () => {
     },
   ]);
 });
+
+test('disconnected publication badges dedupe by platform and snapshotted account ID', () => {
+  const disconnected = {
+    socialAccountId: null, platform: 'youtube', status: 'published', externalUrl: null,
+  };
+  const badges = latestPerAccount([
+    { ...disconnected, accountExternalId: 'channel-1', viewCount: 100 },
+    { ...disconnected, accountExternalId: 'channel-1', viewCount: 25 },
+    { ...disconnected, accountExternalId: 'channel-2', viewCount: 90 },
+    { ...disconnected, accountExternalId: 'channel-1', platform: 'tiktok', viewCount: 80 },
+    { ...disconnected, accountExternalId: null, id: 'pub-1', viewCount: 70 },
+    { ...disconnected, accountExternalId: null, id: 'pub-2', viewCount: 60 },
+  ]);
+  assert.deepEqual(badges.map(({ viewCount }) => viewCount), [100, 90, 80, 70, 60]);
+});
