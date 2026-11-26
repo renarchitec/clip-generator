@@ -91,9 +91,9 @@ def test_no_faces_returns_none_for_center_fallback():
     assert reframe.select_speaker_segments(_frames(lambda t, i: [])) is None
 
 
-def test_job_data_defaults_to_face_tracking_and_accepts_modes():
+def test_job_data_defaults_to_center_crop_and_accepts_modes():
     base = {"jobId": "abc", "url": "https://youtu.be/x"}
-    assert job_data_from_dict(base).reframe == "face_tracking"
+    assert job_data_from_dict(base).reframe == "center_crop"
 
     for mode in REFRAME_MODES:
         assert job_data_from_dict({**base, "reframe": mode}).reframe == mode

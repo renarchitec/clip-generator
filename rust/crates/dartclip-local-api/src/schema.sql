@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   stage TEXT,
   progress REAL NOT NULL DEFAULT 0,
   mode TEXT NOT NULL DEFAULT 'auto',
-  reframe TEXT NOT NULL DEFAULT 'face_tracking',
+  reframe TEXT NOT NULL DEFAULT 'center_crop',
   captions INTEGER NOT NULL DEFAULT 1,
   two_speakers INTEGER NOT NULL DEFAULT 0,
   facecam INTEGER NOT NULL DEFAULT 0,

@@ -145,7 +145,7 @@ pub struct RenderOptions {
 impl Default for RenderOptions {
     fn default() -> Self {
         Self {
-            reframe: ReframeMode::FaceTracking,
+            reframe: ReframeMode::default(),
             aspect_ratio: AspectRatio::Portrait,
             captions: true,
             two_speakers: false,
@@ -158,6 +158,12 @@ impl Default for RenderOptions {
     }
 }
 
+pub fn center_crop(w: u32, h: u32) -> String {
+    let ratio = w as f64 / h as f64;
+    format!(
+        "crop=w='min(in_w,ih*{ratio:.5})':h='min(in_h,iw/{ratio:.5})':x='(in_w-out_w)/2':y='(in_h-out_h)/2',scale={w}:{h},setsar=1"
+    )
+}
 pub fn black_bars(w: u32, h: u32) -> String {
     format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1")
 }
@@ -552,6 +558,8 @@ impl Pipeline {
                     blurred_fill(w, h)
                 } else if reframe == ReframeMode::BlackBars {
                     black_bars(w, h)
+                } else if reframe == ReframeMode::CenterCrop {
+                    center_crop(w, h)
                 } else {
                     format!("{},setsar=1", cut_crop_filter(&segments, w, h))
                 };
@@ -1920,6 +1928,19 @@ esac
             assert_eq!(output, "[vout]");
         }
         // Preview frames use render_one -> render_window, the same filter path.
+    }
+
+    #[test]
+    fn center_crop_is_default_and_crops_before_scaling() {
+        assert_eq!(RenderOptions::default().reframe, ReframeMode::CenterCrop);
+        assert_eq!(
+            center_crop(1080, 1920),
+            "crop=w='min(in_w,ih*0.56250)':h='min(in_h,iw/0.56250)':x='(in_w-out_w)/2':y='(in_h-out_h)/2',scale=1080:1920,setsar=1"
+        );
+        assert_eq!(
+            center_crop(1080, 1080),
+            "crop=w='min(in_w,ih*1.00000)':h='min(in_h,iw/1.00000)':x='(in_w-out_w)/2':y='(in_h-out_h)/2',scale=1080:1080,setsar=1"
+        );
     }
 
     #[test]

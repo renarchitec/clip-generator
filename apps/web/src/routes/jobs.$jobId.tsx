@@ -238,8 +238,8 @@ function JobDetail() {
                   <div className="mt-2 flex min-w-0 items-start gap-2 rounded-md bg-accent/15 px-2 py-2 ring-1 ring-accent/40">
                     <span aria-hidden="true" className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-accent bg-accent"><span className="size-1.5 rounded-full bg-accent-foreground" /></span>
                     <span className="min-w-0">
-                      <span className="block text-sm font-medium leading-5 text-foreground">{{ face_tracking: t.faceTracking, blurred_fill: t.blurredFill, black_bars: t.blackBars }[snapshot.reframe]}</span>
-                      <span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{{ face_tracking: t.faceTrackingHint, blurred_fill: t.blurredFillHint, black_bars: t.blackBarsHint }[snapshot.reframe]}</span>
+                      <span className="block text-sm font-medium leading-5 text-foreground">{{ center_crop: t.centerCrop, face_tracking: t.faceTracking, blurred_fill: t.blurredFill, black_bars: t.blackBars }[snapshot.reframe]}</span>
+                      <span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{{ center_crop: t.centerCropHint, face_tracking: t.faceTrackingHint, blurred_fill: t.blurredFillHint, black_bars: t.blackBarsHint }[snapshot.reframe]}</span>
                     </span>
                   </div>
                 </Field>}

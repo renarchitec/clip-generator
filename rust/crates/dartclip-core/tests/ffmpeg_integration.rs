@@ -1,6 +1,6 @@
 use dartclip_core::{
     hook_thumbnail::{extract_cover_frame, prepend_hook_intro, render_hook_thumbnail},
-    models::{CaptionStyle, Moment, ReframeMode, Watermark, WatermarkChromaKey},
+    models::{AspectRatio, CaptionStyle, Moment, ReframeMode, Watermark, WatermarkChromaKey},
     pipeline::{CancellationToken, Pipeline, PipelineConfig, RenderOptions},
     subtitles::parse_vtt,
     tools::{ensure_tool_installed, probe_media, ToolPaths},
@@ -145,6 +145,51 @@ fn mean_volume(tools: &ToolPaths, path: &Path) -> f64 {
         })
         .expect("mean volume")
 }
+#[tokio::test]
+async fn center_crop_renders_wide_to_portrait_and_portrait_to_square() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    let t = tools(p).await;
+    let pipe = Pipeline::new(PipelineConfig::new(t.clone(), p));
+    let cancel = CancellationToken::new();
+    for (name, size, aspect_ratio, border_box) in [
+        ("wide", "320x180", AspectRatio::Portrait, "x=0:y=0:w=48:h=ih"),
+        ("tall", "180x320", AspectRatio::Square, "x=0:y=0:w=iw:h=48"),
+    ] {
+        let source = p.join(format!("{name}-source.mp4"));
+        let output = p.join(format!("{name}-crop.mp4"));
+        let fixture = format!("color=c=red:s={size}:r=5:d=0.6,drawbox={border_box}:c=blue:t=fill");
+        execute(
+            ffmpeg(&t.ffmpeg)
+                .args(["-f", "lavfi", "-i", &fixture, "-c:v", "libx264"])
+                .arg(&source),
+        );
+        pipe.render_one(
+            &source,
+            &Moment {
+                start: 0.,
+                end: 0.6,
+                ..Default::default()
+            },
+            &[],
+            &output,
+            &RenderOptions {
+                aspect_ratio,
+                ..Default::default()
+            },
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let img = frame(&t, &output, "0");
+        let (w, h) = img.dimensions();
+        assert_eq!((w, h), aspect_ratio.output_size());
+        // The blue border would still be visible if the crop were anchored at the top or left.
+        assert_rgb(&img, 0, 0, [255, 0, 0]);
+        assert_rgb(&img, w - 1, h - 1, [255, 0, 0]);
+    }
+}
+
 #[tokio::test]
 async fn portrait_render_burns_positioned_word_pop_and_both_watermarks_with_loudnorm() {
     let dir = tempfile::tempdir().unwrap();

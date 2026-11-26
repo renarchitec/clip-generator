@@ -127,7 +127,7 @@ export class CreateJobDto {
   @IsString()
   description?: string;
 
-  /** Cara mengubah video landscape jadi portrait; default face_tracking. */
+  /** Cara mengubah video landscape jadi portrait; default mengikuti DEFAULT_REFRAME. */
   @IsOptional()
   @IsIn(REFRAME_MODES)
   reframe: ReframeMode = DEFAULT_REFRAME;

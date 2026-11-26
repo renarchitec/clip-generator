@@ -43,8 +43,9 @@ test('worker pipeline preserves title and reason with timestamp fallback', async
   assert.match(pipeline, /reason\[:200\] or "manual"/);
 });
 
-test('web route sends candidate title and reason while cue ranges omit them', async () => {
-  const web = await readFile(join(root, 'apps/web/src/routes/index.tsx'), 'utf8');
-  assert.match(web, /title:\s*candidates\[index\]\.title/);
-  assert.match(web, /reason:\s*candidates\[index\]\.reason/);
+test('web review panel sends candidate title and reason while passing cue ranges through', async () => {
+  const panel = await readFile(join(root, 'apps/web/src/components/review-panel.tsx'), 'utf8');
+  assert.match(panel, /title:\s*candidates\[index\]\.title/);
+  assert.match(panel, /reason:\s*candidates\[index\]\.reason/);
+  assert.match(panel, /renderSelected\(\[.*\.\.\.cueRanges\]\)/);
 });

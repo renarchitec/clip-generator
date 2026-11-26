@@ -39,6 +39,10 @@ const sample: ReviewDraft = {
 saveReviewDraft(sample)
 assert.deepEqual(loadReviewDraft(), sample)
 
+const centerCropSample: ReviewDraft = { ...sample, reframe: "center_crop" }
+saveReviewDraft(centerCropSample)
+assert.deepEqual(loadReviewDraft(), centerCropSample)
+
 store.set("clipper-review-draft", JSON.stringify({ ...sample, twoSpeakers: undefined, facecam: undefined, aspectRatio: undefined, maxSourceSec: undefined }))
 assert.equal(loadReviewDraft()?.twoSpeakers, false)
 assert.equal(loadReviewDraft()?.facecam, false)

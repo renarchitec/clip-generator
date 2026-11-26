@@ -141,7 +141,7 @@ async fn create_frame(
         || (!raw["reframe"].is_null()
             && !matches!(
                 raw["reframe"].as_str(),
-                Some("face_tracking" | "blurred_fill" | "black_bars")
+                Some("center_crop" | "face_tracking" | "blurred_fill" | "black_bars")
             ))
     {
         return Err(ApiError::bad("Invalid frame request"));
