@@ -72,7 +72,10 @@ function PlatformBlock({ provider, accounts }: { provider: SocialProvider; accou
       {!comingSoon && <Button variant={accounts.length ? "outline" : "default"} size="lg" className="ml-auto min-h-10 px-3" disabled={unconfigured} aria-describedby={hint ? hintId : undefined} onClick={() => connect(provider.platform)}><Plus aria-hidden="true"/>{accounts.length ? t.socialAddAccount : t.socialConnect}<span className="sr-only"> {name}</span></Button>}
     </div>
     {!comingSoon && provider.platform === "instagram" && <p className="mt-3 text-xs text-muted-foreground sm:ml-14">{t.instagramAccountNote}</p>}
-    {accounts.length > 0 && <ul className="mt-4 space-y-2 sm:pl-14">{accounts.map((account) => <AccountRow key={account.id} account={account} platformName={name} configured={provider.configured}/>)}</ul>}
+    {accounts.length > 0 && <>
+      {provider.configured && <p className="mt-3 text-xs text-muted-foreground sm:ml-14 sm:hidden [@media(hover:none)]:block">{t.socialReconnectHint}</p>}
+      <ul className="mt-4 space-y-2 sm:pl-14">{accounts.map((account) => <AccountRow key={account.id} account={account} platformName={name} configured={provider.configured}/>)}</ul>
+    </>}
   </li>
 }
 
@@ -95,7 +98,7 @@ function AccountRow({ account, platformName, configured = true }: { account: Soc
     size="sm"
     disabled={!configured}
     className={cn(
-      "h-9 gap-1.5 px-3 text-sm",
+      "min-h-10 max-w-full gap-1.5 whitespace-normal px-3 text-sm sm:min-h-9",
       account.needsReconnect && "border-amber-500/50 bg-amber-500/10 text-amber-800 hover:bg-amber-500/20 hover:text-amber-900 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-300 dark:hover:bg-amber-400/20 dark:hover:text-amber-200",
     )}
     onClick={() => connect(account.platform)}
@@ -104,7 +107,7 @@ function AccountRow({ account, platformName, configured = true }: { account: Soc
   </Button>
 
   return <li className={cn("flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-lg border border-border bg-background px-3 py-2.5", account.needsReconnect && "border-amber-500/40 bg-amber-500/5")}>
-    <div className="flex min-w-44 flex-1 items-center gap-3">
+    <div className="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-44">
       {account.avatarUrl && !imageFailed
         ? <img src={account.avatarUrl} alt="" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} className="size-8 shrink-0 rounded-full bg-muted object-cover"/>
         : <span aria-hidden="true" className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">{initial}</span>}
@@ -115,13 +118,13 @@ function AccountRow({ account, platformName, configured = true }: { account: Soc
           : <p className="text-xs text-muted-foreground">{t.socialConnectedOn.replace("{date}", date)}</p>}
       </div>
     </div>
-    <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+    <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2 sm:gap-1.5">
       {configured ? <Tooltip>
         <TooltipTrigger asChild>{reconnectButton}</TooltipTrigger>
-        <TooltipContent side="top">{t.socialReconnectHint}</TooltipContent>
+        <TooltipContent side="top" className="hidden sm:block [@media(hover:none)]:hidden">{t.socialReconnectHint}</TooltipContent>
       </Tooltip> : reconnectButton}
       <AlertDialog open={open} onOpenChange={(next) => { if (!disconnect.isPending) setOpen(next) }}>
-        <Button type="button" variant="ghost" size="sm" className="h-9 gap-1.5 px-3 text-sm text-muted-foreground hover:text-destructive" onClick={() => setOpen(true)}><Unplug aria-hidden="true"/>{t.socialDisconnect}<span className="sr-only"> {account.displayName}</span></Button>
+        <Button type="button" variant="ghost" size="sm" className="min-h-10 max-w-full gap-1.5 whitespace-normal px-3 text-sm text-muted-foreground hover:text-destructive sm:min-h-9" onClick={() => setOpen(true)}><Unplug aria-hidden="true"/>{t.socialDisconnect}<span className="sr-only"> {account.displayName}</span></Button>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t.socialDisconnectTitle.replace("{name}", account.displayName)}</AlertDialogTitle>

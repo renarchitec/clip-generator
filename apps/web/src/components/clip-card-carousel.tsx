@@ -10,7 +10,11 @@ type AspectRatio = ClipCardData["job"]["aspectRatio"]
 
 /** Fixed slide widths per ratio keep cards compact and identical between placeholder and ready states. */
 export function carouselSlideWidth(aspectRatio: AspectRatio) {
-  return aspectRatio === "16:9" ? "!w-[260px] sm:!w-[320px]" : aspectRatio === "1:1" ? "!w-[180px] sm:!w-[210px]" : "!w-[148px] sm:!w-[168px]"
+  return aspectRatio === "16:9"
+    ? "!w-[min(82vw,300px)] sm:!w-[300px]"
+    : aspectRatio === "1:1"
+      ? "!w-[196px] sm:!w-[216px]"
+      : "!w-[164px] sm:!w-[172px]"
 }
 
 const reducedMotionQuery = "(prefers-reduced-motion: reduce)"

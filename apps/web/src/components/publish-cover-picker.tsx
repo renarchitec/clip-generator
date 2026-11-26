@@ -252,9 +252,9 @@ export function PublishCoverPicker({
 
       {enabled && (
         <div className="space-y-3 border-t border-border/70 pt-3">
-          <div className="flex items-stretch gap-3.5">
+          <div className="flex flex-col gap-3.5 sm:flex-row sm:items-stretch">
             {/* Compact 9:16 portrait preview */}
-            <div className="relative aspect-[9/16] w-[76px] shrink-0 overflow-hidden rounded-lg border border-border bg-black shadow-xs sm:w-[88px]">
+            <div className="relative mx-auto aspect-[9/16] w-[92px] shrink-0 overflow-hidden rounded-lg border border-border bg-black shadow-xs sm:mx-0 sm:w-[88px]">
               <video
                 ref={videoRef}
                 src={`/api/clips/${clipId}/stream`}
@@ -301,7 +301,7 @@ export function PublishCoverPicker({
 
             {/* Scrubber & fine controls */}
             <div className="flex min-w-0 flex-1 flex-col justify-between gap-2.5">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-baseline gap-1.5 font-mono tabular-nums">
                   <span className="text-sm font-medium text-foreground">{formatCoverTime(currentSec)}</span>
                   {effectiveDuration !== null && (
@@ -312,7 +312,7 @@ export function PublishCoverPicker({
                   type="button"
                   variant="ghost"
                   size="xs"
-                  className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                  className="min-h-9 gap-1 px-2.5 text-xs text-muted-foreground hover:text-foreground sm:h-7 sm:min-h-0 sm:px-2"
                   onClick={() => onChange(null)}
                 >
                   <RotateCcw aria-hidden="true" className="size-3" />
@@ -320,7 +320,7 @@ export function PublishCoverPicker({
                 </Button>
               </div>
 
-              <div className="relative py-1.5">
+              <div data-vaul-no-drag="" className="relative touch-none py-2.5 sm:py-1.5">
                 <Slider
                   min={0}
                   max={maxSec > 0 ? maxSec : 1}
@@ -337,13 +337,13 @@ export function PublishCoverPicker({
                 />
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-1.5">
-                <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-1.5">
+                <div className="flex items-center gap-1.5 sm:gap-1">
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-7 bg-background px-2 font-mono text-xs tabular-nums"
+                    className="min-h-9 bg-background px-3 font-mono text-xs tabular-nums sm:h-7 sm:min-h-0 sm:px-2"
                     disabled={!canScrub || currentSec <= 0}
                     aria-label={t.publishCoverNudgeBack}
                     onClick={() => commitSec(currentSec - NUDGE_STEP_SEC)}
@@ -354,7 +354,7 @@ export function PublishCoverPicker({
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-7 bg-background px-2 font-mono text-xs tabular-nums"
+                    className="min-h-9 bg-background px-3 font-mono text-xs tabular-nums sm:h-7 sm:min-h-0 sm:px-2"
                     disabled={!canScrub || currentSec >= maxSec}
                     aria-label={t.publishCoverNudgeForward}
                     onClick={() => commitSec(currentSec + NUDGE_STEP_SEC)}
@@ -375,7 +375,7 @@ export function PublishCoverPicker({
                           size="xs"
                           disabled={!canScrub}
                           className={cn(
-                            "h-6 rounded-md px-2 text-[11px] font-medium tabular-nums",
+                            "min-h-9 rounded-md px-2.5 text-xs font-medium tabular-nums sm:h-6 sm:min-h-0 sm:px-2 sm:text-[11px]",
                             active ? "bg-primary/12 text-primary hover:bg-primary/18" : "text-muted-foreground hover:text-foreground",
                           )}
                           onClick={() => commitSec(preset.sec)}

@@ -174,7 +174,7 @@ function JobDetail() {
       ) : snapshot ? (
         <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,400px)] lg:grid-rows-[minmax(560px,calc(100vh-120px))_auto]">
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:col-start-1 lg:row-start-1 lg:h-full" aria-label={t.sourceMonitor}>
-            <div className="flex min-h-11 items-center border-b border-border px-4 text-sm text-muted-foreground">{sourceLabel(snapshot.url)}</div>
+            <div className="flex min-h-11 items-center border-b border-border px-4 text-sm text-muted-foreground"><span className="min-w-0 truncate">{sourceLabel(snapshot.url)}</span></div>
             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted p-4">
               <div className={`relative aspect-video w-full max-w-full overflow-hidden shadow-xl ${embed ? "bg-black" : "border border-border bg-[radial-gradient(ellipse_at_center,var(--monitor-empty-center),var(--monitor-empty-edge))]"}`}>
                 {embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0" /> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play aria-hidden="true" className="ml-1 size-5" /></span><p className="font-display text-lg text-foreground">{sourceLabel(snapshot.url)}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.sourceUrl}</p></div></div>}
@@ -267,9 +267,9 @@ function JobDetail() {
                   return <Field>
                     <FieldTitle>{t.captionStyle}</FieldTitle>
                     <div className="mt-2 rounded-md border border-border bg-muted/40 p-3">
-                      <div className="flex items-center justify-between gap-2"><Badge variant="secondary" className="text-[10px]">{t.captionPresetNames[detectCaptionPreset(captionStyle)]}</Badge><span className="font-mono text-xs tabular-nums text-foreground">{captionStyle.fontFamily} · {captionStyle.fontSize}px</span></div>
+                      <div className="flex flex-wrap items-center justify-between gap-2"><Badge variant="secondary" className="text-[10px]">{t.captionPresetNames[detectCaptionPreset(captionStyle)]}</Badge><span className="font-mono text-xs tabular-nums text-foreground">{captionStyle.fontFamily} · {captionStyle.fontSize}px</span></div>
                       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t.captionEffect}: {t.captionEffectNames[captionStyle.effect]}</span><span>{t.captionPosition}: {captionStyle.positionY != null ? `Y ${Math.round(captionStyle.positionY * 100)}%` : t.captionPositionNames[captionStyle.position]}</span>{captionStyle.animate && <span>{t.captionAnimate}</span>}</div>
-                      <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground"><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.primaryColor }} />{t.captionPrimaryColor}</span><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.highlightColor }} />{t.captionHighlightColor}</span></div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.primaryColor }} />{t.captionPrimaryColor}</span><span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-3.5 rounded-full border border-black/15" style={{ backgroundColor: captionStyle.highlightColor }} />{t.captionHighlightColor}</span></div>
                     </div>
                   </Field>
                 })()}
@@ -366,12 +366,12 @@ function JobDetail() {
                 </Field>}
               </div>
             </div>
-            <div className="sticky bottom-0 border-t border-border bg-card/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+            <div className="shrink-0 border-t border-border bg-card/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur lg:sticky lg:bottom-0 lg:pb-3 supports-[backdrop-filter]:bg-card/80">
               <div className="flex flex-col gap-3">
                 <p className="text-xs leading-5 text-muted-foreground">
                   {snapshot.mode === "manual" ? t.manualSummary.replace("{count}", String(snapshot.ranges?.length ?? clipCount)) : t.autoSummary.replace("{count}", String(clipCount)).replace("{duration}", String(snapshot.targetDurationSec ?? ""))}
                 </p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
                   <Button variant="outline" asChild className="h-11 min-w-0 rounded-md px-2"><Link to="/" search={{ from: snapshot.id }}>{t.regenerate}</Link></Button>
                   <AlertDialog open={deleteJobOpen} onOpenChange={setDeleteJobOpen}>
                     <AlertDialogTrigger asChild><Button variant="outline" className="h-11 min-w-0 rounded-md px-2 text-destructive hover:text-destructive" aria-label={`${t.deleteJob}: ${snapshot.url}`}><Trash2 aria-hidden="true" className="mr-2 size-4 shrink-0" />{t.deleteJob}</Button></AlertDialogTrigger>
@@ -423,7 +423,7 @@ function JobDetail() {
                     <>
                       <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
                         <p className="font-medium">{activeClips.length} {t.clipsReady}</p>
-                        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
+                        <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => setBatchScheduleOpen(true)}>
                           <CalendarClock aria-hidden="true" className="size-3.5" />
                           {t.scheduleBatch}
                         </Button>
@@ -444,7 +444,7 @@ function JobDetail() {
                       <p className="mt-1 text-sm text-muted-foreground" aria-live="polite">{t.complete}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                      <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
+                      <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => setBatchScheduleOpen(true)}>
                         <CalendarClock aria-hidden="true" className="size-3.5" />
                         {t.scheduleBatch}
                       </Button>

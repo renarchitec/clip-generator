@@ -56,15 +56,15 @@ function ClipsPage() {
   })
 
   return <WorkspaceShell user={user}>
-    <div className="mb-7 flex flex-col gap-5 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b border-border pb-4 sm:mb-7 sm:gap-5 sm:pb-6">
       <div><h2 className="font-display text-3xl font-medium tracking-[-.045em]">{t.clips}</h2><p className="mt-2 text-sm text-muted-foreground">{t.latestFirst}</p></div>
-      <div className="flex w-full flex-col gap-2.5 sm:w-auto sm:flex-row sm:items-center">
+      <div className="flex w-full min-w-0 flex-wrap items-center gap-2.5 sm:w-auto">
         {publishedClipIds.length > 0 && (
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="h-9 shrink-0 gap-1.5 px-3"
+            className="w-full min-h-10 gap-1.5 px-3 sm:w-auto sm:min-h-9"
             disabled={refreshStats.isPending}
             onClick={() => refreshStats.mutate(publishedClipIds)}
           >
@@ -72,7 +72,7 @@ function ClipsPage() {
             {refreshStats.isPending ? t.refreshingStats : t.refreshStats}
           </Button>
         )}
-        <div className="relative w-full sm:w-72"><Search aria-hidden className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/><label className="sr-only" htmlFor="clip-search">{t.searchClips}</label><Input ref={searchRef} id="clip-search" type="search" placeholder={t.searchClips} value={search} onChange={(event) => setSearch(event.target.value)} className="h-11 bg-card pl-9 pr-16"/><kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{t.searchShortcut}</kbd></div>
+        <div className="relative w-full sm:w-72"><Search aria-hidden className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/><label className="sr-only" htmlFor="clip-search">{t.searchClips}</label><Input ref={searchRef} id="clip-search" type="search" placeholder={t.searchClips} value={search} onChange={(event) => setSearch(event.target.value)} className="h-11 bg-card pl-9 pr-3 sm:pr-16 [@media(hover:none)]:pr-3"/><kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline-flex [@media(hover:none)]:hidden">{t.searchShortcut}</kbd></div>
       </div>
     </div>
     {clips.isPending ? <div role="status" aria-label={t.loading} className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8">{[0,1,2,3,4,5,6,7].map((item) => <div key={item}><Skeleton className="aspect-[9/16] w-full rounded-lg"/><Skeleton className="mt-3 h-4 w-4/5"/><Skeleton className="mt-2 h-3 w-2/3"/></div>)}</div> : clips.isError ? <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{t.apiError}</span><Button variant="outline" onClick={() => clips.refetch()}>{t.retry}</Button></AlertDescription></Alert> : filtered.length ? <ClipCardGrid aspectRatio="9:16">{filtered.map((clip, index) => <ClipCard key={clip.id} frame="uniform" clip={clip as ClipCardData} index={index} meta={`${sourceLabel(clip.job.url)} · ${relativeAge(clip.createdAt, locale)}`}/>)}</ClipCardGrid> : <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-border bg-card/40 px-5 text-center"><div><p className="font-medium">{clips.data?.length ? t.noSearchResults : t.empty}</p><p className="mt-2 text-sm text-muted-foreground">{clips.data?.length ? t.noSearchResults : t.startNow}</p></div></div>}

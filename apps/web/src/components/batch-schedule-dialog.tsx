@@ -17,7 +17,13 @@ import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import {
+  ResponsiveDialog,
+  ResponsiveDialogClose,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -98,14 +104,15 @@ export function BatchScheduleDialog({
 }) {
   const t = useT()
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-w-2xl gap-0 p-0 sm:p-0"
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent
+        className="flex max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:p-0"
+        mobileClassName="pb-0"
         onInteractOutside={(event) => {
           if ((event.target as Element | null)?.closest?.("[data-sonner-toaster]")) event.preventDefault()
         }}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-6 sm:py-4">
           <div className="flex min-w-0 items-start gap-3">
             <span
               aria-hidden="true"
@@ -114,19 +121,19 @@ export function BatchScheduleDialog({
               <CalendarClock className="size-4" />
             </span>
             <div className="min-w-0">
-              <DialogTitle className="font-display text-lg font-medium tracking-[-.02em]">{t.batchScheduleTitle}</DialogTitle>
-              <DialogDescription className="mt-0.5">{t.batchScheduleDescription}</DialogDescription>
+              <ResponsiveDialogTitle className="font-display text-lg font-medium tracking-[-.02em]">{t.batchScheduleTitle}</ResponsiveDialogTitle>
+              <ResponsiveDialogDescription className="mt-0.5">{t.batchScheduleDescription}</ResponsiveDialogDescription>
             </div>
           </div>
-          <DialogClose asChild>
+          <ResponsiveDialogClose asChild>
             <Button type="button" variant="ghost" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}>
               <X className="size-4" />
             </Button>
-          </DialogClose>
+          </ResponsiveDialogClose>
         </div>
         {open && <BatchScheduleBody key={jobId} jobId={jobId} clips={clips} onClose={() => onOpenChange(false)} />}
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   )
 }
 
@@ -275,7 +282,7 @@ function BatchScheduleBody({
 
   if (accounts.isPending) {
     return (
-      <div role="status" aria-label={t.loading} className="space-y-4 px-5 py-5 sm:px-6">
+      <div role="status" aria-label={t.loading} className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6">
         <Skeleton className="h-14 w-full rounded-lg" />
         <Skeleton className="h-24 w-full rounded-lg" />
         <Skeleton className="h-36 w-full rounded-lg" />
@@ -285,11 +292,11 @@ function BatchScheduleBody({
 
   if (accounts.isError) {
     return (
-      <div className="px-5 py-5 sm:px-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6">
         <Alert variant="destructive">
           <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
             <span>{t.socialLoadError}</span>
-            <Button variant="outline" onClick={() => void accounts.refetch()}>
+            <Button variant="outline" className="min-h-9 sm:min-h-0" onClick={() => void accounts.refetch()}>
               {t.retry}
             </Button>
           </AlertDescription>
@@ -300,13 +307,13 @@ function BatchScheduleBody({
 
   if (!available.length) {
     return (
-      <div className="px-5 py-8 text-center sm:px-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-8 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center sm:px-6">
         <span className="mx-auto grid size-12 place-items-center rounded-xl border border-border bg-background">
           <Send aria-hidden="true" className="size-5 text-muted-foreground" />
         </span>
         <p className="mt-4 font-medium">{t.publishNoAccounts}</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{t.publishNoAccountsBody}</p>
-        <Button asChild className="mt-5 h-10 px-4">
+        <Button asChild className="mt-5 min-h-11 px-4 sm:h-10 sm:min-h-10">
           <Link to="/settings" onClick={onClose}>
             {t.publishGoToSettings}
           </Link>
@@ -319,60 +326,62 @@ function BatchScheduleBody({
     const scheduledCount = result.scheduled.length
     const skippedCount = result.skipped.length
     return (
-      <div className="space-y-5 px-5 py-5 sm:px-6">
-        <div className="rounded-xl border border-sky-500/30 bg-sky-500/8 p-4 dark:border-sky-400/30 dark:bg-sky-400/10">
-          <div className="flex items-start gap-3">
-            <CheckCircle2 aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-sky-600 dark:text-sky-400" />
-            <div className="min-w-0 space-y-1">
-              <p className="font-medium text-foreground">
-                {scheduledCount === 0
-                  ? t.batchResultNone
-                  : scheduledCount === 1
-                    ? t.batchResultScheduledOne
-                    : t.batchResultScheduled.replace("{count}", String(scheduledCount))}
-              </p>
-              {skippedCount > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  {t.batchResultSkipped.replace("{count}", String(skippedCount))}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+          <div className="rounded-xl border border-sky-500/30 bg-sky-500/8 p-4 dark:border-sky-400/30 dark:bg-sky-400/10">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-sky-600 dark:text-sky-400" />
+              <div className="min-w-0 space-y-1">
+                <p className="font-medium text-foreground">
+                  {scheduledCount === 0
+                    ? t.batchResultNone
+                    : scheduledCount === 1
+                      ? t.batchResultScheduledOne
+                      : t.batchResultScheduled.replace("{count}", String(scheduledCount))}
                 </p>
-              )}
+                {skippedCount > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t.batchResultSkipped.replace("{count}", String(skippedCount))}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
+
+          {result.scheduled.length > 0 && (
+            <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-lg border border-border bg-background">
+              {result.scheduled.map((pub) => {
+                const clipMatch = clips.find((c) => c.id === pub.clipId)
+                return (
+                  <li key={pub.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-2.5 text-sm sm:flex-nowrap">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{clipMatch?.title || pub.title || t.clip}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {pub.accountName} · {t.socialPlatforms[pub.platform]}
+                      </p>
+                    </div>
+                    {pub.status === "scheduled" && pub.scheduledAt ? (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 gap-1 border-sky-500/35 bg-sky-500/12 font-mono text-[11px] font-medium tabular-nums text-sky-700 dark:border-sky-400/35 dark:bg-sky-400/15 dark:text-sky-300"
+                      >
+                        <Clock aria-hidden="true" className="size-3" />
+                        {formatScheduledDateTime(pub.scheduledAt, locale)}
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="shrink-0 text-[11px]">
+                        {t.batchSlotImmediate}
+                      </Badge>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </div>
 
-        {result.scheduled.length > 0 && (
-          <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-lg border border-border bg-background">
-            {result.scheduled.map((pub) => {
-              const clipMatch = clips.find((c) => c.id === pub.clipId)
-              return (
-                <li key={pub.id} className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium">{clipMatch?.title || pub.title || t.clip}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {pub.accountName} · {t.socialPlatforms[pub.platform]}
-                    </p>
-                  </div>
-                  {pub.status === "scheduled" && pub.scheduledAt ? (
-                    <Badge
-                      variant="outline"
-                      className="shrink-0 gap-1 border-sky-500/35 bg-sky-500/12 font-mono text-[11px] font-medium tabular-nums text-sky-700 dark:border-sky-400/35 dark:bg-sky-400/15 dark:text-sky-300"
-                    >
-                      <Clock aria-hidden="true" className="size-3" />
-                      {formatScheduledDateTime(pub.scheduledAt, locale)}
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary" className="shrink-0 text-[11px]">
-                      {t.batchSlotImmediate}
-                    </Badge>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
-        )}
-
-        <div className="flex justify-end border-t border-border pt-4">
-          <Button type="button" className="h-10 px-5" onClick={onClose}>
+        <div className="flex shrink-0 justify-end border-t border-border bg-card px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
+          <Button type="button" className="min-h-11 w-full px-5 sm:h-10 sm:min-h-10 sm:w-auto" onClick={onClose}>
             {t.publishDone}
           </Button>
         </div>
@@ -446,12 +455,12 @@ function BatchScheduleBody({
   orderedSelectedClips.forEach((clip, idx) => slotIndexByClipId.set(clip.id, idx))
 
   return (
-    <form noValidate onSubmit={handleSubmit}>
-      <div className="space-y-5 px-5 py-5 sm:px-6">
+    <form noValidate onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
         <FieldGroup className="gap-5">
           {/* 1. Accounts */}
           <fieldset className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <legend className="text-sm font-medium">{t.publishTo}</legend>
               <span className="font-mono text-xs tabular-nums text-muted-foreground">
                 {selectedAccountIds.length}/{Math.min(MAX_ACCOUNTS, usable.length || MAX_ACCOUNTS)} · {t.batchAccountsLimit}
@@ -550,14 +559,14 @@ function BatchScheduleBody({
                   <ToggleGroupItem
                     value="inbox"
                     size="sm"
-                    className="h-7 rounded-md px-2.5 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
+                    className="min-h-9 rounded-md px-3 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs sm:h-7 sm:min-h-0 sm:px-2.5"
                   >
                     {t.tiktokPrivacy.inbox}
                   </ToggleGroupItem>
                   <ToggleGroupItem
                     value="direct"
                     size="sm"
-                    className="h-7 rounded-md px-2.5 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
+                    className="min-h-9 rounded-md px-3 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs sm:h-7 sm:min-h-0 sm:px-2.5"
                   >
                     {t.tiktokModeDirect}
                   </ToggleGroupItem>
@@ -578,9 +587,9 @@ function BatchScheduleBody({
                     </p>
                   ) : creatorQuery.isError ? (
                     <Alert variant="destructive">
-                      <AlertDescription className="flex items-center justify-between gap-2 text-xs">
+                      <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-xs">
                         <span>{t.tiktokCreatorError}</span>
-                        <Button type="button" variant="outline" size="sm" onClick={() => void creatorQuery.refetch()}>
+                        <Button type="button" variant="outline" size="sm" className="min-h-9 sm:min-h-0" onClick={() => void creatorQuery.refetch()}>
                           {t.retry}
                         </Button>
                       </AlertDescription>
@@ -702,14 +711,14 @@ function BatchScheduleBody({
                   <ToggleGroupItem
                     value="now"
                     size="sm"
-                    className="h-7 rounded-md px-2.5 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
+                    className="min-h-9 rounded-md px-3 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs sm:h-7 sm:min-h-0 sm:px-2.5"
                   >
                     {t.batchStartNow}
                   </ToggleGroupItem>
                   <ToggleGroupItem
                     value="custom"
                     size="sm"
-                    className="h-7 rounded-md px-2.5 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
+                    className="min-h-9 rounded-md px-3 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs sm:h-7 sm:min-h-0 sm:px-2.5"
                   >
                     {t.batchStartPick}
                   </ToggleGroupItem>
@@ -727,7 +736,7 @@ function BatchScheduleBody({
                     value={startLocal}
                     onChange={(event) => setStartLocal(event.target.value)}
                     aria-invalid={startDateInvalid}
-                    className="h-9 bg-background font-mono text-sm tabular-nums"
+                    className="h-10 bg-background font-mono text-sm tabular-nums sm:h-9"
                   />
                   <div className="flex flex-wrap items-center gap-1.5">
                     {startPresets.map((preset) => (
@@ -736,7 +745,7 @@ function BatchScheduleBody({
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-7 rounded-full bg-background px-2.5 text-xs font-normal"
+                        className="min-h-9 rounded-full bg-background px-3 text-xs font-normal sm:h-7 sm:min-h-0 sm:px-2.5"
                         onClick={() => setStartLocal(toDatetimeLocalValue(preset.date()))}
                       >
                         {preset.label}
@@ -766,7 +775,7 @@ function BatchScheduleBody({
                         type="button"
                         variant={active ? "default" : "outline"}
                         size="sm"
-                        className={cn("h-8 rounded-md px-3 font-mono text-xs tabular-nums", !active && "bg-background")}
+                        className={cn("min-h-9 rounded-md px-3 font-mono text-xs tabular-nums sm:h-8 sm:min-h-0", !active && "bg-background")}
                         onClick={() => setIntervalInput(String(preset))}
                       >
                         {preset}h
@@ -784,7 +793,7 @@ function BatchScheduleBody({
                     value={intervalInput}
                     onChange={(event) => setIntervalInput(event.target.value)}
                     aria-invalid={!intervalValid}
-                    className="h-8 w-28 bg-background pr-12 font-mono text-xs tabular-nums"
+                    className="min-h-9 w-28 bg-background pr-12 font-mono text-xs tabular-nums sm:h-8 sm:min-h-0"
                   />
                   <span className="pointer-events-none absolute right-2.5 text-[11px] text-muted-foreground">{t.batchIntervalHours}</span>
                 </div>
@@ -815,7 +824,7 @@ function BatchScheduleBody({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                className="min-h-9 px-2.5 text-xs text-muted-foreground hover:text-foreground sm:h-7 sm:min-h-0 sm:px-2"
                 onClick={() =>
                   setSelectedClipIds(allSelected ? [] : sortedClips.slice(0, MAX_CLIPS).map((clip) => clip.id))
                 }
@@ -846,58 +855,64 @@ function BatchScheduleBody({
                       disabled={disabled}
                       onClick={() => toggleClip(clip.id)}
                       className={cn(
-                        "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                        "flex min-h-12 w-full flex-col gap-1.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 sm:flex-row sm:items-center sm:gap-2.5",
                         !checked && "opacity-60",
                       )}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          "grid size-4.5 shrink-0 place-items-center rounded-[4px] border border-input transition-colors",
-                          checked && "border-primary bg-primary text-primary-foreground",
-                        )}
-                      >
-                        {checked && <Check className="size-3" strokeWidth={3} />}
-                      </span>
-                      <span className="w-5 shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {checked ? `#${slotIdx + 1}` : `#${listIdx + 1}`}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{clip.title || `${t.clip} ${listIdx + 1}`}</span>
-                      {score !== null && (
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
                         <span
+                          aria-hidden="true"
                           className={cn(
-                            "inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full border px-1.5 font-mono text-[10px] font-semibold tabular-nums",
-                            score >= 80
-                              ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
-                              : score >= 60
-                                ? "border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-300"
-                                : "border-zinc-500/30 bg-zinc-500/12 text-zinc-700 dark:text-zinc-300",
+                            "grid size-4.5 shrink-0 place-items-center rounded-[4px] border border-input transition-colors",
+                            checked && "border-primary bg-primary text-primary-foreground",
                           )}
                         >
-                          <Flame aria-hidden="true" className="size-3 shrink-0" />
-                          {score}
+                          {checked && <Check className="size-3" strokeWidth={3} />}
                         </span>
-                      )}
-                      {checked && slotDate ? (
-                        isImmediateSlot ? (
-                          <Badge
-                            variant="outline"
-                            className="shrink-0 border-emerald-500/35 bg-emerald-500/12 font-mono text-[11px] font-medium text-emerald-700 dark:border-emerald-400/35 dark:bg-emerald-400/15 dark:text-emerald-300"
+                        <span className="w-5 shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                          {checked ? `#${slotIdx + 1}` : `#${listIdx + 1}`}
+                        </span>
+                        <span className="line-clamp-2 min-w-0 flex-1 text-sm font-medium sm:line-clamp-none sm:truncate">
+                          {clip.title || `${t.clip} ${listIdx + 1}`}
+                        </span>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap items-center gap-1.5 pl-7 sm:pl-0">
+                        {score !== null && (
+                          <span
+                            className={cn(
+                              "inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full border px-1.5 font-mono text-[10px] font-semibold tabular-nums",
+                              score >= 80
+                                ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
+                                : score >= 60
+                                  ? "border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-300"
+                                  : "border-zinc-500/30 bg-zinc-500/12 text-zinc-700 dark:text-zinc-300",
+                            )}
                           >
-                            {t.nowShort}
-                          </Badge>
+                            <Flame aria-hidden="true" className="size-3 shrink-0" />
+                            {score}
+                          </span>
+                        )}
+                        {checked && slotDate ? (
+                          isImmediateSlot ? (
+                            <Badge
+                              variant="outline"
+                              className="shrink-0 border-emerald-500/35 bg-emerald-500/12 font-mono text-[11px] font-medium text-emerald-700 dark:border-emerald-400/35 dark:bg-emerald-400/15 dark:text-emerald-300"
+                            >
+                              {t.nowShort}
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="shrink-0 gap-1 border-sky-500/35 bg-sky-500/12 font-mono text-[11px] font-medium tabular-nums text-sky-700 dark:border-sky-400/35 dark:bg-sky-400/15 dark:text-sky-300"
+                            >
+                              <Clock aria-hidden="true" className="size-3" />
+                              {formatScheduleSlot(slotDate, locale, { today: t.todayShort, tomorrow: t.tomorrowShort })}
+                            </Badge>
+                          )
                         ) : (
-                          <Badge
-                            variant="outline"
-                            className="shrink-0 gap-1 border-sky-500/35 bg-sky-500/12 font-mono text-[11px] font-medium tabular-nums text-sky-700 dark:border-sky-400/35 dark:bg-sky-400/15 dark:text-sky-300"
-                          >
-                            <Clock aria-hidden="true" className="size-3" />
-                            {formatScheduleSlot(slotDate, locale, { today: t.todayShort, tomorrow: t.tomorrowShort })}
-                          </Badge>
-                        )
-                      ) : (
-                        <span className="shrink-0 font-mono text-xs text-muted-foreground">—</span>
-                      )}
+                          <span className="shrink-0 font-mono text-xs text-muted-foreground">—</span>
+                        )}
+                      </div>
                     </button>
                   </li>
                 )
@@ -923,11 +938,11 @@ function BatchScheduleBody({
         </FieldGroup>
       </div>
 
-      <div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-card px-5 py-3 sm:px-6">
-        <Button type="button" variant="ghost" className="h-10 px-4" onClick={onClose}>
+      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
+        <Button type="button" variant="ghost" className="min-h-11 px-4 sm:h-10 sm:min-h-10" onClick={onClose}>
           {t.cancelAction}
         </Button>
-        <Button type="submit" className="h-10 min-w-44 px-4" disabled={scheduleBatch.isPending || submitBlocked}>
+        <Button type="submit" className="min-h-11 flex-1 px-4 sm:h-10 sm:min-h-10 sm:flex-none sm:min-w-44" disabled={scheduleBatch.isPending || submitBlocked}>
           {scheduleBatch.isPending ? (
             <>
               <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
