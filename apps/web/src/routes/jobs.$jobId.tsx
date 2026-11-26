@@ -1,6 +1,6 @@
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, AudioLines, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Trash2, Users, Video } from "lucide-react"
+import { ArrowLeft, AudioLines, CalendarClock, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Trash2, Users, Video } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
@@ -19,6 +19,7 @@ import { getVideoEmbed } from "@/lib/embed"
 import { LlmStatus } from "@/components/llm-status"
 import { JobAssembly } from "@/components/job-assembly"
 import { ClipCard, ClipCardGrid } from "@/components/clip-card"
+import { BatchScheduleDialog } from "@/components/batch-schedule-dialog"
 import { useWatermarkLibrary } from "@/components/watermark-manager"
 import { WatermarkMedia } from "@/components/watermark-media"
 import { useOutroLibrary } from "@/components/outro-manager"
@@ -92,6 +93,7 @@ function JobDetail() {
     onError: () => toast.error(t.retryFailed),
   })
   const [deleteJobOpen, setDeleteJobOpen] = useState(false)
+  const [batchScheduleOpen, setBatchScheduleOpen] = useState(false)
   const deleteJob = useMutation({
     mutationFn: () => api<void>(`/jobs/${jobId}`, { method: "DELETE" }),
     onSuccess: () => {
@@ -125,7 +127,11 @@ function JobDetail() {
 
   const snapshot = job.data
   const embed = snapshot ? getVideoEmbed(snapshot.url) : null
-  const activeClips = snapshot?.clips.filter((clip) => !clip.deletedAt) ?? []
+  const activeClips = useMemo(() => snapshot?.clips.filter((clip) => !clip.deletedAt) ?? [], [snapshot])
+  const batchClips = useMemo(
+    () => (snapshot ? activeClips.map((clip) => ({ ...clip, job: { id: snapshot.id, url: snapshot.url, aspectRatio: snapshot.aspectRatio } })) : []),
+    [snapshot, activeClips],
+  )
   const clipCount = snapshot?.clipCount ?? snapshot?.ranges?.length ?? 0
   const running = snapshot?.status === "queued" || snapshot?.status === "running"
   const failed = snapshot?.status === "failed" || snapshot?.status === "cancelled"
@@ -398,6 +404,10 @@ function JobDetail() {
                     <>
                       <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
                         <p className="font-medium">{activeClips.length} {t.clipsReady}</p>
+                        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
+                          <CalendarClock aria-hidden="true" className="size-3.5" />
+                          {t.scheduleBatch}
+                        </Button>
                       </div>
                       <ClipCardGrid aspectRatio={snapshot.aspectRatio} aria-label={t.readyClips}>
                         {activeClips.map((clip, index) => <ClipCard key={clip.id} clip={{ ...clip, job: { id: snapshot.id, url: snapshot.url, aspectRatio: snapshot.aspectRatio } }} index={index} meta={`${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} />)}
@@ -414,7 +424,13 @@ function JobDetail() {
                       <p className="font-medium">{activeClips.length} {t.clipsReady}</p>
                       <p className="mt-1 text-sm text-muted-foreground" aria-live="polite">{t.complete}</p>
                     </div>
-                    <span className="font-mono text-sm tabular-nums text-muted-foreground">100%</span>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
+                        <CalendarClock aria-hidden="true" className="size-3.5" />
+                        {t.scheduleBatch}
+                      </Button>
+                      <span className="font-mono text-sm tabular-nums text-muted-foreground">100%</span>
+                    </div>
                   </div>
                   <ClipCardGrid aspectRatio={snapshot.aspectRatio} aria-label={t.readyClips}>
                     {activeClips.map((clip, index) => <ClipCard key={clip.id} clip={{ ...clip, job: { id: snapshot.id, url: snapshot.url, aspectRatio: snapshot.aspectRatio } }} index={index} meta={`${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} />)}
@@ -427,6 +443,14 @@ function JobDetail() {
           </section>
         </div>
       ) : null}
+      {snapshot && activeClips.length > 0 && (
+        <BatchScheduleDialog
+          jobId={snapshot.id}
+          clips={batchClips}
+          open={batchScheduleOpen}
+          onOpenChange={setBatchScheduleOpen}
+        />
+      )}
     </WorkspaceShell>
   )
 }

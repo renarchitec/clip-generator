@@ -620,6 +620,7 @@ class ClipResult:
     transcript: Optional[str] = None
     viral_score: int | None = None
     hook_text: str | None = None
+    platform_captions: Optional[Dict[str, Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -632,6 +633,8 @@ class ClipResult:
             payload["caption"] = self.caption
         if self.hashtags:
             payload["hashtags"] = list(self.hashtags)
+        if self.platform_captions:
+            payload["platformCaptions"] = self.platform_captions
         transcript = (self.transcript or "").strip()[:CLIP_TRANSCRIPT_MAX].strip()
         if transcript:
             payload["transcript"] = transcript

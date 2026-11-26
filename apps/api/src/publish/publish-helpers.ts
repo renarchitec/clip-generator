@@ -1,7 +1,5 @@
-/**
- * Helper murni untuk publikasi YouTube. Tanpa import Nest/Prisma agar bisa
- * dites langsung dengan `node --experimental-strip-types`.
- */
+import { BadRequestException } from '@nestjs/common';
+import { isISO8601 } from 'class-validator';
 
 /** Ukuran chunk unggah: 8 MiB (kelipatan 256 KiB sesuai syarat resumable upload). */
 export const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
@@ -25,10 +23,27 @@ export const INSTAGRAM_TARGET_CAPTION_MAX = 2200;
 export const PUBLISH_MODES = ['direct', 'inbox'] as const;
 export const TIKTOK_PRIVACY_LEVEL_MAX = 64;
 export const ACTIVE_PUBLICATION_STATUSES = [
+  'scheduled',
   'queued',
   'uploading',
   'processing',
 ] as const;
+
+export function parseScheduledAt(raw?: string | null, now = new Date()): Date | null {
+  if (raw == null || (typeof raw === 'string' && raw.trim() === '')) return null;
+  if (!isISO8601(raw, { strict: true })) {
+    throw new BadRequestException('invalid_scheduled_at');
+  }
+  const date = new Date(raw);
+  const offset = date.getTime() - now.getTime();
+  if (!Number.isFinite(offset)) {
+    throw new BadRequestException('invalid_scheduled_at');
+  }
+  if (offset < -60_000 || offset > 90 * 86_400_000) {
+    throw new BadRequestException('scheduled_at_out_of_range');
+  }
+  return offset <= 15_000 ? null : date;
+}
 
 export interface ByteChunk {
   start: number;
@@ -400,6 +415,7 @@ type PublicationBadgeRow = {
   platform: string;
   status: string;
   externalUrl: string | null;
+  scheduledAt?: Date | null;
   mode?: string;
   viewCount?: number | null;
   likeCount?: number | null;
@@ -412,6 +428,7 @@ type PublicationBadge<T extends PublicationBadgeRow> = {
   platform: T['platform'];
   status: T['status'];
   externalUrl: string | null;
+  scheduledAt: string | null;
   mode?: 'direct' | 'inbox';
   viewCount: number | null;
   likeCount: number | null;
@@ -434,6 +451,7 @@ export function latestPerAccount<T extends PublicationBadgeRow>(publications: T[
       platform: publication.platform,
       status: publication.status,
       externalUrl: publication.externalUrl,
+      scheduledAt: publication.scheduledAt?.toISOString() ?? null,
       ...(publication.mode === 'direct' || publication.mode === 'inbox' ? { mode: publication.mode } : {}),
       viewCount: publication.viewCount ?? null,
       likeCount: publication.likeCount ?? null,

@@ -12,6 +12,7 @@ export const CLIP_PUBLICATION_SELECT = {
     accountExternalId: true,
     platform: true,
     status: true,
+    scheduledAt: true,
     externalUrl: true,
     mode: true,
     viewCount: true,

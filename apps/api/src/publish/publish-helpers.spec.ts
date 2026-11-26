@@ -9,6 +9,7 @@ import {
   contentRange,
   interpretVideoStatus,
   latestPerAccount,
+  parseScheduledAt,
   mapGoogleError,
   nextChunk,
   parseResumeOffset,
@@ -152,25 +153,40 @@ test('tafsir status video YouTube', () => {
   assert.equal(interpretVideoStatus(undefined).state, 'failed');
 });
 
+test('parseScheduledAt validates ISO input and scheduling windows', () => {
+  const now = new Date('2026-02-02T12:00:00Z');
+  const at = (offset: number) => new Date(now.getTime() + offset).toISOString();
+  for (const value of [undefined, null, '', at(-60_000), at(0), at(15_000)]) {
+    assert.equal(parseScheduledAt(value, now), null);
+  }
+  for (const value of [at(15_001), at(90 * 86_400_000)]) {
+    assert.equal(parseScheduledAt(value, now)?.toISOString(), value);
+  }
+  for (const value of ['not a date', '2/3/2026', '2026-02-30T00:00:00Z', at(-60_001), at(90 * 86_400_000 + 1)]) {
+    assert.throws(() => parseScheduledAt(value, now), { status: 400 });
+  }
+});
+
 test('ringkasan publikasi terbaru per akun', () => {
   const metricsUpdatedAt = new Date('2026-02-02T12:00:00Z');
+  const scheduledAt = new Date('2026-02-03T12:00:00Z');
   const summary = latestPerAccount([
     {
       socialAccountId: 'a', platform: 'youtube', status: 'published', externalUrl: 'u2',
       mode: 'direct', viewCount: 100, likeCount: 0, commentCount: 1,
-      metricsUpdatedAt, metricsError: 'fetch_failed',
+      metricsUpdatedAt, metricsError: 'fetch_failed', scheduledAt,
     },
     { socialAccountId: 'b', platform: 'tiktok', status: 'failed', externalUrl: null, mode: 'inbox' },
     { socialAccountId: 'a', platform: 'youtube', status: 'failed', externalUrl: null, viewCount: 9 },
   ]);
   assert.deepEqual(summary, [
     {
-      platform: 'youtube', status: 'published', externalUrl: 'u2', mode: 'direct',
+      platform: 'youtube', status: 'published', externalUrl: 'u2', mode: 'direct', scheduledAt: scheduledAt.toISOString(),
       viewCount: 100, likeCount: 0, commentCount: 1,
       metricsUpdatedAt: metricsUpdatedAt.toISOString(), metricsError: 'fetch_failed',
     },
     {
-      platform: 'tiktok', status: 'failed', externalUrl: null, mode: 'inbox',
+      platform: 'tiktok', status: 'failed', externalUrl: null, mode: 'inbox', scheduledAt: null,
       viewCount: null, likeCount: null, commentCount: null, metricsUpdatedAt: null, metricsError: null,
     },
   ]);

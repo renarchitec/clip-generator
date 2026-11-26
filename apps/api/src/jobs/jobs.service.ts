@@ -30,6 +30,7 @@ import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { latestPerAccount } from '../publish/publish-helpers';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { sanitizePlatformCaptions } from '../queue/clip-social';
 import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
 import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
 import { CreateJobDto } from './dto/create-job.dto';
@@ -443,6 +444,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
       endSec: clip.endSec,
       caption: clip.caption,
       hashtags: clip.hashtags,
+      platformCaptions: sanitizePlatformCaptions(clip.platformCaptions),
       viralScore: clip.viralScore,
       hookText: clip.hookText,
       downloadedAt: clip.downloadedAt,

@@ -232,6 +232,7 @@ export interface ClipResult {
   caption?: string;
   /** Dihasilkan LLM worker; tidak ada bila LLM tidak tersedia. */
   hashtags?: string[];
+  platformCaptions?: PlatformCaptions | null;
   /** Cuplikan transkrip klip (≤ 2000 karakter); tidak ada bila kosong. */
   transcript?: string;
   viralScore?: number | null;
@@ -255,6 +256,7 @@ export interface CaptionJobData {
 export interface CaptionJobResult {
   caption: string;
   hashtags: string[];
+  platformCaptions?: PlatformCaptions | null;
 }
 
 /** Payload job `brief` pada antrean `captions` (enhance brief). */
@@ -336,6 +338,14 @@ export interface PreviewResponse {
 export const SOCIAL_PLATFORMS = ['youtube', 'instagram', 'tiktok'] as const;
 export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
 
+export interface PlatformCaptionVariant {
+  title?: string;
+  caption: string;
+  hashtags: string[];
+}
+
+export type PlatformCaptions = Partial<Record<SocialPlatform, PlatformCaptionVariant>>;
+
 export interface SocialProviderResponse {
   platform: SocialPlatform;
   configured: boolean;
@@ -356,11 +366,13 @@ export interface SocialAccountResponse {
 export const PUBLISH_QUEUE_NAME = 'publish';
 
 export const PUBLICATION_STATUSES = [
+  'scheduled',
   'queued',
   'uploading',
   'processing',
   'published',
   'failed',
+  'cancelled',
 ] as const;
 export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
 
@@ -411,6 +423,7 @@ export interface PublishTarget {
   mode?: PublishMode;
   /** Hanya TikTok mode direct (wajib di sana); diabaikan pada inbox. */
   tiktok?: TiktokPublishOptions;
+  scheduledAt?: string | null;
 }
 
 /** Respons GET /api/social/accounts/:id/tiktok/creator-info. */
@@ -428,6 +441,24 @@ export interface TiktokCreatorInfoResponse {
 /** Body POST /api/clips/:id/publish (1..5 target). */
 export interface PublishRequest {
   targets: PublishTarget[];
+  scheduledAt?: string | null;
+}
+
+/** Body POST /api/jobs/:id/schedule-publish. */
+export interface BatchSchedulePublishRequest {
+  clipIds?: string[];
+  accountIds: string[];
+  startAt?: string;
+  intervalHours: number;
+  privacy?: PublicationPrivacy;
+  madeForKids?: boolean;
+  tiktokMode?: PublishMode;
+  tiktok?: TiktokPublishOptions;
+}
+
+export interface BatchSchedulePublishResponse {
+  scheduled: PublicationResponse[];
+  skipped: { clipId: string; accountId: string; reason: string }[];
 }
 
 export interface PublicationResponse {
@@ -450,6 +481,7 @@ export interface PublicationResponse {
   createdAt: string;
   updatedAt: string;
   publishedAt: string | null;
+  scheduledAt?: string | null;
   viewCount: number | null;
   likeCount: number | null;
   commentCount: number | null;
@@ -462,6 +494,7 @@ export interface ClipPublicationSummary {
   platform: SocialPlatform;
   status: PublicationStatus;
   externalUrl: string | null;
+  scheduledAt?: string | null;
   mode?: PublishMode;
   viewCount?: number | null;
   likeCount?: number | null;

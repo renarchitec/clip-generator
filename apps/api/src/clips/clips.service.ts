@@ -7,6 +7,7 @@ import { JobStatus, type Clip } from '@prisma/client';
 import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { latestPerAccount } from '../publish/publish-helpers';
+import { sanitizePlatformCaptions } from '../queue/clip-social';
 import { resolveClipPath } from './clip-path';
 import { CLIP_PUBLICATION_SELECT } from './clip-publications';
 
@@ -48,6 +49,7 @@ export class ClipsService {
         endSec: true,
         caption: true,
         hashtags: true,
+        platformCaptions: true,
         viralScore: true,
         hookText: true,
         createdAt: true,
@@ -57,6 +59,7 @@ export class ClipsService {
     });
     return clips.map(({ publications, ...clip }) => ({
       ...clip,
+      platformCaptions: sanitizePlatformCaptions(clip.platformCaptions),
       publications: latestPerAccount(publications),
     }));
   }

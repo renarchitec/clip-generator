@@ -19,3 +19,43 @@ export function relativeAge(value: string, locale: string) {
   const [unit, divisor] = units.find(([, size]) => Math.abs(seconds) >= size) ?? ["minute", 60]
   return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(Math.round(seconds / divisor), unit)
 }
+
+export function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+export function formatScheduledDateTime(value: string | Date, locale: string): string {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ""
+  const now = new Date()
+  const sameYear = date.getFullYear() === now.getFullYear()
+  return new Intl.DateTimeFormat(locale, {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" }),
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date)
+}
+
+export function formatScheduleSlot(
+  date: Date,
+  locale: string,
+  labels: { today: string; tomorrow: string },
+): string {
+  if (Number.isNaN(date.getTime())) return ""
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfTarget = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  const dayDiff = Math.round((startOfTarget - startOfToday) / 86_400_000)
+  const time = new Intl.DateTimeFormat(locale, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date)
+  if (dayDiff === 0) return `${labels.today}, ${time}`
+  if (dayDiff === 1) return `${labels.tomorrow}, ${time}`
+  return formatScheduledDateTime(date, locale)
+}

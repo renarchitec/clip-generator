@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { StoredWatermarkValue } from '../watermarks/watermark-helpers';
 import type { StoredOutro } from '../outros/outro-helpers';
 import { Observable, Subject } from 'rxjs';
-import type { CaptionStyle } from '@clipper/shared';
+import type { CaptionStyle, ClipPublicationSummary, PlatformCaptions } from '@clipper/shared';
 
 export interface JobSnapshot {
   id: string;
@@ -45,12 +45,13 @@ export interface ClipSnapshot {
   endSec: number;
   caption: string | null;
   hashtags: string[];
+  platformCaptions: PlatformCaptions | null;
   viralScore?: number | null;
   hookText?: string | null;
   downloadedAt: Date | null;
   deletedAt: Date | null;
   /** Ringkasan publikasi terbaru per akun untuk badge kartu. */
-  publications?: { platform: string; status: string; externalUrl: string | null }[];
+  publications?: ClipPublicationSummary[];
 }
 
 /**

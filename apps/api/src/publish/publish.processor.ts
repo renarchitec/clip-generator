@@ -104,7 +104,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       // `uploading` diterima agar job yang stalled (API restart) bisa diulang dari awal.
       where: {
         id: publicationId,
-        status: { in: [PublicationStatus.queued, PublicationStatus.uploading] },
+        status: { in: [PublicationStatus.scheduled, PublicationStatus.queued, PublicationStatus.uploading] },
       },
       data: {
         status: PublicationStatus.uploading,
@@ -611,6 +611,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       this.logger.error(`publikasi ${publicationId}: ${describe(error)}`);
     }
     await this.markFailed(publicationId, message, [
+      PublicationStatus.scheduled,
       PublicationStatus.queued,
       PublicationStatus.uploading,
       PublicationStatus.processing,
@@ -632,7 +633,7 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
 
   /**
    * Pulihkan publikasi yang tertinggal saat API mati:
-   * - queued tanpa job BullMQ → masukkan ulang;
+   * - queued/scheduled tanpa job BullMQ → masukkan ulang dengan sisa delay;
    * - uploading tanpa job aktif dan lebih tua dari 1 jam → failed "interrupted";
    * - processing tanpa job cek → jadwalkan cek status lagi.
    */
@@ -641,13 +642,14 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
       where: {
         status: {
           in: [
+            PublicationStatus.scheduled,
             PublicationStatus.queued,
             PublicationStatus.uploading,
             PublicationStatus.processing,
           ],
         },
       },
-      select: { id: true, status: true, updatedAt: true },
+      select: { id: true, status: true, updatedAt: true, scheduledAt: true },
     });
     if (stuck.length === 0) return;
 
@@ -666,8 +668,10 @@ export class PublishProcessor extends WorkerHost implements OnApplicationBootstr
 
     for (const publication of stuck) {
       if (tracked.has(publication.id)) continue;
-      if (publication.status === PublicationStatus.queued) {
-        await this.publish.enqueueOrFail(publication.id);
+      if (publication.status === PublicationStatus.queued || publication.status === PublicationStatus.scheduled) {
+        const scheduledAt = publication.status === PublicationStatus.scheduled ? publication.scheduledAt : null;
+        const delay = scheduledAt ? Math.max(0, scheduledAt.getTime() - Date.now()) : 0;
+        await this.publish.enqueueOrFail(publication.id, delay);
       } else if (publication.status === PublicationStatus.uploading) {
         if (Date.now() - publication.updatedAt.getTime() >= STALE_UPLOAD_MS) {
           await this.markFailed(publication.id, 'Upload interrupted, retry the upload', [

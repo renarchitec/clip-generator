@@ -13,7 +13,7 @@ import { normalizeCaptionStyle } from '@clipper/shared';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { PrismaService } from '../prisma/prisma.service';
 import { latestPerAccount } from '../publish/publish-helpers';
-import { sanitizeClipSocialMetadata, sanitizeClipTranscript } from './clip-social';
+import { platformCaptionsJson, sanitizeClipSocialMetadata, sanitizeClipTranscript, sanitizePlatformCaptions } from './clip-social';
 import { JobEventsService } from './job-events.service';
 import type { StoredWatermarkValue } from '../watermarks/watermark-helpers';
 import type { StoredOutro } from '../outros/outro-helpers';
@@ -140,6 +140,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
         endSec: clip.end,
         filePath,
         ...sanitizeClipSocialMetadata(clip),
+        platformCaptions: platformCaptionsJson(sanitizePlatformCaptions(clip.platformCaptions)) ?? Prisma.DbNull,
         ...sanitizeClipRetentionMetadata(clip),
         transcript: sanitizeClipTranscript(clip.transcript),
       }];
@@ -182,6 +183,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
           data: {
             caption: clip.caption,
             hashtags: clip.hashtags,
+            platformCaptions: clip.platformCaptions,
             transcript: clip.transcript,
             viralScore: clip.viralScore,
             hookText: clip.hookText,
@@ -222,6 +224,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       endSec: clip.end,
       filePath,
       ...sanitizeClipSocialMetadata(clip),
+      platformCaptions: platformCaptionsJson(sanitizePlatformCaptions(clip.platformCaptions)) ?? Prisma.DbNull,
       ...sanitizeClipRetentionMetadata(clip),
       transcript: sanitizeClipTranscript(clip.transcript),
     };
@@ -333,6 +336,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
             endSec: true,
             caption: true,
             hashtags: true,
+            platformCaptions: true,
             viralScore: true,
             hookText: true,
             downloadedAt: true,
@@ -373,6 +377,7 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
       error: job.error,
       clips: job.clips.map(({ publications, ...clip }) => ({
         ...clip,
+        platformCaptions: sanitizePlatformCaptions(clip.platformCaptions),
         publications: latestPerAccount(publications),
       })),
     });

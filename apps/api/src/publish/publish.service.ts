@@ -12,23 +12,27 @@ import {
 } from '@prisma/client';
 import { Queue } from 'bullmq';
 import type {
+  BatchSchedulePublishResponse,
   PublicationResponse,
   PublishMode,
   PublishJobData,
 } from '@clipper/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISH_QUEUE_NAME } from '../queue/queue.constants';
-import type { PublishClipDto } from './dto/publish-clip.dto';
+import { sanitizePlatformCaptions } from '../queue/clip-social';
+import type { BatchSchedulePublishDto, PublishClipDto, PublishTargetDto } from './dto/publish-clip.dto';
 import {
   ACTIVE_PUBLICATION_STATUSES,
+  parseScheduledAt,
   sanitizeCaption,
   sanitizeTiktokCaption,
   sanitizeTitle,
   tiktokMode,
   validatePublishTargets,
   validatePublishTargetsShape,
+  validateTiktokTarget,
 } from './publish-helpers';
-import { sanitizeInstagramCaption } from './instagram-helpers';
+import { composeInstagramCaption, sanitizeInstagramCaption } from './instagram-helpers';
 
 /** Platform yang sudah bisa dipublikasikan. */
 const PUBLISHABLE_PLATFORMS = new Set<string>(['youtube', 'tiktok', 'instagram']);
@@ -40,6 +44,17 @@ export const PUBLICATION_INCLUDE = {
 type PublicationWithAccount = Prisma.PublicationGetPayload<{
   include: typeof PUBLICATION_INCLUDE;
 }>;
+
+const PUBLISH_ACCOUNT_SELECT = {
+  id: true,
+  platform: true,
+  displayName: true,
+  externalId: true,
+} as const satisfies Prisma.SocialAccountSelect;
+
+type PublishAccount = Prisma.SocialAccountGetPayload<{ select: typeof PUBLISH_ACCOUNT_SELECT }>;
+const CANCELLABLE_STATUSES: PublicationStatus[] = [PublicationStatus.scheduled, PublicationStatus.queued];
+const RETRYABLE_STATUSES: PublicationStatus[] = [PublicationStatus.failed, PublicationStatus.cancelled];
 
 /** Id job BullMQ deterministik; ':' dilarang BullMQ sehingga dipakai '-'. */
 export function publishJobId(publicationId: string, suffix = 'upload'): string {
@@ -79,7 +94,7 @@ export class PublishService {
     const accountIds = dto.targets.map((target) => target.accountId);
     const accounts = await this.prisma.socialAccount.findMany({
       where: { id: { in: accountIds }, userId },
-      select: { id: true, platform: true, displayName: true, externalId: true },
+      select: PUBLISH_ACCOUNT_SELECT,
     });
     const byId = new Map(accounts.map((account) => [account.id, account]));
     const invalid = validatePublishTargets(
@@ -100,6 +115,7 @@ export class PublishService {
       }
     }
 
+    const schedules = dto.targets.map((target) => parseScheduledAt(target.scheduledAt ?? dto.scheduledAt));
     const created = await this.prisma.$transaction(async (tx) => {
       const active = await tx.publication.findFirst({
         where: {
@@ -112,58 +128,18 @@ export class PublishService {
       if (active) throw new ConflictException('publication_in_progress');
 
       const rows: PublicationWithAccount[] = [];
-      for (const target of dto.targets) {
+      for (const [i, target] of dto.targets.entries()) {
         const account = byId.get(target.accountId)!;
-        rows.push(
-          await tx.publication.create({
-            data: {
-              clipId,
-              socialAccountId: account.id,
-              accountName: account.displayName,
-              accountExternalId: account.externalId,
-              platform: account.platform,
-              title:
-                account.platform === 'tiktok' || account.platform === 'instagram'
-                  ? sanitizeTitle(target.title ?? '')
-                  : sanitizeTitle(target.title!),
-              caption:
-                account.platform === 'tiktok'
-                  ? sanitizeTiktokCaption(target.caption ?? '')
-                  : account.platform === 'instagram'
-                    ? sanitizeInstagramCaption(target.caption ?? '')
-                    : sanitizeCaption(target.caption ?? ''),
-              privacy:
-                account.platform === 'tiktok'
-                  ? tiktokMode(target) === 'inbox'
-                    ? 'inbox'
-                    : target.tiktok!.privacyLevel
-                  : account.platform === 'instagram'
-                    ? 'public'
-                    : target.privacy!,
-              mode: account.platform === 'tiktok' ? tiktokMode(target) : 'direct',
-              options:
-                account.platform === 'tiktok' && tiktokMode(target) === 'direct'
-                  ? {
-                      privacyLevel: target.tiktok!.privacyLevel,
-                      disableComment: target.tiktok!.disableComment ?? false,
-                      disableDuet: target.tiktok!.disableDuet ?? false,
-                      disableStitch: target.tiktok!.disableStitch ?? false,
-                      brandContent: target.tiktok!.brandContent ?? false,
-                      brandOrganic: target.tiktok!.brandOrganic ?? false,
-                    }
-                  : undefined,
-              madeForKids: target.madeForKids ?? false,
-              status: PublicationStatus.queued,
-            },
-            include: PUBLICATION_INCLUDE,
-          }),
-        );
+        rows.push(await tx.publication.create({
+          data: publicationData(clipId, account, target, schedules[i]),
+          include: PUBLICATION_INCLUDE,
+        }));
       }
       return rows;
     });
 
     for (const publication of created) {
-      await this.enqueueOrFail(publication.id);
+      await this.enqueueOrFail(publication.id, uploadDelay(publication.scheduledAt));
     }
 
     const fresh = await this.prisma.publication.findMany({
@@ -172,6 +148,103 @@ export class PublishService {
       orderBy: { createdAt: 'desc' },
     });
     return fresh.map(toPublicationResponse);
+  }
+
+  async batchSchedule(
+    jobId: string,
+    dto: BatchSchedulePublishDto,
+    userId: string,
+  ): Promise<BatchSchedulePublishResponse> {
+    const clipIds = dto.clipIds && [...new Set(dto.clipIds)];
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, userId },
+      select: {
+        clips: {
+          where: { deletedAt: null, ...(clipIds ? { id: { in: clipIds } } : {}) },
+          orderBy: [{ viralScore: { sort: 'desc', nulls: 'last' } }, { createdAt: 'asc' }],
+          select: { id: true, title: true, caption: true, hashtags: true, platformCaptions: true },
+        },
+      },
+    });
+    if (!job) throw new NotFoundException(`Job ${jobId} tidak ditemukan.`);
+    const clipsById = new Map(job.clips.map((clip) => [clip.id, clip]));
+    const clips = clipIds ? clipIds.flatMap((id) => clipsById.get(id) ?? []) : job.clips;
+
+    const accountIds = [...new Set(dto.accountIds)];
+    const rows = await this.prisma.socialAccount.findMany({
+      where: { id: { in: accountIds }, userId },
+      select: { ...PUBLISH_ACCOUNT_SELECT, refreshTokenEnc: true, expiresAt: true },
+    });
+    const accountsById = new Map(rows.map((row) => [row.id, row]));
+    const now = new Date();
+    const accounts = accountIds.map((id) => {
+      const account = accountsById.get(id);
+      if (!account) throw new NotFoundException(`Akun sosial ${id} tidak ditemukan.`);
+      if (!account.refreshTokenEnc && account.expiresAt && account.expiresAt <= now) {
+        throw new BadRequestException('social_account_disconnected');
+      }
+      if (!PUBLISHABLE_PLATFORMS.has(account.platform)) {
+        throw new BadRequestException('platform_unavailable');
+      }
+      return account;
+    });
+    if (dto.tiktokMode === 'direct' && accounts.some((account) => account.platform === 'tiktok')) {
+      const invalid = validateTiktokTarget({ mode: 'direct', caption: '', tiktok: dto.tiktok });
+      if (invalid) throw new BadRequestException(invalid);
+    }
+
+    const baseTime = parseScheduledAt(dto.startAt, now) ?? now;
+    const skipped: BatchSchedulePublishResponse['skipped'] = [];
+    if (!clips.length) return { scheduled: [], skipped };
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.publication.findMany({
+        where: {
+          clipId: { in: clips.map((clip) => clip.id) },
+          socialAccountId: { in: accountIds },
+          status: { in: [...ACTIVE_PUBLICATION_STATUSES, PublicationStatus.published] },
+        },
+        select: { clipId: true, socialAccountId: true },
+      });
+      const blocked = new Set(existing.map((row) => JSON.stringify([row.clipId, row.socialAccountId])));
+      const publications: PublicationWithAccount[] = [];
+      for (const [i, clip] of clips.entries()) {
+        const slotDate = new Date(baseTime.getTime() + Math.round(i * dto.intervalHours * 3_600_000));
+        const scheduledAt = uploadDelay(slotDate) > 15_000 ? slotDate : null;
+        const variants = sanitizePlatformCaptions(clip.platformCaptions);
+        for (const account of accounts) {
+          if (blocked.has(JSON.stringify([clip.id, account.id]))) {
+            skipped.push({ clipId: clip.id, accountId: account.id, reason: 'already_published_or_scheduled' });
+            continue;
+          }
+          const variant = variants?.[account.platform];
+          const caption = variant?.caption ?? clip.caption ?? '';
+          const hashtags = variant?.hashtags ?? clip.hashtags;
+          const target = {
+            title: variant?.title || clip.title,
+            caption: account.platform === 'instagram'
+              ? composeInstagramCaption(caption, hashtags)
+              : composeBatchCaption(caption, hashtags),
+            privacy: dto.privacy ?? 'private',
+            madeForKids: dto.madeForKids,
+            mode: dto.tiktokMode === 'direct' ? 'direct' : 'inbox',
+            tiktok: dto.tiktok,
+          } as const;
+          publications.push(await tx.publication.create({
+            data: publicationData(clip.id, account, target, scheduledAt),
+            include: PUBLICATION_INCLUDE,
+          }));
+        }
+      }
+      return publications;
+    });
+
+    const scheduled = [];
+    for (const publication of created) {
+      await this.enqueueOrFail(publication.id, uploadDelay(publication.scheduledAt));
+      scheduled.push(await this.findResponse(publication.id));
+    }
+    return { scheduled, skipped };
   }
 
   async listForClip(
@@ -192,6 +265,33 @@ export class PublishService {
     return rows.map(toPublicationResponse);
   }
 
+  async cancel(id: string, userId: string): Promise<PublicationResponse> {
+    const ownership = { id, clip: { job: { userId } } };
+    const publication = await this.prisma.publication.findFirst({
+      where: ownership,
+      select: { status: true },
+    });
+    if (!publication) throw new NotFoundException(`Publikasi ${id} tidak ditemukan.`);
+    if (!CANCELLABLE_STATUSES.includes(publication.status)) {
+      throw new BadRequestException('publication_not_cancellable');
+    }
+
+    // Claim cancellation in the DB before removing the job, so the worker
+    // and this request cannot both claim a queued or scheduled publication.
+    const cancelled = await this.prisma.publication.updateMany({
+      where: { ...ownership, status: { in: CANCELLABLE_STATUSES } },
+      data: { status: PublicationStatus.cancelled, error: null },
+    });
+    if (cancelled.count === 0) throw new BadRequestException('publication_not_cancellable');
+
+    try {
+      await this.queue.remove(publishJobId(id));
+    } catch {
+      // A missing or locked BullMQ job cannot override the DB cancellation.
+    }
+    return this.findResponse(id);
+  }
+
   async retry(id: string, userId: string): Promise<PublicationResponse> {
     const publication = await this.prisma.publication.findFirst({
       where: { id, clip: { job: { userId } } },
@@ -209,10 +309,8 @@ export class PublishService {
     if (!publication.socialAccountId) {
       throw new BadRequestException('social_account_disconnected');
     }
-    if (publication.status !== PublicationStatus.failed) {
-      throw new BadRequestException(
-        'Hanya publikasi berstatus failed yang bisa diulang.',
-      );
+    if (!RETRYABLE_STATUSES.includes(publication.status)) {
+      throw new BadRequestException('Hanya publikasi failed atau cancelled yang bisa diulang.');
     }
 
     const active = await this.prisma.publication.findFirst({
@@ -227,9 +325,10 @@ export class PublishService {
     if (active) throw new ConflictException('publication_in_progress');
 
     const reset = await this.prisma.publication.updateMany({
-      where: { id, status: PublicationStatus.failed },
+      where: { id, status: publication.status },
       data: {
         status: PublicationStatus.queued,
+        scheduledAt: null,
         progress: 0,
         error: null,
         externalId: null,
@@ -246,15 +345,15 @@ export class PublishService {
   }
 
   /** Masukkan job unggah; bila Redis gagal, publikasi langsung ditandai failed. */
-  async enqueueOrFail(publicationId: string): Promise<void> {
+  async enqueueOrFail(publicationId: string, delayMs = 0): Promise<void> {
     try {
-      await this.enqueueUpload(publicationId);
+      await this.enqueueUpload(publicationId, delayMs);
     } catch (error) {
       this.logger.error(
         `enqueue publish ${publicationId}: ${error instanceof Error ? error.message : String(error)}`,
       );
       await this.prisma.publication.updateMany({
-        where: { id: publicationId, status: PublicationStatus.queued },
+        where: { id: publicationId, status: { in: CANCELLABLE_STATUSES } },
         data: {
           status: PublicationStatus.failed,
           error: 'Could not queue the upload, retry later',
@@ -263,21 +362,23 @@ export class PublishService {
     }
   }
 
-  async enqueueUpload(publicationId: string): Promise<void> {
+  async enqueueUpload(publicationId: string, delayMs = 0): Promise<void> {
     const jobId = publishJobId(publicationId);
     // Job lama (completed/failed) dengan id sama harus dihapus agar add tidak di-dedupe.
     const existing = await this.queue.getJob(jobId);
     if (existing) {
       const state = await existing.getState();
-      if (state === 'active' || state === 'waiting' || state === 'delayed') {
+      if (state === 'delayed') {
+        if (delayMs === 0) await existing.promote();
         return;
       }
+      if (state === 'active' || state === 'waiting') return;
       await existing.remove().catch(() => undefined);
     }
     await this.queue.add(
       'upload',
       { publicationId, kind: 'upload' },
-      { jobId, removeOnComplete: true, removeOnFail: 100 },
+      { jobId, removeOnComplete: true, removeOnFail: 100, ...(delayMs > 0 ? { delay: delayMs } : {}) },
     );
   }
 
@@ -289,6 +390,65 @@ export class PublishService {
     if (!row) throw new NotFoundException(`Publikasi ${id} tidak ditemukan.`);
     return toPublicationResponse(row);
   }
+}
+
+function uploadDelay(scheduledAt: Date | null): number {
+  return scheduledAt ? Math.max(0, scheduledAt.getTime() - Date.now()) : 0;
+}
+
+function composeBatchCaption(caption: string, hashtags: string[]): string {
+  const seen = new Set((caption.match(/#[\p{L}\p{N}_]+/gu) ?? []).map((tag) => tag.toLowerCase()));
+  const extra: string[] = [];
+  for (const raw of hashtags) {
+    const word = raw.replace(/[^\p{L}\p{N}_]/gu, '');
+    if (!word) continue;
+    const tag = `#${word}`;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extra.push(tag);
+  }
+  return [caption.trim(), extra.join(' ')].filter(Boolean).join('\n\n');
+}
+
+function publicationData(
+  clipId: string,
+  account: PublishAccount,
+  target: Pick<PublishTargetDto, 'title' | 'caption' | 'privacy' | 'mode' | 'tiktok' | 'madeForKids'>,
+  scheduledAt: Date | null,
+): Prisma.PublicationUncheckedCreateInput {
+  const mode = account.platform === 'tiktok' ? tiktokMode(target) : 'direct';
+  const tiktok = account.platform === 'tiktok' && mode === 'direct' ? target.tiktok : undefined;
+  return {
+    clipId,
+    socialAccountId: account.id,
+    accountName: account.displayName,
+    accountExternalId: account.externalId,
+    platform: account.platform,
+    title: sanitizeTitle(target.title ?? ''),
+    caption: account.platform === 'tiktok'
+      ? sanitizeTiktokCaption(target.caption)
+      : account.platform === 'instagram'
+        ? sanitizeInstagramCaption(target.caption)
+        : sanitizeCaption(target.caption),
+    privacy: account.platform === 'tiktok'
+      ? tiktok?.privacyLevel ?? 'inbox'
+      : account.platform === 'instagram'
+        ? 'public'
+        : target.privacy!,
+    mode,
+    options: tiktok && {
+      privacyLevel: tiktok.privacyLevel,
+      disableComment: tiktok.disableComment ?? false,
+      disableDuet: tiktok.disableDuet ?? false,
+      disableStitch: tiktok.disableStitch ?? false,
+      brandContent: tiktok.brandContent ?? false,
+      brandOrganic: tiktok.brandOrganic ?? false,
+    },
+    madeForKids: target.madeForKids ?? false,
+    status: scheduledAt ? PublicationStatus.scheduled : PublicationStatus.queued,
+    scheduledAt,
+  };
 }
 
 export function toPublicationResponse(
@@ -312,6 +472,7 @@ export function toPublicationResponse(
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     publishedAt: row.publishedAt?.toISOString() ?? null,
+    scheduledAt: row.scheduledAt?.toISOString() ?? null,
     viewCount: row.viewCount,
     likeCount: row.likeCount,
     commentCount: row.commentCount,

@@ -51,7 +51,7 @@ test('service: 404 klip asing/terhapus, antre + tunggu 60s, 503 caption_unavaila
   assert.match(service, /transcript: clip\.transcript \?\? null,/);
   assert.match(service, /currentCaption: clip\.caption \?\? null,/);
   assert.match(service, /description: clip\.job\.description \?\? null,/);
-  assert.match(service, /data: \{ caption: result\.caption, hashtags: result\.hashtags \}/);
+  assert.match(service, /data: \{\s*caption: result\.caption,\s*hashtags: result\.hashtags,\s*platformCaptions: platformCaptionsJson\(result\.platformCaptions\) \?\? Prisma\.DbNull,/);
 
   const shared = await read('packages/shared/src/index.ts');
   assert.match(shared, /export interface CaptionJobData/);
@@ -62,11 +62,12 @@ test('service: 404 klip asing/terhapus, antre + tunggu 60s, 503 caption_unavaila
 test('parseCaptionResult memakai sanitizer clip-social', () => {
   assert.deepEqual(
     parseCaptionResult({ caption: '  Hook baru ', hashtags: ['#Viral', 'viral', 'a b', 5] }),
-    { caption: 'Hook baru', hashtags: ['Viral', 'viral', 'ab'] },
+    { caption: 'Hook baru', hashtags: ['Viral', 'viral', 'ab'], platformCaptions: null },
   );
   assert.deepEqual(parseCaptionResult('{"caption":"x","hashtags":[]}'), {
     caption: 'x',
     hashtags: [],
+    platformCaptions: null,
   });
   assert.equal(parseCaptionResult({ caption: '   ' }), null);
   assert.equal(parseCaptionResult('bukan json'), null);

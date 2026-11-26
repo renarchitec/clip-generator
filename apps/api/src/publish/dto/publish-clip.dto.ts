@@ -5,11 +5,15 @@ import {
   IsArray,
   IsBoolean,
   IsIn,
+  IsISO8601,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import type { PublicationPrivacy, PublishMode } from '@clipper/shared';
@@ -80,13 +84,61 @@ export class PublishTargetDto {
   @IsOptional()
   @IsBoolean()
   madeForKids?: boolean;
+
+  @IsOptional()
+  @IsISO8601()
+  scheduledAt?: string;
 }
 
 export class PublishClipDto {
+  @IsOptional()
+  @IsISO8601()
+  scheduledAt?: string;
+
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(TARGETS_MAX)
   @ValidateNested({ each: true })
   @Type(() => PublishTargetDto)
   targets: PublishTargetDto[];
+}
+
+export class BatchSchedulePublishDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  clipIds?: string[];
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(5)
+  @IsString({ each: true })
+  accountIds: string[];
+
+  @IsOptional()
+  @IsISO8601()
+  startAt?: string;
+
+  @IsNumber()
+  @Min(0.5)
+  @Max(168)
+  intervalHours: number;
+
+  @IsOptional()
+  @IsIn(PRIVACIES)
+  privacy?: PublicationPrivacy;
+
+  @IsOptional()
+  @IsBoolean()
+  madeForKids?: boolean;
+
+  @IsOptional()
+  @IsIn(PUBLISH_MODES)
+  tiktokMode?: PublishMode;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TiktokOptionsDto)
+  tiktok?: TiktokOptionsDto;
 }

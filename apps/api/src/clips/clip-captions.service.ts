@@ -7,11 +7,12 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
+import { Prisma } from '@prisma/client';
 import { Queue, QueueEvents } from 'bullmq';
 import type { CaptionJobData, CaptionLanguage } from '@clipper/shared';
 import { normalizeCustomHashtags } from '@clipper/shared';
 import { PrismaService } from '../prisma/prisma.service';
-import { parseCaptionResult, RegeneratedCaption } from '../queue/clip-social';
+import { parseCaptionResult, platformCaptionsJson, RegeneratedCaption } from '../queue/clip-social';
 import {
   CAPTION_QUEUE_NAME,
   CAPTION_WAIT_TIMEOUT_MS,
@@ -75,10 +76,7 @@ export class ClipCaptionsService implements OnApplicationShutdown {
         removeOnFail: true,
       });
       const value = await job.waitUntilFinished(this.events, CAPTION_WAIT_TIMEOUT_MS);
-      result = parseCaptionResult(value);
-      if (result && customHashtags.length > 0) {
-        result = { caption: result.caption, hashtags: customHashtags };
-      }
+      result = parseCaptionResult(value, customHashtags);
     } catch (error) {
       this.logger.warn(
         `caption ${id}: ${error instanceof Error ? error.message : String(error)}`,
@@ -93,10 +91,14 @@ export class ClipCaptionsService implements OnApplicationShutdown {
     // Klip bisa dihapus selama menunggu LLM: update bersyarat, 404 bila hilang.
     const updated = await this.prisma.clip.updateMany({
       where: { id, deletedAt: null, job: { userId } },
-      data: { caption: result.caption, hashtags: result.hashtags },
+      data: {
+        caption: result.caption,
+        hashtags: result.hashtags,
+        platformCaptions: platformCaptionsJson(result.platformCaptions) ?? Prisma.DbNull,
+      },
     });
     if (updated.count === 0) throw new NotFoundException(`Clip ${id} tidak ditemukan.`);
 
-    return { caption: result.caption, hashtags: result.hashtags };
+    return result;
   }
 }

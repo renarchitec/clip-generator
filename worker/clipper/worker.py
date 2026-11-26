@@ -154,6 +154,8 @@ async def handle_caption_job(job, token: str | None = None, redis_client: redis.
         else:
             caption = await asyncio.to_thread(llm.regenerate_caption, getattr(job, "data", None) or {})
             result = {"caption": caption.caption, "hashtags": list(caption.hashtags)}
+            if caption.platforms:
+                result["platformCaptions"] = caption.platforms
     except llm.CaptionUnavailable as exc:
         log.warning("caption job %s gagal: %s", job_id, exc)
         raise RuntimeError("caption_unavailable") from None

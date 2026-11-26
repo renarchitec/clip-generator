@@ -1,22 +1,22 @@
-import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Copy, ExternalLink, Eye, Flame, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
+import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Clock, Copy, ExternalLink, Eye, Flame, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 import { Children, createContext, isValidElement, useContext, useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { api } from "@/lib/api"
+import { api, type PlatformCaptions } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { sourceLabel } from "@/lib/format"
+import { formatScheduledDateTime, sourceLabel } from "@/lib/format"
 import { formatCompactCount, formatExactCount, summarizeClipViews } from "@/lib/format-views"
 import { useLanguage, useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
-import { isActivePublication, metricsErrorMessage, publicationsKey, PublishDialog, refreshClipPublicationMetrics, type ClipPublication, type PublicationResponse } from "@/components/publish-dialog"
+import { isUploadingPublication, metricsErrorMessage, publicationsKey, PublishDialog, refreshClipPublicationMetrics, type ClipPublication, type PublicationResponse } from "@/components/publish-dialog"
 import { InstagramMark, TikTokMark, YouTubeMark, type SocialPlatform } from "@/components/social-accounts"
 
-export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; viralScore?: number | null; hookText?: string | null; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
+export type ClipCardData = { id: string; title: string; startSec: number; endSec: number; downloadedAt?: string | null; caption?: string | null; hashtags?: string[]; platformCaptions?: PlatformCaptions | null; viralScore?: number | null; hookText?: string | null; publications?: ClipPublication[]; job: { id: string; url: string; aspectRatio: "9:16" | "1:1" | "16:9" } }
 
 export type ClipFeedItem = { clip: ClipCardData; meta: string; index?: number }
 
@@ -628,16 +628,64 @@ function PlatformMark({ platform, className }: { platform: SocialPlatform; class
 
 function PublishBadge({ publications }: { publications?: ClipPublication[] }) {
   const t = useT()
+  const locale = useLanguage().language === "id" ? "id-ID" : "en-US"
   if (!publications?.length) return null
-  const busy = publications.some((item) => isActivePublication(item.status))
+  const busy = publications.some((item) => isUploadingPublication(item.status))
   const published = publications.some((item) => item.status === "published")
-  if (!busy && !published) return null
-  const shown = publications.filter((item) => item.status === "published" || isActivePublication(item.status))
-  const platforms = (["youtube", "tiktok", "instagram"] as const).filter((platform) => shown.some((item) => item.platform === platform))
-  const hasYouTube = platforms.includes("youtube"), hasTikTok = platforms.includes("tiktok"), hasInstagram = platforms.includes("instagram")
-  const single = platforms.length === 1 ? t.socialPlatforms[platforms[0]] : null
-  const label = single ? (busy ? t.publishingTo : t.publishedOn).replace("{platform}", single) : busy ? t.publishingBadge : t.publishedBadge
-  return <span title={label} className="inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 pl-1 pr-1.5 text-white shadow-sm backdrop-blur-sm sm:bottom-20">
-    {hasYouTube && <YouTubeMark className="size-3.5"/>}{hasTikTok && <TikTokMark className="size-3.5 [&_.fill-foreground]:fill-white"/>}{hasInstagram && <InstagramMark className="size-3.5"/>}{busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80"/> : <CircleCheck aria-hidden="true" className="size-3 text-accent"/>}<span className="sr-only">{label}</span>
-  </span>
+  const scheduledItems = publications.filter((item) => item.status === "scheduled")
+  const hasScheduled = scheduledItems.length > 0
+  if (!busy && !published && !hasScheduled) return null
+
+  const liveShown = publications.filter((item) => item.status === "published" || isUploadingPublication(item.status))
+  const livePlatforms = (["youtube", "tiktok", "instagram"] as const).filter((platform) => liveShown.some((item) => item.platform === platform))
+  const liveSingle = livePlatforms.length === 1 ? t.socialPlatforms[livePlatforms[0]] : null
+  const liveLabel = liveSingle ? (busy ? t.publishingTo : t.publishedOn).replace("{platform}", liveSingle) : busy ? t.publishingBadge : t.publishedBadge
+
+  const scheduledPlatforms = (["youtube", "tiktok", "instagram"] as const).filter((platform) => scheduledItems.some((item) => item.platform === platform))
+  const scheduledSingle = scheduledPlatforms.length === 1 ? t.socialPlatforms[scheduledPlatforms[0]] : null
+  const earliestScheduledAt = scheduledItems
+    .map((item) => item.scheduledAt)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => Date.parse(a) - Date.parse(b))[0]
+  const formattedTime = earliestScheduledAt ? formatScheduledDateTime(earliestScheduledAt, locale) : ""
+  const scheduledTitle = scheduledSingle ? t.scheduledFor.replace("{platform}", scheduledSingle) : t.scheduledBadge
+  const scheduledTooltip = formattedTime ? `${scheduledTitle} · ${formattedTime}` : scheduledTitle
+
+  return (
+    <>
+      {(busy || published) && (
+        <span
+          title={liveLabel}
+          className="inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 pl-1 pr-1.5 text-white shadow-sm backdrop-blur-sm"
+        >
+          {livePlatforms.includes("youtube") && <YouTubeMark className="size-3.5" />}
+          {livePlatforms.includes("tiktok") && <TikTokMark className="size-3.5 [&_.fill-foreground]:fill-white" />}
+          {livePlatforms.includes("instagram") && <InstagramMark className="size-3.5" />}
+          {busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80" /> : <CircleCheck aria-hidden="true" className="size-3 text-accent" />}
+          <span className="sr-only">{liveLabel}</span>
+        </span>
+      )}
+      {hasScheduled && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              tabIndex={0}
+              aria-label={scheduledTooltip}
+              className="pointer-events-auto inline-flex h-[22px] items-center gap-1 rounded-full border border-sky-400/40 bg-sky-950/75 pl-1 pr-1.5 text-sky-100 shadow-sm backdrop-blur-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            >
+              {scheduledPlatforms.includes("youtube") && <YouTubeMark className="size-3.5" />}
+              {scheduledPlatforms.includes("tiktok") && <TikTokMark className="size-3.5 [&_.fill-foreground]:fill-white" />}
+              {scheduledPlatforms.includes("instagram") && <InstagramMark className="size-3.5" />}
+              <Clock aria-hidden="true" className="size-3 text-sky-300" />
+              <span className="sr-only">{scheduledTooltip}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="start">
+            <Clock aria-hidden="true" className="size-3 text-sky-400" />
+            <span>{scheduledTooltip}</span>
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </>
+  )
 }

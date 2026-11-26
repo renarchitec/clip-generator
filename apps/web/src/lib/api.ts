@@ -37,25 +37,87 @@ export function formatCustomHashtagsInput(tags: string[] | null | undefined): st
 export type JobPreview = { id: string; url: string; status: "queued" | "running" | "done" | "failed"; error: string | null; candidates: { start: number; end: number; title: string; reason: string; viralScore?: number | null; hookText?: string | null }[] | null; cues: { start: number; end: number; text: string }[] | null }
 export type Job = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; hookBanner?: boolean; normalizeAudio?: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount: number; targetDurationSec: number; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; watermark?: JobWatermarkValue; status: JobStatus; stage: "download" | "transcribe" | "select" | "render" | "save" | null; progress: number; message: string | null; error: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null; clipsCount: number }
 export type PublishMode = "direct" | "inbox"
+export type PublicationStatus = "scheduled" | "queued" | "uploading" | "processing" | "published" | "failed" | "cancelled"
+export const UPLOADING_PUBLICATION_STATUSES: readonly PublicationStatus[] = ["queued", "uploading", "processing"]
+export const ACTIVE_PUBLICATION_STATUSES: readonly PublicationStatus[] = ["scheduled", "queued", "uploading", "processing"]
+export const isUploadingPublication = (status: PublicationStatus) => UPLOADING_PUBLICATION_STATUSES.includes(status)
+export const isScheduledPublication = (status: PublicationStatus) => status === "scheduled"
+export const isActivePublication = (status: PublicationStatus) => ACTIVE_PUBLICATION_STATUSES.includes(status)
+
+export type PlatformCaptionVariant = {
+  title?: string
+  caption: string
+  hashtags: string[]
+}
+export type PlatformCaptions = Partial<Record<"youtube" | "tiktok" | "instagram", PlatformCaptionVariant>>
+
 export type TikTokCreatorInfo = { nickname: string; username: string; avatarUrl: string | null; privacyLevelOptions: string[]; commentDisabled: boolean; duetDisabled: boolean; stitchDisabled: boolean; maxVideoPostDurationSec: number }
+export type TiktokPublishOptions = {
+  privacyLevel: string
+  disableComment: boolean
+  disableDuet: boolean
+  disableStitch: boolean
+  brandContent: boolean
+  brandOrganic: boolean
+}
 export interface ClipPublicationSummary {
   platform: "youtube" | "instagram" | "tiktok"
-  status: "queued" | "uploading" | "processing" | "published" | "failed"
+  status: PublicationStatus
   externalUrl: string | null
   mode?: PublishMode
+  scheduledAt?: string | null
   viewCount?: number | null
   likeCount?: number | null
   commentCount?: number | null
   metricsUpdatedAt?: string | null
   metricsError?: string | null
 }
+export interface Publication {
+  id: string
+  clipId: string
+  platform: "youtube" | "instagram" | "tiktok"
+  accountId: string | null
+  accountName: string
+  title: string
+  caption: string
+  privacy: string
+  mode: PublishMode
+  status: PublicationStatus
+  progress: number
+  externalId: string | null
+  externalUrl: string | null
+  error: string | null
+  createdAt: string
+  updatedAt: string
+  publishedAt: string | null
+  scheduledAt?: string | null
+  viewCount: number | null
+  likeCount: number | null
+  commentCount: number | null
+  metricsUpdatedAt: string | null
+  metricsError: string | null
+}
+export interface BatchSchedulePublishRequest {
+  clipIds?: string[]
+  accountIds: string[]
+  startAt?: string
+  intervalHours: number
+  privacy?: "public" | "unlisted" | "private"
+  madeForKids?: boolean
+  tiktokMode?: PublishMode
+  tiktok?: TiktokPublishOptions
+}
+export interface BatchSchedulePublishResponse {
+  scheduled: Publication[]
+  skipped: { clipId: string; accountId: string; reason: string }[]
+}
 export interface BulkRefreshMetricsResponse {
   refreshed: number
   skipped: number
   nextAllowedAt: string | null
 }
-export type Clip = { id: string; title: string; startSec: number; endSec: number; downloadedAt: string | null; deletedAt: string | null; caption?: string | null; hashtags?: string[]; viralScore?: number | null; hookText?: string | null; publications?: ClipPublicationSummary[] }
-export type RecentClip = { id: string; title: string; startSec: number; endSec: number; createdAt: string; caption?: string | null; hashtags?: string[]; viralScore?: number | null; hookText?: string | null; publications?: ClipPublicationSummary[]; job: { id: string; url: string; aspectRatio: AspectRatio } }
+export type Clip = { id: string; title: string; startSec: number; endSec: number; downloadedAt: string | null; deletedAt: string | null; caption?: string | null; hashtags?: string[]; platformCaptions?: PlatformCaptions | null; viralScore?: number | null; hookText?: string | null; publications?: ClipPublicationSummary[] }
+export type RecentClip = { id: string; title: string; startSec: number; endSec: number; createdAt: string; caption?: string | null; hashtags?: string[]; platformCaptions?: PlatformCaptions | null; viralScore?: number | null; hookText?: string | null; publications?: ClipPublicationSummary[]; job: { id: string; url: string; aspectRatio: AspectRatio } }
 export type JobSnapshot = { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; hookBanner?: boolean; normalizeAudio?: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount?: number; targetDurationSec?: number; ranges?: { start: number; end: number; title?: string; reason?: string; hookText?: string }[] | null; description: string | null; captionLanguage?: CaptionLanguage; captionStyle?: CaptionStyle | null; customHashtags?: string[]; watermark?: JobWatermarkValue; outro?: JobOutro | null; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
 export type User = { id: string; email: string; name: string | null }
 

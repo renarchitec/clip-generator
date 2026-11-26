@@ -15,6 +15,8 @@ test('rute publish owner-scoped terdaftar', async () => {
   assert.match(controller, /@Post\('clips\/:id\/publish'\)/);
   assert.match(controller, /@Get\('clips\/:id\/publications'\)/);
   assert.match(controller, /@Post\('publications\/:id\/retry'\)/);
+  assert.match(controller, /@Post\('publications\/:id\/cancel'\)\s*@HttpCode\(200\)/);
+  assert.match(controller, /@Post\('jobs\/:id\/schedule-publish'\)\s*@HttpCode\(201\)/);
   assert.match(controller, /@CurrentUser\(\) user: \{ id: string \}/);
   const service = await read('apps/api/src/publish/publish.service.ts');
   assert.match(service, /job: \{ userId \}/);
@@ -46,6 +48,17 @@ test('migrasi mempertahankan publikasi saat akun sosial diputus', async () => {
   assert.match(migration, /ON DELETE SET NULL ON UPDATE CASCADE/);
   const shared = await read('packages/shared/src/index.ts');
   assert.match(shared, /interface PublicationResponse\s*\{[^}]*accountId: string \| null;/);
+});
+
+test('migrasi menambah caption per platform dan jadwal publikasi', async () => {
+  const migration = await read(
+    'apps/api/prisma/migrations/20260205000000_platform_captions_scheduled_publish/migration.sql',
+  );
+  assert.match(migration, /ALTER TYPE "PublicationStatus" ADD VALUE IF NOT EXISTS 'scheduled'/);
+  assert.match(migration, /ALTER TYPE "PublicationStatus" ADD VALUE IF NOT EXISTS 'cancelled'/);
+  assert.match(migration, /ALTER TABLE "clips"\s+ADD COLUMN "platformCaptions" JSONB/);
+  assert.match(migration, /ALTER TABLE "publications"\s+ADD COLUMN "scheduledAt" TIMESTAMP\(3\)/);
+  assert.match(migration, /CREATE INDEX "publications_scheduledAt_idx" ON "publications"\("scheduledAt"\)/);
 });
 
 test('migrasi menambah kolom YouTube pada publications', async () => {

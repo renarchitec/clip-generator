@@ -81,7 +81,7 @@ test('regenerasi caption mengirim customHashtags ke worker dan menimpa hashtag h
   assert.match(service, /\n\s+customHashtags,\n/);
   assert.match(
     service,
-    /if \(result && customHashtags\.length > 0\) \{\s*\n\s*result = \{ caption: result\.caption, hashtags: customHashtags \};/,
+    /result = parseCaptionResult\(value, customHashtags\);/,
   );
 });
 
@@ -94,7 +94,7 @@ test('worker membaca customHashtags dan tidak membuat hashtag otomatis', async (
 
   const llm = await read('worker/clipper/llm.py');
   assert.match(llm, /JANGAN buat hashtag otomatis/);
-  assert.match(llm, /def _strip_inline_hashtags\(text: str\) -> str:/);
+  assert.match(llm, /def _strip_inline_hashtags\(text: str[^\n]*\) -> str:/);
   assert.match(llm, /custom_hashtags: List\[str\] = field\(default_factory=list\)/);
 
   const pipeline = await read('worker/clipper/pipeline.py');

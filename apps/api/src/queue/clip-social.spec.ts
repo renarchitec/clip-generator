@@ -6,7 +6,32 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { sanitizeClipSocialMetadata } from './clip-social.ts';
+import { parseCaptionResult, sanitizeClipSocialMetadata, sanitizePlatformCaptions } from './clip-social.ts';
+
+test('platform captions keep only valid supported variants and enforce limits', () => {
+  assert.deepEqual(sanitizePlatformCaptions({
+    youtube: { title: ` <${'x'.repeat(105)}> `, caption: ' long ', hashtags: ['#Shorts', 'Shorts'] },
+    tiktok: { caption: ` ${'a'.repeat(2300)} `, hashtags: ['#For You'] },
+    instagram: { caption: ' reel ', hashtags: [false, '#réel'] },
+    other: { caption: 'ignored' },
+  }), {
+    youtube: { title: 'x'.repeat(100), caption: 'long', hashtags: ['Shorts'] },
+    tiktok: { caption: 'a'.repeat(2200), hashtags: ['ForYou'] },
+    instagram: { caption: 'reel', hashtags: ['réel'] },
+  });
+  assert.equal(sanitizePlatformCaptions({ instagram: { caption: ' ' }, tiktok: [], youtube: null }), null);
+  assert.equal(sanitizePlatformCaptions(['invalid']), null);
+});
+
+test('regeneration replaces both generic and platform hashtags without creating empty variants', () => {
+  assert.deepEqual(parseCaptionResult({
+    caption: ' generic ', hashtags: ['AI'],
+    platformCaptions: { youtube: { caption: ' specific ', hashtags: ['AI'] }, instagram: {} },
+  }, ['Custom']), {
+    caption: 'generic', hashtags: ['Custom'],
+    platformCaptions: { youtube: { caption: 'specific', hashtags: ['Custom'] } },
+  });
+});
 
 test('caption di-trim, dibatasi 2200 karakter, dan kosong menjadi null', () => {
   assert.deepEqual(
