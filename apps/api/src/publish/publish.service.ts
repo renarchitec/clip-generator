@@ -11,22 +11,33 @@ import {
   type Prisma,
 } from '@prisma/client';
 import { Queue } from 'bullmq';
+import { isUUID } from 'class-validator';
+import { randomUUID } from 'node:crypto';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type {
   BatchSchedulePublishResponse,
+  ClipCoverUploadResponse,
   PublicationResponse,
   PublishMode,
   PublishJobData,
 } from '@clipper/shared';
+import { resolveClipPath } from '../clips/clip-path';
+import { AppConfig } from '../config/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISH_QUEUE_NAME } from '../queue/queue.constants';
 import { sanitizePlatformCaptions } from '../queue/clip-social';
 import type { BatchSchedulePublishDto, PublishClipDto, PublishTargetDto } from './dto/publish-clip.dto';
 import {
   ACTIVE_PUBLICATION_STATUSES,
+  MAX_COVER_IMAGE_BYTES,
+  coverErrorFromOptions,
+  coverTimestampFromOptions,
   parseScheduledAt,
   sanitizeCaption,
   sanitizeTiktokCaption,
   sanitizeTitle,
+  sniffCoverImageMime,
   tiktokMode,
   validatePublishTargets,
   validatePublishTargetsShape,
@@ -69,7 +80,45 @@ export class PublishService {
     private readonly prisma: PrismaService,
     @InjectQueue(PUBLISH_QUEUE_NAME)
     private readonly queue: Queue<PublishJobData>,
+    private readonly config: AppConfig,
   ) {}
+
+  async uploadCover(
+    userId: string,
+    clipId: string,
+    file?: Express.Multer.File,
+  ): Promise<ClipCoverUploadResponse> {
+    const clip = await this.prisma.clip.findFirst({
+      where: { id: clipId, deletedAt: null, job: { userId } },
+      select: { id: true },
+    });
+    if (!clip) throw new NotFoundException(`Clip ${clipId} tidak ditemukan.`);
+
+    const buffer = file?.buffer;
+    if (!buffer?.length || buffer.length > MAX_COVER_IMAGE_BYTES) {
+      throw new BadRequestException('Cover thumbnail must be between 1 byte and 2 MiB');
+    }
+    const image = sniffCoverImageMime(buffer);
+    if (!image) throw new BadRequestException('Cover thumbnail must be JPEG or PNG');
+
+    const coverId = randomUUID();
+    const path = resolveClipPath(this.config.clipsDir, `covers/${clip.id}/${coverId}.${image.ext}`);
+    if (!path) throw new NotFoundException(`Clip ${clipId} tidak ditemukan.`);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, buffer, { flag: 'wx' });
+    return { coverId };
+  }
+
+  private async findCoverFilePath(clipId: string, coverId: string): Promise<string> {
+    if (isUUID(coverId)) {
+      for (const ext of ['jpg', 'png']) {
+        const relativePath = `covers/${clipId}/${coverId}.${ext}`;
+        const path = resolveClipPath(this.config.clipsDir, relativePath);
+        if (path && (await stat(path).catch(() => null))?.isFile()) return relativePath;
+      }
+    }
+    throw new BadRequestException('Cover thumbnail not found for this clip');
+  }
 
   async publish(
     clipId: string,
@@ -115,6 +164,8 @@ export class PublishService {
       }
     }
 
+    const coverTimestampMs = typeof dto.coverTimestampMs === 'number' ? Math.round(dto.coverTimestampMs) : null;
+    const coverFilePath = dto.coverId != null ? await this.findCoverFilePath(clip.id, dto.coverId) : null;
     const schedules = dto.targets.map((target) => parseScheduledAt(target.scheduledAt ?? dto.scheduledAt));
     const created = await this.prisma.$transaction(async (tx) => {
       const active = await tx.publication.findFirst({
@@ -131,7 +182,7 @@ export class PublishService {
       for (const [i, target] of dto.targets.entries()) {
         const account = byId.get(target.accountId)!;
         rows.push(await tx.publication.create({
-          data: publicationData(clipId, account, target, schedules[i]),
+          data: publicationData(clipId, account, target, schedules[i], coverTimestampMs, coverFilePath),
           include: PUBLICATION_INCLUDE,
         }));
       }
@@ -416,9 +467,23 @@ function publicationData(
   account: PublishAccount,
   target: Pick<PublishTargetDto, 'title' | 'caption' | 'privacy' | 'mode' | 'tiktok' | 'madeForKids'>,
   scheduledAt: Date | null,
+  coverTimestampMs: number | null = null,
+  coverFilePath: string | null = null,
 ): Prisma.PublicationUncheckedCreateInput {
   const mode = account.platform === 'tiktok' ? tiktokMode(target) : 'direct';
   const tiktok = account.platform === 'tiktok' && mode === 'direct' ? target.tiktok : undefined;
+  const options = {
+    ...(tiktok && {
+      privacyLevel: tiktok.privacyLevel,
+      disableComment: tiktok.disableComment ?? false,
+      disableDuet: tiktok.disableDuet ?? false,
+      disableStitch: tiktok.disableStitch ?? false,
+      brandContent: tiktok.brandContent ?? false,
+      brandOrganic: tiktok.brandOrganic ?? false,
+    }),
+    ...(coverTimestampMs !== null && mode !== 'inbox' && { coverTimestampMs }),
+    ...(account.platform === 'youtube' && coverFilePath && { coverFilePath }),
+  };
   return {
     clipId,
     socialAccountId: account.id,
@@ -437,14 +502,7 @@ function publicationData(
         ? 'public'
         : target.privacy!,
     mode,
-    options: tiktok && {
-      privacyLevel: tiktok.privacyLevel,
-      disableComment: tiktok.disableComment ?? false,
-      disableDuet: tiktok.disableDuet ?? false,
-      disableStitch: tiktok.disableStitch ?? false,
-      brandContent: tiktok.brandContent ?? false,
-      brandOrganic: tiktok.brandOrganic ?? false,
-    },
+    options: Object.keys(options).length ? options : undefined,
     madeForKids: target.madeForKids ?? false,
     status: scheduledAt ? PublicationStatus.scheduled : PublicationStatus.queued,
     scheduledAt,
@@ -469,6 +527,8 @@ export function toPublicationResponse(
     externalId: row.externalId,
     externalUrl: row.externalUrl,
     error: row.error,
+    coverTimestampMs: coverTimestampFromOptions(row.options),
+    coverError: coverErrorFromOptions(row.options),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     publishedAt: row.publishedAt?.toISOString() ?? null,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
@@ -10,6 +11,7 @@ import {
   parseResumeOffset,
   PublishError,
   retryDelayMs,
+  sniffCoverImageMime,
   statusQueryRange,
   type VideoStatusOutcome,
   interpretVideoStatus,
@@ -36,6 +38,38 @@ type ChunkResult =
  */
 @Injectable()
 export class YoutubeUploader {
+  async setThumbnail(accessToken: string, videoId: string, filePath: string): Promise<void> {
+    const buffer = await readFile(filePath).catch(() => {
+      throw new PublishError('Cover thumbnail file is missing');
+    });
+    const image = sniffCoverImageMime(buffer);
+    if (!image) throw new PublishError('Invalid cover thumbnail image');
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(videoId)}&uploadType=media`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': image.mime,
+            'Content-Length': String(buffer.length),
+          },
+          body: buffer,
+        },
+      );
+    } catch {
+      throw new PublishError('Could not reach YouTube, retry later', true);
+    }
+    if (!response.ok) {
+      throw new PublishError(
+        mapGoogleError(response.status, await safeJson(response)),
+        response.status >= 500,
+      );
+    }
+  }
+
   /** Buat sesi resumable dan kembalikan URL sesi (header Location). */
   async startSession(
     accessToken: string,

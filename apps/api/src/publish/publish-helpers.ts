@@ -29,6 +29,48 @@ export const ACTIVE_PUBLICATION_STATUSES = [
   'processing',
 ] as const;
 
+export const MAX_COVER_IMAGE_BYTES = 2 * 1024 * 1024;
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+export function sniffCoverImageMime(
+  buffer: Buffer,
+): { mime: 'image/jpeg' | 'image/png'; ext: 'jpg' | 'png' } | null {
+  if (buffer.subarray(0, JPEG_SIGNATURE.length).equals(JPEG_SIGNATURE)) {
+    return { mime: 'image/jpeg', ext: 'jpg' };
+  }
+  if (buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    return { mime: 'image/png', ext: 'png' };
+  }
+  return null;
+}
+
+function coverOption(options: unknown, key: string): unknown {
+  if (!options || typeof options !== 'object' || Array.isArray(options) || !Object.hasOwn(options, key)) {
+    return undefined;
+  }
+  return (options as Record<string, unknown>)[key];
+}
+
+export function coverTimestampFromOptions(options: unknown): number | null {
+  const value = coverOption(options, 'coverTimestampMs');
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+export function coverFilePathFromOptions(options: unknown): string | null {
+  const value = coverOption(options, 'coverFilePath');
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+export function coverErrorFromOptions(options: unknown): string | null {
+  const value = coverOption(options, 'coverError');
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+export function coverAppliedFromOptions(options: unknown): boolean {
+  return coverOption(options, 'coverApplied') === true;
+}
+
 export function parseScheduledAt(raw?: string | null, now = new Date()): Date | null {
   if (raw == null || (typeof raw === 'string' && raw.trim() === '')) return null;
   if (!isISO8601(raw, { strict: true })) {

@@ -96,6 +96,11 @@ export interface Publication {
   commentCount: number | null
   metricsUpdatedAt: string | null
   metricsError: string | null
+  coverTimestampMs?: number | null
+  coverError?: string | null
+}
+export interface ClipCoverUploadResponse {
+  coverId: string
 }
 export interface BatchSchedulePublishRequest {
   clipIds?: string[]
@@ -133,6 +138,23 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+export async function uploadClipCover(clipId: string, blob: Blob): Promise<ClipCoverUploadResponse> {
+  // The shared api() helper forces JSON content-type; FormData must set its own boundary.
+  const body = new FormData()
+  body.append("file", blob, "cover.jpg")
+  const response = await fetch(`/api/clips/${encodeURIComponent(clipId)}/cover`, {
+    method: "POST",
+    body,
+    credentials: "same-origin",
+  })
+  if (!response.ok) {
+    const error = new Error(response.statusText || "Cover upload failed") as Error & { status: number }
+    error.status = response.status
+    throw error
+  }
+  return response.json() as Promise<ClipCoverUploadResponse>
 }
 
 export function refreshBulkPublicationMetrics(clipIds?: string[]) {

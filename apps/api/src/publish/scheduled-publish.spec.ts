@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
 import ts from 'typescript';
+import * as clipPath from '../clips/clip-path.ts';
 import * as clipSocial from '../queue/clip-social.ts';
 import * as instagramHelpers from './instagram-helpers.ts';
 import * as publishHelpers from './publish-helpers.ts';
@@ -21,6 +22,7 @@ const { outputText } = ts.transpileModule(readFileSync(file, 'utf8'), {
 });
 const require = createRequire(file);
 const dependencies: Record<string, unknown> = {
+  '../clips/clip-path': clipPath,
   '../queue/clip-social': clipSocial,
   '../queue/queue.constants': { PUBLISH_QUEUE_NAME: 'publish' },
   './publish-helpers': publishHelpers,
@@ -36,6 +38,7 @@ function service(prisma: object, queue: object) {
   return new PublishService(
     prisma as ConstructorParameters<typeof Service>[0],
     queue as ConstructorParameters<typeof Service>[1],
+    { clipsDir: process.cwd() } as ConstructorParameters<typeof Service>[2],
   );
 }
 

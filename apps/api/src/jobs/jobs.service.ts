@@ -8,7 +8,8 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
-import { unlink } from 'node:fs/promises';
+import { rm, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import type {
   AspectRatio,
   CaptionLanguage,
@@ -387,6 +388,9 @@ export class JobsService {
       where: { id },
     });
 
+    for (const clip of job.clips) {
+      await rm(join(this.config.clipsDir, 'covers', clip.id), { recursive: true, force: true }).catch(() => undefined);
+    }
     this.jobEvents.close(id);
   }
 }

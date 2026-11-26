@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
 import ts from 'typescript';
+import * as clipPath from '../clips/clip-path.ts';
 import * as clipSocial from '../queue/clip-social.ts';
 import * as instagramHelpers from './instagram-helpers.ts';
 import * as helpers from './publication-metrics-helpers.ts';
@@ -41,6 +42,7 @@ function loadDecorated<T>(name: string, dependencies: Record<string, unknown>): 
 }
 
 const serviceExports = loadDecorated<typeof import('./publish.service')>('./publish.service.ts', {
+  '../clips/clip-path': clipPath,
   '../queue/queue.constants': { PUBLISH_QUEUE_NAME: 'publish' },
   '../queue/clip-social': clipSocial,
   './publish-helpers': publishHelpers,

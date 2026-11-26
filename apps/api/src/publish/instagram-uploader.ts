@@ -15,6 +15,7 @@ export interface InstagramContainerInput {
   /** HTTPS URL publik yang bisa diunduh Instagram, mis. tautan bertanda tangan. */
   videoUrl: string;
   caption: string;
+  thumbOffsetMs?: number;
 }
 
 export interface InstagramPublishResult {
@@ -46,6 +47,10 @@ export class InstagramUploader {
       caption: input.caption,
       share_to_feed: 'true',
     });
+    const offset = input.thumbOffsetMs;
+    if (typeof offset === 'number' && Number.isFinite(offset) && offset >= 0) {
+      body.set('thumb_offset', String(Math.round(offset)));
+    }
     const baseUrl = instagramGraphBaseUrl(input.accessToken);
     const data = await this.request<{ id?: unknown }>(
       `${baseUrl}/${encodeURIComponent(input.igUserId)}/media`,

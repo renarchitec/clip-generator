@@ -34,6 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { PublishCoverPicker, type PublishCoverPickerHandle } from "@/components/publish-cover-picker"
 import { InstagramMark, TikTokMark, YouTubeMark, type SocialAccount, type SocialPlatform } from "@/components/social-accounts"
 import {
   api,
@@ -42,6 +43,7 @@ import {
   isCaptionLanguage,
   isScheduledPublication,
   isUploadingPublication,
+  uploadClipCover,
   type CaptionLanguage,
   type ClipPublicationSummary,
   type PlatformCaptions,
@@ -235,6 +237,8 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
   // Schedule controls
   const [publishTiming, setPublishTiming] = useState<"now" | "schedule">("now")
   const [scheduledLocal, setScheduledLocal] = useState(() => toDatetimeLocalValue(defaultScheduleDate(3)))
+  const [coverTimestampMs, setCoverTimestampMs] = useState<number | null>(null)
+  const coverPickerRef = useRef<PublishCoverPickerHandle>(null)
   const [submitError, setSubmitError] = useState("")
 
   const accounts = useQuery({ queryKey: ["social", "accounts"], queryFn: () => api<SocialAccount[]>("/social/accounts") })
@@ -320,12 +324,34 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
   const scheduleInvalid = scheduleInvalidDate || scheduleInPast || scheduleTooFar
   const scheduledIso = publishTiming === "schedule" && parsedScheduleDate && !scheduleInvalid ? parsedScheduleDate.toISOString() : undefined
 
+  const hasCoverSupportingTarget = selected.some((account) => account.platform !== "tiktok" || mode === "direct")
+  const hasTikTokInbox = selectedTikTok.length > 0 && mode === "inbox"
+
   const publish = useMutation({
-    mutationFn: () =>
-      api<PublicationResponse[]>(`/clips/${clip.id}/publish`, {
+    mutationFn: async () => {
+      const hasYoutube = selectedYouTube.length > 0
+      const includeCover = coverTimestampMs !== null && hasCoverSupportingTarget
+      let uploadedCoverId: string | undefined
+
+      if (includeCover && hasYoutube) {
+        try {
+          if (!coverPickerRef.current) throw new Error("Cover picker unavailable")
+          const jpegBlob = await coverPickerRef.current.captureJpeg()
+          const uploaded = await uploadClipCover(clip.id, jpegBlob)
+          uploadedCoverId = uploaded.coverId
+        } catch (err) {
+          const coverError = new Error(err instanceof Error ? err.message : "Cover upload failed") as Error & { isCoverError?: boolean }
+          coverError.isCoverError = true
+          throw coverError
+        }
+      }
+
+      return api<PublicationResponse[]>(`/clips/${clip.id}/publish`, {
         method: "POST",
         body: JSON.stringify({
           ...(scheduledIso ? { scheduledAt: scheduledIso } : {}),
+          ...(includeCover ? { coverTimestampMs } : {}),
+          ...(uploadedCoverId ? { coverId: uploadedCoverId } : {}),
           targets: selectedIds.map((accountId) => {
             const account = available.find((item) => item.id === accountId)!
             if (account.platform === "instagram") {
@@ -358,7 +384,8 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                 }
           }),
         }),
-      }),
+      })
+    },
     onSuccess: (created) => {
       setSubmitError("")
       setSubmittedIds(created.map((item) => item.id))
@@ -373,8 +400,12 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
       toast.success(publishTiming === "schedule" ? t.publishScheduledToast : t.publishStarted)
     },
     onError: (error) => {
-      const status = (error as Error & { status?: number }).status
-      setSubmitError(status === 409 ? t.publishConflict : status === 400 ? t.publishInvalid : t.publishFailedGeneric)
+      const typed = error as Error & { status?: number; isCoverError?: boolean }
+      if (typed.isCoverError) {
+        setSubmitError(t.publishCoverUploadFailed)
+        return
+      }
+      setSubmitError(typed.status === 409 ? t.publishConflict : typed.status === 400 ? t.publishInvalid : t.publishFailedGeneric)
     },
   })
 
@@ -793,6 +824,20 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                 )}
               </Field>
             </section>
+          )}
+
+          {/* Shared cover frame picker */}
+          {selectedPlatforms.length > 0 && (
+            <PublishCoverPicker
+              ref={coverPickerRef}
+              clipId={clip.id}
+              fallbackDurationSec={duration}
+              value={coverTimestampMs}
+              onChange={setCoverTimestampMs}
+              hasCoverSupportingTarget={hasCoverSupportingTarget}
+              hasYouTube={selectedYouTube.length > 0}
+              hasTikTokInbox={hasTikTokInbox}
+            />
           )}
 
           {/* TikTok settings */}
@@ -1510,6 +1555,14 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
         <div aria-hidden="true" className="publish-indeterminate mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted">
           <span className="block h-full w-1/3 rounded-full bg-primary/60" />
         </div>
+      )}
+      {item.coverError && (
+        <p className="mt-2 ml-11 flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs leading-5 text-amber-900 dark:text-amber-200">
+          <TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>
+            <span className="font-medium">{t.publishCoverWarningPrefix}</span> {item.coverError}
+          </span>
+        </p>
       )}
       {item.status === "failed" && item.error && (
         <p className="mt-2 rounded-md bg-destructive/5 px-2.5 py-2 text-xs leading-5 text-destructive">{item.error}</p>

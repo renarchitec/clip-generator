@@ -442,6 +442,15 @@ export interface TiktokCreatorInfoResponse {
 export interface PublishRequest {
   targets: PublishTarget[];
   scheduledAt?: string | null;
+  /** Posisi frame cover bersama dalam milidetik (opsional; dipakai IG thumb_offset, TikTok Direct video_cover_timestamp_ms, dan YouTube bila coverId dikirim). */
+  coverTimestampMs?: number | null;
+  /** ID gambar cover hasil POST /api/clips/:id/cover (dipakai YouTube Shorts thumbnails.set). */
+  coverId?: string | null;
+}
+
+/** Respons POST /api/clips/:id/cover. */
+export interface ClipCoverUploadResponse {
+  coverId: string;
 }
 
 /** Body POST /api/jobs/:id/schedule-publish. */
@@ -487,6 +496,8 @@ export interface PublicationResponse {
   commentCount: number | null;
   metricsUpdatedAt: string | null;
   metricsError: string | null;
+  coverTimestampMs?: number | null;
+  coverError?: string | null;
 }
 
 /** Ringkasan publikasi untuk badge kartu klip (terbaru per akun). */
