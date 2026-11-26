@@ -1,4 +1,4 @@
-"""Timestamped speech transcription via 9router, with a multimodal audio fallback."""
+"""Timestamped Whisper transcription with a separate multimodal audio fallback."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import tempfile
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from .llm import parse_llm_json
@@ -21,6 +22,8 @@ MAX_STT_CHUNK_SEC = 180.0
 MAX_GEMINI_SLICE_SEC = 45.0
 DEFAULT_STT_MODEL = "groq/whisper-large-v3-turbo"
 DEFAULT_STT_FALLBACK_MODEL = "ag/gemini-4-hydrogen-low"
+_SEGMENT_WARNING_LOCK = Lock()
+_WARNED_SEGMENT_ONLY_MODELS: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -29,20 +32,36 @@ class SttConfig:
     api_key: str
     model: str
     fallback_model: str
+    fallback_base_url: str
+    fallback_api_key: str
+
+    @property
+    def whisper_configured(self) -> bool:
+        return bool(self.base_url and self.api_key and self.model)
+
+    @property
+    def gemini_configured(self) -> bool:
+        return bool(self.fallback_base_url and self.fallback_api_key and self.fallback_model)
 
 
 def stt_config(env: Optional[Mapping[str, str]] = None) -> SttConfig:
     env = os.environ if env is None else env
+    llm_base_url = env.get("LLM_BASE_URL", "").strip().rstrip("/")
+    llm_api_key = env.get("LLM_API_KEY", "").strip()
+    base_url = env.get("STT_BASE_URL", "").strip().rstrip("/") or llm_base_url
+    api_key = env.get("STT_API_KEY", "").strip() or llm_api_key
     return SttConfig(
-        base_url=(env.get("STT_BASE_URL", "").strip() or env.get("LLM_BASE_URL", "").strip()).rstrip("/"),
-        api_key=env.get("STT_API_KEY", "").strip() or env.get("LLM_API_KEY", "").strip(),
+        base_url=base_url,
+        api_key=api_key,
         model=env.get("STT_MODEL", "").strip() or DEFAULT_STT_MODEL,
         fallback_model=env.get("STT_FALLBACK_MODEL", DEFAULT_STT_FALLBACK_MODEL).strip(),
+        fallback_base_url=env.get("STT_FALLBACK_BASE_URL", "").strip().rstrip("/") or llm_base_url or base_url,
+        fallback_api_key=env.get("STT_FALLBACK_API_KEY", "").strip() or llm_api_key or api_key,
     )
 
 
 def _configured(cfg: SttConfig) -> bool:
-    return bool(cfg.base_url and cfg.api_key and (cfg.model or cfg.fallback_model))
+    return cfg.whisper_configured or cfg.gemini_configured
 
 
 def is_stt_configured(env: Optional[Mapping[str, str]] = None) -> bool:
@@ -134,7 +153,9 @@ def words_to_cues(raw_words: Sequence[Mapping[str, Any]], offset_sec: float = 0.
     return cues
 
 
-def segments_to_cues(raw_segments: Sequence[Mapping[str, Any]], offset_sec: float = 0.0) -> List[Cue]:
+def segments_to_cues(
+    raw_segments: Sequence[Mapping[str, Any]], offset_sec: float = 0.0, *, trim_leading_silence: bool = True,
+) -> List[Cue]:
     cues = []
     for segment in raw_segments:
         text = sanitize(str(_field(segment, "text") or ""))
@@ -144,29 +165,46 @@ def segments_to_cues(raw_segments: Sequence[Mapping[str, Any]], offset_sec: floa
         start = max(0.0, start)
         if end <= start:
             continue
+        if trim_leading_silence:
+            # Whisper may extend the segment start across preceding silence; keep its end.
+            words = text.split()
+            chars = sum(len(word) for word in words)
+            max_spoken = max(1.2, len(words) * 0.55 + 0.5, chars / 9.0 + 0.6)
+            start = max(start, end - max_spoken)
         cue = Cue(start + offset_sec, end + offset_sec, text)
         cue.words = cue_to_words(cue)
         cues.append(cue)
     return sorted(cues, key=lambda cue: cue.start)
 
 
-def _openai_client(cfg: SttConfig):
+def _openai_client_for(base_url: str, api_key: str):
     from openai import OpenAI
 
-    return OpenAI(base_url=cfg.base_url, api_key=cfg.api_key, timeout=90.0)
+    return OpenAI(base_url=base_url, api_key=api_key, timeout=90.0)
+
+
+def _warn_segment_only(model: str) -> None:
+    with _SEGMENT_WARNING_LOCK:
+        if model in _WARNED_SEGMENT_ONLY_MODELS:
+            return
+        _WARNED_SEGMENT_ONLY_MODELS.add(model)
+    log.warning("STT %s tidak mengembalikan timestamp per kata; gunakan STT_BASE_URL langsung ke "
+                "Groq/OpenAI untuk sinkronisasi presisi", model)
 
 
 def _transcribe_whisper(
     audio_path: str, cfg: SttConfig, language: Optional[str] = None, offset_sec: float = 0.0,
 ) -> List[Cue]:
     kwargs = {"language": language} if language in ("id", "en") else {}
-    with _openai_client(cfg) as client, open(audio_path, "rb") as file:
+    with _openai_client_for(cfg.base_url, cfg.api_key) as client, open(audio_path, "rb") as file:
         response = client.audio.transcriptions.create(
             model=cfg.model, file=file, response_format="verbose_json",
             timestamp_granularities=["word", "segment"], **kwargs,
         )
     words = _field(response, "words") or []
     segments = _field(response, "segments") or []
+    if not words and segments:
+        _warn_segment_only(cfg.model)
     if not words and not segments and sanitize(str(_field(response, "text") or "")):
         raise RuntimeError("Whisper mengembalikan transkrip tanpa timestamp")
     return words_to_cues(words, offset_sec) or segments_to_cues(segments, offset_sec)
@@ -186,7 +224,10 @@ def _transcribe_gemini_audio(
     workdir: Optional[str] = None,
 ) -> List[Cue]:
     cues: List[Cue] = []
-    with tempfile.TemporaryDirectory(prefix="gemini-", dir=workdir) as tmp, _openai_client(cfg) as client:
+    with (
+        tempfile.TemporaryDirectory(prefix="gemini-", dir=workdir) as tmp,
+        _openai_client_for(cfg.fallback_base_url, cfg.fallback_api_key) as client,
+    ):
         wav = os.path.join(tmp, "slice.wav")
         start = 0.0
         while start < duration_sec:
@@ -210,7 +251,7 @@ def _transcribe_gemini_audio(
                 if lo is not None and hi is not None:
                     clamped.append({**segment, "start": min(length, max(0.0, lo)),
                                     "end": min(length, max(0.0, hi))})
-            cues.extend(segments_to_cues(clamped, offset_sec + start))
+            cues.extend(segments_to_cues(clamped, offset_sec + start, trim_leading_silence=False))
             start = end
     return sorted(cues, key=lambda cue: cue.start)
 
@@ -226,6 +267,21 @@ def _probe_duration(path: str) -> float:
     return duration
 
 
+def _transcribe_audio_chunk(
+    path: str, duration: float, cfg: SttConfig, language: Optional[str], offset_sec: float,
+    workdir: str,
+) -> List[Cue]:
+    if cfg.whisper_configured:
+        try:
+            return _transcribe_whisper(path, cfg, language=language, offset_sec=offset_sec)
+        except Exception as exc:
+            if not cfg.gemini_configured:
+                raise
+            log.warning("STT Whisper gagal (%s); mencoba model cadangan %s",
+                        exc.__class__.__name__, cfg.fallback_model)
+    return _transcribe_gemini_audio(path, duration, cfg, offset_sec=offset_sec, workdir=workdir)
+
+
 def transcribe_media_file(
     media_path: str, workdir: str, start: Optional[float] = None, end: Optional[float] = None,
     offset_sec: float = 0.0, language: Optional[str] = None,
@@ -238,6 +294,11 @@ def transcribe_media_file(
     stop = _probe_duration(media_path) if end is None else end
     if not math.isfinite(stop):
         raise ValueError("batas akhir transkripsi tidak valid")
+    if (start is None and end is None and Path(media_path).suffix.lower() == ".mp3"
+            and stop <= MAX_STT_CHUNK_SEC and os.path.getsize(media_path) <= 20 * 1024 * 1024):
+        cues = _transcribe_audio_chunk(media_path, stop, cfg, language, offset_sec, workdir)
+        return sorted(cues, key=lambda cue: cue.start)
+
     cues: List[Cue] = []
     with tempfile.TemporaryDirectory(prefix="stt-", dir=workdir) as tmp:
         mp3 = os.path.join(tmp, "chunk.mp3")
@@ -246,14 +307,6 @@ def transcribe_media_file(
             chunk_end = min(stop, chunk_start + MAX_STT_CHUNK_SEC)
             extract_audio_chunk(media_path, mp3, start=chunk_start, end=chunk_end)
             chunk_offset = offset_sec + (chunk_start - first)
-            try:
-                cues.extend(_transcribe_whisper(mp3, cfg, language=language, offset_sec=chunk_offset))
-            except Exception as exc:
-                if not cfg.fallback_model:
-                    raise
-                log.warning("STT Whisper gagal (%s); mencoba model cadangan %s",
-                            exc.__class__.__name__, cfg.fallback_model)
-                cues.extend(_transcribe_gemini_audio(mp3, chunk_end - chunk_start, cfg,
-                                                     offset_sec=chunk_offset, workdir=tmp))
+            cues.extend(_transcribe_audio_chunk(mp3, chunk_end - chunk_start, cfg, language, chunk_offset, tmp))
             chunk_start = chunk_end
     return sorted(cues, key=lambda cue: cue.start)

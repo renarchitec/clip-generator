@@ -72,6 +72,7 @@ NO_LIVE_CHAT_LONG_VIDEO_ERROR = (
 )
 NO_STT_CUES_ERROR = "Transkripsi audio tidak menemukan dialog yang bisa digunakan."
 MAX_DIRECT_STT_SEC = 1200
+MAX_STT_WINDOW_CONCURRENCY = 4
 
 
 def _accepts_clip(callback) -> bool:
@@ -475,6 +476,51 @@ def _probe_duration(path: str) -> float:
     return float(out.strip())
 
 
+def _pick_hls_audio_stream(meta: Mapping[str, Any]) -> Optional[Tuple[str, Dict[str, str]]]:
+    candidates = []
+    for fmt in meta.get("formats") or ():
+        if not isinstance(fmt, Mapping):
+            continue
+        url = fmt.get("url")
+        if (fmt.get("vcodec") != "none" or fmt.get("acodec") == "none"
+                or fmt.get("audio_ext") == "none" or "m3u8" not in str(fmt.get("protocol")).lower()
+                or not isinstance(url, str) or not url.strip()):
+            continue
+        bitrate = float("inf")
+        for key in ("abr", "tbr"):
+            try:
+                value = float(fmt.get(key))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                bitrate = value
+                break
+        candidates.append((bitrate, str(fmt.get("format_id") or ""), url, fmt.get("http_headers")))
+    if not candidates:
+        return None
+    _, _, url, headers = min(candidates, key=lambda item: item[:2])
+    return url, dict(headers) if isinstance(headers, Mapping) else {}
+
+
+def _extract_remote_hls_audio(
+    stream_url: str, headers: Mapping[str, str], start: float, end: float, outdir: str, index: int,
+) -> Optional[str]:
+    out_path = os.path.join(outdir, f"stt-hls-{index:02d}.mp3")
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+    if headers:
+        cmd += ["-headers", "".join(f"{key}: {value}\r\n" for key, value in headers.items())]
+    cmd += ["-ss", f"{start:.3f}", "-t", f"{max(0.5, end - start):.3f}", "-i", stream_url,
+            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k", out_path]
+    try:
+        _run(cmd, timeout=60)
+        if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+    except Exception as exc:
+        # ffmpeg errors may include the signed stream URL or request headers.
+        log.warning("gagal ekstrak audio HLS segmen %s (%s)", index, type(exc).__name__)
+    return None
+
+
 def _download_audio_section(url: str, start: float, end: float, outdir: str, index: int) -> Optional[str]:
     cmd = _yt_dlp_base(sections=True)
     cmd[cmd.index("-f") + 1] = "ba[ext=m4a]/ba/b"
@@ -527,20 +573,45 @@ async def _transcribe_auto_windows(
             raise RuntimeError(NO_LIVE_CHAT_LONG_VIDEO_ERROR)
         windows = [(0.0, effective_end)]
 
-    cues: List[Cue] = []
+    hls_stream = _pick_hls_audio_stream(meta) if not local_video else None
     total = len(windows)
-    for index, (start, end) in enumerate(windows, 1):
-        await _emit(on_progress, "transcribe", (index - 1) * 100 / total,
-                    f"mentranskrip segmen {index}/{total}...")
-        if local_video:
-            segment = await asyncio.to_thread(stt.transcribe_media_file, local_video, workdir,
-                                              start=start, end=end, offset_sec=start, language=caption_language)
-        else:
-            path = await asyncio.to_thread(_download_audio_section, url, start, end, workdir, index)
-            if not path:
-                continue
-            segment = await asyncio.to_thread(stt.transcribe_media_file, path, workdir,
-                                              offset_sec=start, language=caption_language)
+    completed = 0
+    slots = asyncio.Semaphore(MAX_STT_WINDOW_CONCURRENCY)
+    progress_lock = asyncio.Lock()
+
+    async def transcribe_window(index: int, start: float, end: float) -> List[Cue]:
+        nonlocal completed
+        async with slots:
+            if local_video:
+                segment = await asyncio.to_thread(
+                    stt.transcribe_media_file, local_video, workdir,
+                    start=start, end=end, offset_sec=start, language=caption_language,
+                )
+            else:
+                path = None
+                if hls_stream:
+                    path = await asyncio.to_thread(_extract_remote_hls_audio, *hls_stream,
+                                                   start, end, workdir, index)
+                if not path:
+                    path = await asyncio.to_thread(_download_audio_section, url, start, end, workdir, index)
+                segment = await asyncio.to_thread(
+                    stt.transcribe_media_file, path, workdir, offset_sec=start, language=caption_language,
+                ) if path else []
+            async with progress_lock:
+                completed += 1
+                await _emit(on_progress, "transcribe", completed * 100 / total,
+                            f"mentranskrip segmen {completed}/{total}...")
+            return segment
+
+    # Wait for siblings even if one fails so the caller cannot remove their workdir early.
+    results = await asyncio.gather(
+        *(transcribe_window(index, start, end) for index, (start, end) in enumerate(windows, 1)),
+        return_exceptions=True,
+    )
+    cues: List[Cue] = []
+    for segment in results:
+        if isinstance(segment, BaseException):
+            raise segment
         cues.extend(segment)
     if not cues:
         raise RuntimeError(NO_STT_CUES_ERROR)
