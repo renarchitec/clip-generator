@@ -1,3 +1,4 @@
+import { apiUrl } from "./desktop.ts"
 import type { AspectRatio } from "@/lib/api"
 
 export type WatermarkKind = "image" | "video"
@@ -171,7 +172,7 @@ export async function uploadWatermark(file: File, name?: string): Promise<Waterm
     : file
   body.append("file", prepared)
   if (name?.trim()) body.append("name", name.trim())
-  const response = await fetch("/api/watermarks", { method: "POST", body, credentials: "same-origin" })
+  const response = await fetch(apiUrl("/watermarks"), { method: "POST", body, credentials: "same-origin" })
   const data: unknown = await response.json().catch(() => null)
   if (!response.ok) throw new Error((data && typeof data === "object" && "message" in data && typeof data.message === "string" ? data.message : null) || `Upload failed (${response.status})`)
   return data as Watermark

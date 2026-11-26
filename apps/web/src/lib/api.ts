@@ -1,3 +1,4 @@
+import { apiUrl } from "@/lib/desktop"
 import type { CaptionStyle } from "@/lib/caption-style"
 import type { JobWatermarkValue, WatermarkChromaKey } from "@/lib/watermark"
 
@@ -125,7 +126,7 @@ export type JobOutro = { outroId: string; filePath: string | null; durationSec: 
 export type JobWatermark = { watermarkId: string; x: number; y: number; scale: number; opacity: number; filePath: string | null; mimeType?: string; chromaKey?: WatermarkChromaKey | null }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...init?.headers } })
+  const response = await fetch(apiUrl(path), { ...init, headers: { "content-type": "application/json", ...init?.headers } })
   if (!response.ok) {
     const error = new Error(response.statusText || "Request failed") as Error & { status: number }
     error.status = response.status

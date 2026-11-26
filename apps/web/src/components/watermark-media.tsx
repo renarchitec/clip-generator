@@ -1,3 +1,4 @@
+import { apiUrl } from "@/lib/desktop"
 import { Film } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
@@ -184,7 +185,7 @@ export function WatermarkMedia({ watermark, chromaKey, className = "", compact =
   if (!video) {
     return (
       <img
-        src={watermark.url}
+        src={apiUrl(watermark.url)}
         alt=""
         draggable={false}
         className={`size-full select-none object-contain ${shadowClass} ${className}`}
@@ -225,7 +226,7 @@ export function WatermarkMedia({ watermark, chromaKey, className = "", compact =
     <div className={`relative size-full ${className}`}>
       <video
         ref={videoRef}
-        src={watermark.url}
+        src={apiUrl(watermark.url)}
         autoPlay
         loop
         muted

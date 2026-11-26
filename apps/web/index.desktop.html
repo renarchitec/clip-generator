@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#18181b" />
+    <title>DartClip</title>
+    <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
+    <style>
+      html { background: #ffffff; color-scheme: light; }
+      html.dark { background: #09090b; color-scheme: dark; }
+    </style>
+    <script>
+      ;(() => {
+        try {
+          const c = localStorage.getItem("clipper_theme") || "system"
+          const d =
+            c === "dark" ||
+            (c === "system" &&
+              matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.classList.toggle("dark", d)
+        } catch {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/desktop/main.tsx"></script>
+  </body>
+</html>

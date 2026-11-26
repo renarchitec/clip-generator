@@ -1,3 +1,5 @@
+import { useRuntime } from "@/lib/use-runtime"
+import { apiUrl } from "@/lib/desktop"
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, AudioLines, CalendarClock, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Trash2, Users, Video } from "lucide-react"
@@ -65,6 +67,7 @@ function JobDetail() {
   const { jobId } = Route.useParams()
   const { user } = Route.useRouteContext() as { user: User }
   const t = useT()
+  const { publishEnabled } = useRuntime()
   const client = useQueryClient()
   const navigate = useNavigate()
   const queryKey = useMemo(() => ["jobs", jobId], [jobId])
@@ -110,7 +113,7 @@ function JobDetail() {
 
   useEffect(() => {
     if (terminal) return
-    const source = new EventSource(`/api/jobs/${jobId}/events`)
+    const source = new EventSource(apiUrl(`/jobs/${jobId}/events`))
     source.onmessage = (event) => {
       try {
         const snapshot = JSON.parse(event.data) as JobSnapshot
@@ -404,10 +407,10 @@ function JobDetail() {
                     <>
                       <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
                         <p className="font-medium">{activeClips.length} {t.clipsReady}</p>
-                        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
+                        {publishEnabled && <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
                           <CalendarClock aria-hidden="true" className="size-3.5" />
                           {t.scheduleBatch}
-                        </Button>
+                        </Button>}
                       </div>
                       <ClipCardGrid aspectRatio={snapshot.aspectRatio} aria-label={t.readyClips}>
                         {activeClips.map((clip, index) => <ClipCard key={clip.id} clip={{ ...clip, job: { id: snapshot.id, url: snapshot.url, aspectRatio: snapshot.aspectRatio } }} index={index} meta={`${formatTime(clip.startSec)}–${formatTime(clip.endSec)}`} downloaded={!!clip.downloadedAt} />)}
@@ -425,10 +428,10 @@ function JobDetail() {
                       <p className="mt-1 text-sm text-muted-foreground" aria-live="polite">{t.complete}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                      <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
+                      {publishEnabled && <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}>
                         <CalendarClock aria-hidden="true" className="size-3.5" />
                         {t.scheduleBatch}
-                      </Button>
+                      </Button>}
                       <span className="font-mono text-sm tabular-nums text-muted-foreground">100%</span>
                     </div>
                   </div>
@@ -443,7 +446,7 @@ function JobDetail() {
           </section>
         </div>
       ) : null}
-      {snapshot && activeClips.length > 0 && (
+      {publishEnabled && snapshot && activeClips.length > 0 && (
         <BatchScheduleDialog
           jobId={snapshot.id}
           clips={batchClips}

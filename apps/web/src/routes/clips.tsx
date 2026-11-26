@@ -1,3 +1,4 @@
+import { useRuntime } from "@/lib/use-runtime"
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { RefreshCw, Search } from "lucide-react"
@@ -27,6 +28,7 @@ export const Route = createFileRoute("/clips")({
 function ClipsPage() {
   const { user } = Route.useRouteContext() as { user: User }
   const t = useT()
+  const { publishEnabled } = useRuntime()
   const locale = useLanguage().language === "id" ? "id" : "en"
   const client = useQueryClient()
   const [search, setSearch] = useState("")
@@ -59,7 +61,7 @@ function ClipsPage() {
     <div className="mb-7 flex flex-col gap-5 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
       <div><h2 className="font-display text-3xl font-medium tracking-[-.045em]">{t.clips}</h2><p className="mt-2 text-sm text-muted-foreground">{t.latestFirst}</p></div>
       <div className="flex w-full flex-col gap-2.5 sm:w-auto sm:flex-row sm:items-center">
-        {publishedClipIds.length > 0 && (
+        {publishEnabled && publishedClipIds.length > 0 && (
           <Button
             type="button"
             variant="outline"

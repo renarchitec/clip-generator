@@ -1,4 +1,6 @@
-import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Clock, Copy, ExternalLink, Eye, Flame, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
+import { useRuntime } from "@/lib/use-runtime"
+import { apiUrl, revealClipInFinder } from "@/lib/desktop"
+import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Clock, Copy, ExternalLink, Eye, Flame, FolderOpen, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 import { Children, createContext, isValidElement, useContext, useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -68,10 +70,12 @@ export function ClipCardGrid({ aspectRatio, children, className = "", ...props }
 
 export function ClipCard({ clip, meta, downloaded = false, index, frame }: { clip: ClipCardData; meta: string; downloaded?: boolean; index?: number; /** Force one media frame (e.g. mixed-ratio library) */ frame?: "uniform" }) {
   const t = useT()
+  const { isDesktop, publishEnabled } = useRuntime()
   const { language } = useLanguage()
   const [playerOpen, setPlayerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
+  const [failedThumbnailId, setFailedThumbnailId] = useState<string | null>(null)
   const client = useQueryClient()
   const remove = useMutation({
     mutationFn: () => api(`/clips/${clip.id}`, { method: "DELETE" }),
@@ -88,7 +92,11 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
   const duration = Math.max(0, clip.endSec - clip.startSec)
   const viewsSummary = summarizeClipViews(clip.publications)
   return <article className={`clip-card group relative isolate min-w-0 overflow-hidden rounded-lg border border-border bg-card ${frame === "uniform" ? "aspect-[9/16]" : clipAspectClass(clip.job.aspectRatio)}`}>
-    <video src={`/api/clips/${clip.id}/stream`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" className="absolute inset-0 size-full bg-black object-contain"/>
+    {isDesktop && failedThumbnailId !== clip.id ? (
+      <img key={clip.id} src={apiUrl(`/clips/${clip.id}/thumbnail`)} alt="" loading="lazy" decoding="async" aria-hidden="true" onError={() => setFailedThumbnailId(clip.id)} className="absolute inset-0 size-full bg-black object-contain"/>
+    ) : (
+      <video src={`${apiUrl(`/clips/${clip.id}/stream`)}#t=0.001`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" className="absolute inset-0 size-full bg-black object-contain"/>
+    )}
     <button type="button" onClick={() => setPlayerOpen(true)} aria-label={`${t.playClip}: ${title}`} className="absolute inset-0 z-[1] grid size-full place-items-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
       <span className="clip-card-play grid size-11 place-items-center rounded-full border border-accent/60 bg-background/75 text-primary shadow-lg backdrop-blur-sm transition duration-150 group-hover:scale-105 group-hover:ring-4 group-hover:ring-accent/20"><Play className="ml-0.5 size-[18px] fill-current"/></span>
       <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent px-3 pb-3 pt-16 text-left text-white"><span className="line-clamp-2 block min-h-10 text-xs font-semibold leading-5 sm:text-sm">{title}</span><span className="mt-1 line-clamp-2 block text-[10px] leading-4 text-white/80 sm:text-xs">{meta}</span></span>
@@ -97,9 +105,9 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
       <span className="flex flex-wrap items-center gap-1">
         <span className="rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span>
         {typeof clip.viralScore === "number" && <ViralScorePill score={clip.viralScore} />}
-        <PublishBadge publications={clip.publications}/>
+        {publishEnabled && <PublishBadge publications={clip.publications}/>}
       </span>
-      {viewsSummary.totalViews !== null && (
+      {publishEnabled && viewsSummary.totalViews !== null && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -139,12 +147,13 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
     </div>
     {(downloaded || clip.downloadedAt) && <span title={t.downloaded} className="absolute right-2 top-2 z-[2] transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0 [@media(hover:none)]:hidden inline-flex size-7 items-center justify-center rounded-full border border-accent/40 bg-background/85 text-primary shadow-sm"><CircleCheck aria-hidden="true" className="size-4"/><span className="sr-only">{t.downloaded}</span></span>}
     <div className="clip-card-actions absolute right-2 top-2 z-[3] flex -translate-y-1 items-center gap-1 rounded-md border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100">
-      <a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-3.5"/></a>
-      <button type="button" onClick={() => setPublishOpen(true)} aria-label={`${t.publish}: ${title}`} title={t.publish} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Send className="size-3.5"/></button>
+      <a href={apiUrl(`/clips/${clip.id}/download`)} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-3.5"/></a>
+      {publishEnabled && <button type="button" onClick={() => setPublishOpen(true)} aria-label={`${t.publish}: ${title}`} title={t.publish} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Send className="size-3.5"/></button>}
+      {isDesktop && <button type="button" onClick={() => void revealClipInFinder(clip.id).catch(() => toast.error(t.desktop.revealFailed))} aria-label={`${t.desktop.showInFinder}: ${title}`} title={t.desktop.showInFinder} className="grid size-7 shrink-0 place-items-center rounded-md text-white hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><FolderOpen aria-hidden="true" className="size-3.5"/></button>}
       <button type="button" onClick={() => setConfirmOpen(true)} disabled={remove.isPending} aria-label={`${t.deleteClip}: ${title}`} title={t.deleteClip} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-destructive/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive disabled:opacity-50"><Trash2 className="size-3.5"/></button>
     </div>
     <ClipPlayerDialog clip={clip} open={playerOpen} onOpenChange={setPlayerOpen} meta={meta}/>
-    <PublishDialog clip={clip} open={publishOpen} onOpenChange={setPublishOpen}/>
+    {publishEnabled && <PublishDialog clip={clip} open={publishOpen} onOpenChange={setPublishOpen}/>}
     <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!remove.isPending) setConfirmOpen(open) }}>
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>{t.deleteClipTitle}</AlertDialogTitle><AlertDialogDescription>{t.deleteClipDescription}</AlertDialogDescription></AlertDialogHeader>
@@ -159,6 +168,7 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
 
 export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onPublish }: { clip: ClipCardData | null; open: boolean; onOpenChange: (open: boolean) => void; meta?: string; onDelete?: () => void; onPublish?: () => void }) {
   const t = useT()
+  const { isDesktop, publishEnabled } = useRuntime()
   const { language } = useLanguage()
   const client = useQueryClient()
   const feed = useContext(ClipFeedContext)
@@ -392,7 +402,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
             <video
               key={activeClip.id}
               ref={videoRef}
-              src={`/api/clips/${activeClip.id}/stream`}
+              src={apiUrl(`/clips/${activeClip.id}/stream`)}
               autoPlay
               loop
               playsInline
@@ -418,9 +428,9 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="inline-flex h-6 items-center rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-sm">{shortDuration(fallbackDuration)}</span>
                   {canNavigate && position !== undefined && <Badge variant="outline" className="h-6 border-white/15 bg-black/55 px-2 font-mono text-[10px] tabular-nums text-white backdrop-blur-sm">{position} / {feed.length}</Badge>}
-                  <PublishBadge publications={activePublications}/>
+                  {publishEnabled && <PublishBadge publications={activePublications}/>}
                 </div>
-                {viewsSummary.hasPublished && (
+                {publishEnabled && viewsSummary.hasPublished && (
                   <div
                     onClick={(event) => event.stopPropagation()}
                     className="pointer-events-auto mt-1.5 flex flex-wrap items-center gap-1.5"
@@ -504,11 +514,15 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
           </div>}
 
           <div className="absolute bottom-16 right-2 z-30 flex w-14 flex-col items-center gap-3">
-            <button type="button" onClick={openPublish} aria-label={`${t.publish}: ${title}`} title={t.publish} className="group/rail flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+            {publishEnabled && <button type="button" onClick={openPublish} aria-label={`${t.publish}: ${title}`} title={t.publish} className="group/rail flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
               <span className="grid size-11 place-items-center rounded-full border border-accent/50 bg-accent text-accent-foreground shadow-lg backdrop-blur-md transition-transform group-hover/rail:scale-105"><Send className="size-[18px]"/></span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.publish}</span>
-            </button>
-            <a href={`/api/clips/${activeClip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+            </button>}
+            {isDesktop && <button type="button" onClick={() => void revealClipInFinder(activeClip.id).catch(() => toast.error(t.desktop.revealFailed))} aria-label={t.desktop.showInFinder} title={t.desktop.showInFinder} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg hover:scale-105"><FolderOpen aria-hidden="true" className="size-[18px]"/></span>
+              <span className="line-clamp-2 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.desktop.showInFinder}</span>
+            </button>}
+            <a href={apiUrl(`/clips/${activeClip.id}/download`)} download aria-label={`${t.download}: ${title}`} title={t.download} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
               <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105"><ArrowDownToLine className="size-[18px]"/></span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.download}</span>
             </a>
@@ -580,7 +594,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
       </DialogContent>
     </Dialog>
 
-    {publishClip && <PublishDialog clip={publishClip} open={Boolean(publishClip)} onOpenChange={(value) => { if (!value) setPublishClip(null) }}/>}
+    {publishEnabled && publishClip && <PublishDialog clip={publishClip} open={Boolean(publishClip)} onOpenChange={(value) => { if (!value) setPublishClip(null) }}/>}
 
     <AlertDialog open={deleteOpen} onOpenChange={(value) => { if (!remove.isPending) setDeleteOpen(value) }}>
       <AlertDialogContent>

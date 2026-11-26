@@ -1,3 +1,4 @@
+import { isDesktopBuild } from "@/lib/desktop"
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
 import { Monitor, Moon, Sun } from "lucide-react"
 import { useT } from "@/lib/i18n"
@@ -15,7 +16,11 @@ export function ThemeProvider({ initialTheme, children }: { initialTheme: Theme;
   const [theme, setThemeState] = useState(initialTheme)
   useEffect(() => {
     applyTheme(theme)
-    document.cookie = `clipper_theme=${theme}; Path=/; Max-Age=31536000; SameSite=Lax`
+    if (isDesktopBuild()) {
+      try { localStorage.setItem("clipper_theme", theme) } catch { /* Storage can be disabled. */ }
+    } else {
+      document.cookie = `clipper_theme=${theme}; Path=/; Max-Age=31536000; SameSite=Lax`
+    }
   }, [theme])
   useEffect(() => {
     if (theme !== "system") return
