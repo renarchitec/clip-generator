@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -33,7 +34,16 @@ log = logging.getLogger(__name__)
 MIN_DURATION_RATIO = 0.6
 MAX_DURATION_RATIO = 1.4
 MIN_CLIP_SECONDS = 1.0
-MAX_TRANSCRIPT_CHARS = 24000
+CHUNK_TARGET_CHARS = 32000
+CHUNK_OVERLAP_SEC = 90.0
+MAX_SCAN_CHUNKS = 10
+MAX_SINGLE_CHUNK_CHARS = 80000
+SEGMENT_GAP_SEC = 25.0
+MAX_SHORT_SEGMENT_SPAN_SEC = 300.0
+MAX_SEGMENTS_PER_BATCH = 4
+MAX_LLM_CHUNK_CONCURRENCY = 4
+REFINE_BATCH_SIZE = 10
+SCAN_BOUNDS_TOLERANCE_SEC = 5.0
 MAX_CAPTION_EXCERPT_CHARS = 2000
 MAX_CAPTION_CHARS = 2200
 MAX_BRIEF_CHARS = 500
@@ -164,46 +174,110 @@ def _target_duration(params: JobParams) -> float:
     return value if value > 0 else DEFAULT_TARGET_DURATION_SEC
 
 
-_WORD_RE = re.compile(r"\w+", re.UNICODE)
+def _cue_line(cue: Cue) -> str:
+    return f"[{cue.start:.1f}-{cue.end:.1f}] {cue.text}"
 
 
-def _brief_keywords(description: Optional[str]) -> set:
-    """Kata kunci preferensi pengguna: lowercase, panjang minimal 4 karakter."""
-    if not description:
-        return set()
-    return {word.lower() for word in _WORD_RE.findall(description) if len(word) >= 4}
-
-
-def _transcript_text(
-    cues: Sequence[Cue],
-    max_chars: int = MAX_TRANSCRIPT_CHARS,
-    description: Optional[str] = None,
-) -> str:
-    lines = [f"[{cue.start:.1f}-{cue.end:.1f}] {cue.text}" for cue in cues]
+def _sample_transcript(lines: Sequence[str], max_chars: int) -> str:
     text = "\n".join(lines)
     if len(text) <= max_chars:
         return text
 
-    # Video panjang: pertahankan baris yang cocok dengan preferensi pengguna,
-    # sisanya sampel merata supaya awal dan akhir tetap terwakili.
+    # Fallback untuk chunk yang terlalu besar: sampel merata tanpa bias brief.
     keep = max(1, len(lines) * max_chars // len(text))
-    keywords = _brief_keywords(description)
-    chosen: List[int] = []
-    if keywords:
-        matching = [
-            index
-            for index, line in enumerate(lines)
-            if any(keyword in line.lower() for keyword in keywords)
-        ]
-        chosen = matching[: max(1, keep // 2)]
-    remaining = keep - len(chosen)
-    if remaining > 0:
-        taken = set(chosen)
-        rest = [index for index in range(len(lines)) if index not in taken]
-        step = len(rest) / remaining
-        chosen.extend(rest[min(len(rest) - 1, int(i * step))] for i in range(remaining))
-    chosen.sort()
-    return "\n".join(lines[index] for index in chosen)
+    while keep > 1:
+        sampled = "\n".join(lines[i * (len(lines) - 1) // (keep - 1)] for i in range(keep))
+        if len(sampled) <= max_chars:
+            return sampled
+        keep = max(1, keep * max_chars // len(sampled))
+    return lines[len(lines) // 2][:max_chars]
+
+
+def _transcript_text(cues: Sequence[Cue], max_chars: int = MAX_SINGLE_CHUNK_CHARS) -> str:
+    return _sample_transcript([_cue_line(cue) for cue in cues], max_chars)
+
+
+@dataclass
+class _ScanChunk:
+    text: str
+    start: float
+    end: float
+    segment_ranges: tuple[tuple[float, float], ...] = ()
+
+    def contains_moment(self, item: Mapping[str, Any]) -> bool:
+        start, end = _number(item.get("start")), _number(item.get("end"))
+        if start is None or end is None or not start < end:
+            return False
+        return any(
+            lo - SCAN_BOUNDS_TOLERANCE_SEC <= start < end <= hi + SCAN_BOUNDS_TOLERANCE_SEC
+            for lo, hi in self.segment_ranges or ((self.start, self.end),)
+        )
+
+
+def _build_scan_chunks(cues: Sequence[Cue]) -> List[_ScanChunk]:
+    if not cues:
+        return []
+
+    lines = [_cue_line(cue) for cue in cues]
+    prefix_chars = [0]
+    for line in lines:
+        prefix_chars.append(prefix_chars[-1] + len(line) + 1)
+
+    def text_len(lo: int, hi: int) -> int:
+        return prefix_chars[hi] - prefix_chars[lo] - 1
+
+    edges = [0]
+    for i in range(1, len(cues)):
+        if cues[i].start - cues[i - 1].end > SEGMENT_GAP_SEC:
+            edges.append(i)
+    edges.append(len(cues))
+    segments = list(zip(edges, edges[1:]))
+    if len(segments) >= 2 and all(
+        cues[hi - 1].end - cues[lo].start <= MAX_SHORT_SEGMENT_SPAN_SEC
+        for lo, hi in segments
+    ):
+        chunks: List[_ScanChunk] = []
+        blocks: List[str] = []
+        ranges: List[tuple[float, float]] = []
+        batch_chars = 0
+        for index, (lo, hi) in enumerate(segments, start=1):
+            start, end = cues[lo].start, cues[hi - 1].end
+            header = f"=== Segmen {index} ({_scan_clock(start)}–{_scan_clock(end)} / {start:.1f}–{end:.1f}s) ===\n"
+            segment_chars = len(header) + text_len(lo, hi)
+            if blocks and (
+                len(blocks) >= MAX_SEGMENTS_PER_BATCH
+                or batch_chars + 2 + segment_chars > CHUNK_TARGET_CHARS
+            ):
+                chunks.append(_ScanChunk("\n\n".join(blocks), ranges[0][0], ranges[-1][1], tuple(ranges)))
+                blocks, ranges, batch_chars = [], [], 0
+            batch_chars += segment_chars + (2 if blocks else 0)
+            blocks.append(header + "\n".join(lines[lo:hi]))
+            ranges.append((start, end))
+        chunks.append(_ScanChunk("\n\n".join(blocks), ranges[0][0], ranges[-1][1], tuple(ranges)))
+        return chunks
+
+    effective_chars = max(CHUNK_TARGET_CHARS, math.ceil(text_len(0, len(cues)) / MAX_SCAN_CHUNKS))
+    chunks = []
+    lo = 0
+    while lo < len(cues):
+        hi = lo + 1
+        # Overlap uses extra space; the last slot covers the entire remainder.
+        if len(chunks) + 1 == MAX_SCAN_CHUNKS:
+            hi = len(cues)
+        else:
+            while hi < len(cues) and text_len(lo, hi) < effective_chars:
+                hi += 1
+        end = cues[hi - 1].end
+        chunks.append(_ScanChunk(
+            _sample_transcript(lines[lo:hi], MAX_SINGLE_CHUNK_CHARS), cues[lo].start, end,
+        ))
+        if hi == len(cues):
+            break
+        cutoff = end - CHUNK_OVERLAP_SEC
+        while hi > lo + 1 and cues[hi - 1].end > cutoff:
+            hi -= 1
+        lo = hi
+    return chunks
 
 
 def _build_prompt(
@@ -212,25 +286,61 @@ def _build_prompt(
     description: Optional[str] = None,
     *,
     all_moments: bool = False,
+    chunk: Optional[_ScanChunk] = None,
+    chunk_index: int = 1,
+    total_chunks: int = 1,
 ) -> str:
     target = _target_duration(params)
-    total = cues[-1].end if cues else 0.0
-
-    if all_moments:
+    chunk_start = chunk.start if chunk else cues[0].start if cues else 0.0
+    chunk_end = chunk.end if chunk else cues[-1].end if cues else 0.0
+    count = max(1, int(params.clip_count or DEFAULT_CLIP_COUNT))
+    segment_count = len(chunk.segment_ranges) if chunk else 0
+    bounds = (
+        f"{_scan_clock(chunk_start)}–{_scan_clock(chunk_end)} / "
+        f"{chunk_start:.1f}–{chunk_end:.1f} detik"
+    )
+    context = ""
+    if segment_count:
+        context = (
+            f"Batch {chunk_index}/{total_chunks} (rentang {bounds}). "
+            f"Transkrip berisi {segment_count} segmen highlight/puncak yang terpisah.\n"
+        )
         task = (
-            "Tugas utama: pilih semua momen yang paling sesuai dengan preferensi pengguna, "
-            "lalu paling menarik. Temukan dan kembalikan SEMUA kandidat momen kuat yang "
-            "tidak tumpang tindih dari seluruh transkrip video ini untuk dijadikan video "
-            f"vertikal 9:16 berdurasi sekitar {target:.0f} detik tanpa membatasi jumlahnya "
-            "ke angka tertentu, agar pengguna dapat meninjau dan memilih sendiri.\n\n"
+            "Tugas utama: evaluasi SETIAP segmen satu per satu. Pilih satu momen kuat terbaik "
+            f"per segmen bila ada, untuk video vertikal 9:16 berdurasi sekitar {target:.0f} detik. "
+            "Jangan pernah memilih momen yang melintasi dua segmen. "
+            "Kembalikan [] hanya jika tidak ada momen yang cocok di semua segmen."
+        )
+    elif total_chunks > 1:
+        context = f"Bagian {chunk_index}/{total_chunks} dari video panjang (rentang {bounds}).\n"
+        if all_moments:
+            task = (
+                "Tugas utama: telusuri bagian ini secara kronologis dari awal hingga akhir. "
+                "Kembalikan SEMUA momen kuat yang tidak tumpang tindih (biasanya 2–5 per bagian bila ada), "
+                f"untuk video vertikal 9:16 berdurasi sekitar {target:.0f} detik. "
+                "Kembalikan [] hanya jika benar-benar tidak ada momen kuat."
+            )
+        else:
+            task = (
+                "Tugas utama: pilih 2–4 kandidat terkuat dari bagian ini bila ada, untuk video "
+                f"vertikal 9:16 berdurasi sekitar {target:.0f} detik. Sistem memilih {count} terbaik "
+                "dari seluruh video. Kembalikan [] jika tidak ada momen kuat."
+            )
+    elif all_moments:
+        task = (
+            "Tugas utama: telusuri seluruh transkrip secara kronologis dari awal hingga akhir, "
+            "termasuk bagian tengah dan akhir. Jangan berhenti setelah menemukan 2–3 momen. "
+            "Kembalikan SEMUA kandidat momen kuat yang sesuai dengan preferensi pengguna dan "
+            f"tidak tumpang tindih, untuk video vertikal 9:16 berdurasi sekitar {target:.0f} detik. "
+            "Jangan membatasi jumlah kandidat, dan jangan menambahkan momen lemah hanya untuk "
+            "menambah jumlah; pengguna akan meninjau dan memilih sendiri."
         )
     else:
-        count = max(1, int(params.clip_count or DEFAULT_CLIP_COUNT))
         task = (
-            f"Tugas utama: pilih momen yang paling sesuai dengan preferensi pengguna, "
+            "Tugas utama: pilih momen yang paling sesuai dengan preferensi pengguna, "
             f"lalu paling menarik. Kembalikan {count + 2} kandidat momen dari transkrip "
             f"video ini untuk dijadikan video vertikal 9:16 berdurasi sekitar "
-            f"{target:.0f} detik; sistem memilih {count} terbaik.\n\n"
+            f"{target:.0f} detik; sistem memilih {count} terbaik."
         )
 
     preference = ""
@@ -247,11 +357,11 @@ def _build_prompt(
 
     return (
         "Kamu editor video pendek berbahasa Indonesia.\n"
-        f"{task}"
+        f"{context}{task}\n\n"
         "Aturan:\n"
         f"- Durasi tiap momen antara {MIN_DURATION_RATIO * target:.0f} dan "
         f"{MAX_DURATION_RATIO * target:.0f} detik idealnya.\n"
-        f"- start dan end dalam detik, end > start, dalam rentang 0 sampai {total:.1f}.\n"
+        f"- start dan end dalam detik, end > start, dalam rentang {chunk_start:.1f} sampai {chunk_end:.1f}.\n"
         "- Momen harus utuh: jangan memotong di tengah kalimat, dan jangan tumpang tindih.\n"
         "- title singkat dan memancing rasa ingin tahu (maksimal 70 karakter).\n"
         "- Hook-first (0–3 detik pertama): Setiap klip HARUS dimulai pada kalimat yang "
@@ -267,12 +377,14 @@ def _build_prompt(
         "potensi retensi/payoff (85–100 sangat kuat/viral, 70–84 kuat, di bawah 70 biasa).\n"
         "- hookText: teks banner untuk 3 detik pertama, 3–6 kata dan maksimal 48 karakter, "
         "sebahasa dengan klip, tanpa tanda kutip atau emoji berlebihan, memancing penasaran.\n\n"
-        "Balas HANYA dengan JSON list, tanpa penjelasan:\n"
+        "Balas HANYA dengan JSON list, tanpa penjelasan. Contoh format (jangan salin timestamp contoh):\n"
         '[{"start": 12.5, "end": 58.0, "title": "...", "reason": "...", '
-        '"viralScore": 91, "hookText": "..."}]\n\n'
+        '"viralScore": 91, "hookText": "..."}, '
+        '{"start": 72.0, "end": 115.0, "title": "...", "reason": "...", '
+        '"viralScore": 85, "hookText": "..."}]\n\n'
         f"{preference}"
         "Transkrip (detik):\n"
-        f"{_transcript_text(cues, description=description)}"
+        f"{chunk.text if chunk else _transcript_text(cues)}"
     )
 
 
@@ -337,13 +449,19 @@ def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> floa
     return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 
 
+def _clock(seconds: float) -> str:
+    total = max(0, int(seconds))
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _scan_clock(seconds: float) -> str:
+    total = max(0, int(seconds))
+    return f"{total // 3600:02d}:{_clock(total % 3600)}" if total >= 3600 else _clock(total)
+
+
 def title_from_cues(cues: Sequence[Cue], start: float, end: float) -> str:
     """Judul fallback: timestamp ringkas, bukan transkrip mentah."""
-    def clock(seconds: float) -> str:
-        total = max(0, int(seconds))
-        return f"{total // 60:02d}:{total % 60:02d}"
-
-    return f"Clip {clock(start)}\u2013{clock(end)}"
+    return f"Clip {_clock(start)}–{_clock(end)}"
 
 
 def _viral_score(value: Any) -> int | None:
@@ -1139,7 +1257,7 @@ def _refine_items(
     ]
 
 
-def _refine(
+def _refine_batch(
     base_url: str,
     api_key: str,
     model: str,
@@ -1164,6 +1282,22 @@ def _refine(
         return _refine_items(items, cues, moments, params)
     log.warning("refinement dilewati: jawaban LLM tidak valid setelah 2 percobaan")
     return moments
+
+
+def _refine_moments(
+    base_url: str,
+    api_key: str,
+    model: str,
+    cues: Sequence[Cue],
+    moments: List[Moment],
+    params: JobParams,
+    description: Optional[str] = None,
+) -> List[Moment]:
+    refined: List[Moment] = []
+    for offset in range(0, len(moments), REFINE_BATCH_SIZE):
+        batch = moments[offset : offset + REFINE_BATCH_SIZE]
+        refined.extend(_refine_batch(base_url, api_key, model, cues, batch, params, description))
+    return refined
 
 
 def fallback_moments(cues: Sequence[Cue], params: JobParams) -> List[Moment]:
@@ -1225,7 +1359,7 @@ def select_moments(
     *,
     all_moments: bool = False,
 ) -> List[Moment]:
-    """Blokir (dipanggil lewat asyncio.to_thread). Satu retry bila JSON rusak."""
+    """Pindai bagian transkrip, lalu gabungkan kandidat sebelum refinement dan snap."""
     env = env if env is not None else os.environ
     base_url = (env.get("LLM_BASE_URL") or "").strip()
     api_key = (env.get("LLM_API_KEY") or "").strip()
@@ -1238,39 +1372,72 @@ def select_moments(
     if not cues:
         return []
 
-    prompt = _build_prompt(cues, params, description=description, all_moments=all_moments)
+    chunks = _build_scan_chunks(cues)
+    total_chunks = len(chunks)
     has_brief = bool((description or "").strip())
-    for attempt in (1, 2):
-        try:
-            raw = _complete(
-                base_url,
-                api_key,
-                model,
-                prompt,
-                temperature=0.2 if attempt == 1 else 0.0,
-                has_brief=has_brief,
+    moments: List[Moment] = []
+
+    def prompt_for(chunk: _ScanChunk, index: int) -> str:
+        return _build_prompt(
+            cues, params, description=description, all_moments=all_moments,
+            chunk=chunk, chunk_index=index, total_chunks=total_chunks,
+        )
+
+    def complete(prompt: str, temperature: float) -> str:
+        return _complete(base_url, api_key, model, prompt, temperature, has_brief=has_brief)
+
+    if total_chunks == 1:
+        chunk = chunks[0]
+        prompt = prompt_for(chunk, 1)
+        for attempt, temperature in enumerate((0.2, 0.0), start=1):
+            try:
+                raw = complete(prompt, temperature)
+            except Exception as exc:
+                detail = _short_error(exc).replace(api_key, "***")[:200]
+                _record_call(False, detail)
+                raise RuntimeError(f"panggilan LLM gagal: {detail}") from None
+            try:
+                items = parse_llm_json(raw)
+            except ValueError as exc:
+                log.warning("jawaban LLM tidak valid pada percobaan %s: %s", attempt, exc)
+                continue
+            moments = validate_moments(
+                [item for item in items if chunk.contains_moment(item)],
+                cues, params, all_moments=all_moments,
             )
-        except Exception as exc:
-            detail = _short_error(exc)
-            if api_key:
-                detail = detail.replace(api_key, "***")[:200]
-            _record_call(False, detail)
-            raise RuntimeError(f"panggilan LLM gagal: {exc}") from exc
+            if moments:
+                break
+            log.warning("tidak ada momen valid dari LLM pada percobaan %s", attempt)
+        error = "LLM tidak menghasilkan momen valid setelah 2 percobaan"
+    else:
+        def scan(index: int, chunk: _ScanChunk) -> tuple[List[dict], Optional[str]]:
+            prompt = prompt_for(chunk, index)
+            detail = ""
+            for temperature in (0.2, 0.0):
+                try:
+                    items = parse_llm_json(complete(prompt, temperature), allow_empty=True)
+                except Exception as exc:
+                    detail = _short_error(exc).replace(api_key, "***")[:200]
+                    log.warning("pemindaian bagian %s/%s gagal: %s", index, total_chunks, detail)
+                    continue
+                return [item for item in items if chunk.contains_moment(item)], None
+            return [], f"Bagian {index}/{total_chunks}: {detail}"
 
-        try:
-            items = parse_llm_json(raw)
-        except ValueError as exc:
-            log.warning("jawaban LLM tidak valid pada percobaan %s: %s", attempt, exc)
-            continue
+        merged: List[dict] = []
+        error = "LLM tidak menghasilkan momen valid dari semua bagian"
+        with ThreadPoolExecutor(max_workers=min(MAX_LLM_CHUNK_CONCURRENCY, total_chunks)) as pool:
+            # Preserve chronological chunk order for equal-scoring candidates.
+            for items, failure in pool.map(scan, range(1, total_chunks + 1), chunks):
+                merged.extend(items)
+                if failure:
+                    error = failure
+        moments = validate_moments(merged, cues, params, all_moments=all_moments)
 
-        moments = validate_moments(items, cues, params, all_moments=all_moments)
-        if moments:
-            if _refine_enabled(env):
-                moments = _refine(base_url, api_key, model, cues, moments, params, description=description)
-            moments = _snap_moments(cues, moments, params)
-            _record_call(True)
-            return moments
-        log.warning("tidak ada momen valid dari LLM pada percobaan %s", attempt)
-
-    _record_call(False, "LLM tidak menghasilkan momen valid setelah 2 percobaan")
-    raise RuntimeError("LLM tidak menghasilkan momen valid setelah 2 percobaan")
+    if not moments:
+        _record_call(False, error)
+        raise RuntimeError(error)
+    if _refine_enabled(env):
+        moments = _refine_moments(base_url, api_key, model, cues, moments, params, description)
+    moments = _snap_moments(cues, moments, params)
+    _record_call(True)
+    return moments
