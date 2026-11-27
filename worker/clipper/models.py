@@ -162,19 +162,19 @@ CANCEL_KEY = "cancel:{}"
 
 JOB_STAGES = ("download", "transcribe", "select", "render", "save")
 JOB_MODES = ("auto", "manual")
-REFRAME_MODES = ("face_tracking", "black_bars", "blurred_fill")
+REFRAME_MODES = ("center_crop", "face_tracking", "black_bars", "blurred_fill")
 # Rasio output klip; harus sama dengan ASPECT_RATIOS di packages/shared/src/index.ts.
 ASPECT_RATIOS = ("9:16", "1:1", "16:9")
 
 JobStage = Literal["download", "transcribe", "select", "render", "save"]
 JobMode = Literal["auto", "manual"]
-ReframeMode = Literal["face_tracking", "black_bars", "blurred_fill"]
+ReframeMode = Literal["center_crop", "face_tracking", "black_bars", "blurred_fill"]
 AspectRatio = Literal["9:16", "1:1", "16:9"]
 
 DEFAULT_CLIP_COUNT = 3
 DEFAULT_TARGET_DURATION_SEC = 45.0
 MAX_DESCRIPTION_CHARS = 500
-DEFAULT_REFRAME = "face_tracking"
+DEFAULT_REFRAME = "center_crop"
 DEFAULT_CAPTIONS = True
 DEFAULT_TWO_SPEAKERS = False
 DEFAULT_FACECAM = False

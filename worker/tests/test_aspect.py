@@ -3,7 +3,7 @@
 import pytest
 
 from clipper import pipeline, reframe
-from clipper.models import ASPECT_RATIOS, DEFAULT_ASPECT, job_data_from_dict
+from clipper.models import ASPECT_RATIOS, DEFAULT_ASPECT, REFRAME_MODES, job_data_from_dict
 from clipper.subtitles import Cue, write_ass
 
 
@@ -50,9 +50,9 @@ def test_crop_filters_default_to_portrait_9_16():
 def test_reframe_filters_landscape_ignores_reframe():
     # 16:9: video pas di tengah di atas latar buram dari video yang sama
     # (bukan bar hitam); face detection tidak dipanggil.
-    for reframe in ("face_tracking", "black_bars", "blurred_fill"):
+    for mode in REFRAME_MODES:
         filters = pipeline._reframe_filters(
-            reframe, "x.mp4", pipeline.llm.Moment(0.0, 4.0, "t"), 1920, 1080, landscape=True
+            mode, "x.mp4", pipeline.llm.Moment(0.0, 4.0, "t"), 1920, 1080, landscape=True
         )
 
         assert "pad=" not in "".join(filters)
@@ -61,6 +61,22 @@ def test_reframe_filters_landscape_ignores_reframe():
         assert "crop=1920:1080" in filters[1]
         assert "force_original_aspect_ratio=decrease" in filters[1]
         assert filters[-1] == "setsar=1"
+
+
+@pytest.mark.parametrize("height, ratio", [(1920, "0.56250"), (1080, "1.00000")])
+def test_reframe_filters_center_crop_avoids_face_tracking(monkeypatch, height, ratio):
+    def fail_tracking(*args):
+        pytest.fail("center_crop must not track the active speaker")
+
+    monkeypatch.setattr(reframe, "face_track_samples", fail_tracking)
+    moment = pipeline.llm.Moment(0.0, 4.0, "t")
+    assert pipeline._reframe_filters("center_crop", "x.mp4", moment, 1080, height) == [
+        "setpts=PTS-STARTPTS",
+        f"crop=w='min(in_w,ih*{ratio})':h='min(in_h,iw/{ratio})'"
+        ":x='(in_w-out_w)/2':y='(in_h-out_h)/2'",
+        f"scale=1080:{height}",
+        "setsar=1",
+    ]
 
 
 def test_reframe_filters_1_1_centered_modes_use_square_target():

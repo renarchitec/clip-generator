@@ -58,7 +58,7 @@ model Job {
   url               String
   description       String?
   mode              JobMode
-  reframe           String    @default("face_tracking")
+  reframe           String    @default("center_crop")
   captions          Boolean   @default(true)
   hookBanner        Boolean   @default(false)
   normalizeAudio    Boolean   @default(true)

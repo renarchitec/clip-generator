@@ -3,7 +3,7 @@ import type { CaptionStyle } from "@/lib/caption-style"
 import type { JobWatermarkValue, WatermarkChromaKey } from "@/lib/watermark"
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled"
-export type Reframe = "face_tracking" | "blurred_fill" | "black_bars"
+export type Reframe = "center_crop" | "face_tracking" | "blurred_fill" | "black_bars"
 export type AspectRatio = "9:16" | "1:1" | "16:9"
 export type MaxSourceSec = number | null
 export type CaptionLanguage = "auto" | "id" | "en"

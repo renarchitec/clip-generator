@@ -280,7 +280,7 @@ export function WatermarkOverlay({
                       ? "bg-accent text-accent-foreground opacity-100"
                       : isSelected
                         ? "bg-accent/90 text-accent-foreground opacity-85 group-hover/wm:opacity-100 group-focus-visible/wm:opacity-100"
-                        : "bg-black/75 text-white opacity-0 group-hover/wm:opacity-100 group-focus-visible/wm:opacity-100"
+                        : "bg-black/75 text-white opacity-0 group-hover/wm:opacity-100 group-focus-visible/wm:opacity-100 [@media(hover:none)]:opacity-100"
                   }`}
                 >
                   #{layerNumber}

@@ -2,7 +2,7 @@ import { useRuntime } from "@/lib/use-runtime"
 import { createFileRoute, Link, redirect, useNavigate, useSearch } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useForm } from "@tanstack/react-form"
-import { ArrowDown, ArrowUp, ArrowUpRight, AudioLines, CalendarClock, Captions, CircleAlert, Flame, Image as ImageIcon, ListChecks, LoaderCircle, PanelTop, Play, Plus, Radio, Scan, Sparkles, Subtitles, Users, Video, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpRight, AudioLines, CalendarClock, Captions, CircleAlert, Image as ImageIcon, ListChecks, LoaderCircle, PanelTop, Play, Plus, Radio, Scan, Sparkles, Subtitles, Users, Video, X } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -28,6 +28,7 @@ import { JobAssembly } from "@/components/job-assembly"
 import { BatchScheduleDialog } from "@/components/batch-schedule-dialog"
 import { useSaveWatermarkDefault, useWatermarkDefault, WatermarkManager, watermarkKey } from "@/components/watermark-manager"
 import { WatermarkMedia } from "@/components/watermark-media"
+import { ReviewPanel } from "@/components/review-panel"
 import { WatermarkOverlay } from "@/components/watermark-overlay"
 import { BriefHistoryMenu, briefHistoryKey } from "@/components/brief-history-menu"
 import { OutroPreview, useOutroDefault, useOutroLibrary } from "@/components/outro-manager"
@@ -75,106 +76,12 @@ type ClipRange = { start: string; end: string; title?: string; reason?: string; 
 type RangePayload = { start: number; end: number; title?: string; reason?: string; hookText?: string }
 type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; hookBanner: boolean; normalizeAudio: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; transcriptSource: TranscriptSource; captionStyle?: CaptionStyle | null; customHashtags?: string[]; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkDefaultValue; outro: { outroId: string } | null }
 
+const REVIEW_MAX_SELECTABLE = 10
+
 const transcriptSourceIcons: Record<TranscriptSource, typeof Subtitles> = {
   youtube: Subtitles,
   auto: Sparkles,
   live_chat_stt: Radio,
-}
-
-function formatMomentTime(seconds: number) {
-  const total = Math.max(0, Math.round(seconds))
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
-}
-
-type ReviewPanelProps = {
-  preview?: JobPreview | undefined
-  loading: boolean
-  error: string
-  t: ReturnType<typeof useT>
-  maxSelectable: number
-  selectedCandidates: number[]
-  setSelectedCandidates: React.Dispatch<React.SetStateAction<number[]>>
-  selectedCueStart: number | null
-  setSelectedCueStart: React.Dispatch<React.SetStateAction<number | null>>
-  selectedCueEnd: number | null
-  setSelectedCueEnd: React.Dispatch<React.SetStateAction<number | null>>
-  cueRanges: { start: number; end: number }[]
-  setCueRanges: React.Dispatch<React.SetStateAction<{ start: number; end: number }[]>>
-  createPending: boolean
-  renderSelected: (ranges: RangePayload[]) => void
-  retry: () => void
-  reviewRef: React.RefObject<HTMLDivElement | null>
-}
-
-function ReviewPanel({ preview, loading, error, t, maxSelectable, selectedCandidates, setSelectedCandidates, selectedCueStart, setSelectedCueStart, selectedCueEnd, setSelectedCueEnd, cueRanges, setCueRanges, createPending, renderSelected, retry, reviewRef }: ReviewPanelProps) {
-  const candidates = preview?.candidates ?? []
-  const cues = preview?.cues ?? []
-  const selectedCount = selectedCandidates.length + cueRanges.length
-  const addCueRange = () => {
-    if (selectedCueStart === null || selectedCueEnd === null || selectedCount >= maxSelectable) return
-    const first = cues[selectedCueStart]
-    const last = cues[selectedCueEnd]
-    if (!first || !last) return
-    const range = { start: Math.min(first.start, last.start), end: Math.max(first.end, last.end) }
-    if (range.start >= range.end) return
-    setCueRanges((ranges) => [...ranges, range])
-    setSelectedCueStart(null)
-    setSelectedCueEnd(null)
-  }
-
-  return <section ref={reviewRef} tabIndex={-1} aria-labelledby="review-heading" className="space-y-4 rounded-xl border border-border/80 bg-secondary/20 p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-    <div className="flex items-start gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg border border-accent/30 bg-accent/10 text-accent"><ListChecks className="size-4" /></span><div className="min-w-0"><h2 id="review-heading" className="font-display text-lg font-medium leading-9">{t.reviewMoments}</h2>{!loading && !error && preview?.status !== "done" && <p className="-mt-1 text-sm leading-relaxed text-muted-foreground">{t.reviewMomentsHint}</p>}</div></div>
-    {loading && <div role="status" className="flex items-center gap-3 rounded-lg bg-card p-4 text-sm"><LoaderCircle className="size-4 animate-spin text-primary" />{t.scanningMoments}</div>}
-    {error && <Alert variant="destructive"><AlertDescription>{error} <Button type="button" size="sm" variant="ghost" onClick={retry}>{t.retry}</Button></AlertDescription></Alert>}
-    {preview?.status === "done" && <><div className="flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{t.reviewReady}</p><Button type="button" size="sm" variant="outline" onClick={retry} disabled={loading}>{t.reviewAgain}</Button></div>
-      <div><p className="mb-2 text-sm font-medium">{t.candidateMoments} ({candidates.length})</p><div className="space-y-2">{candidates.map((candidate, index) => {
-        const checked = selectedCandidates.includes(index)
-        const disabled = !checked && selectedCount >= maxSelectable
-        const score = typeof candidate.viralScore === "number" && Number.isFinite(candidate.viralScore)
-          ? Math.max(0, Math.min(100, Math.round(candidate.viralScore)))
-          : null
-        const scoreTone = score === null
-          ? ""
-          : score >= 80
-            ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
-            : score >= 60
-              ? "border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-300"
-              : "border-zinc-500/30 bg-zinc-500/12 text-zinc-700 dark:text-zinc-300"
-        const scoreTooltip = score !== null ? t.viralScoreTooltip.replace("{score}", String(score)) : undefined
-        return <label key={`${candidate.start}-${candidate.end}-${index}`} className="flex cursor-pointer gap-3 rounded-lg border border-border/80 bg-card p-3 has-[:checked]:border-accent has-[:checked]:bg-accent/10">
-          <input type="checkbox" className="mt-1 size-4 accent-primary" checked={checked} disabled={disabled} onChange={(event) => setSelectedCandidates((current) => event.target.checked ? [...current, index] : current.filter((item) => item !== index))} aria-label={`${candidate.title}, ${formatMomentTime(candidate.start)}–${formatMomentTime(candidate.end)}`} />
-          <span className="min-w-0 flex-1">
-            <span className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-sm font-medium">{candidate.title}</span>
-              <span className="inline-flex shrink-0 items-center gap-1.5">
-                {score !== null && (
-                  <span
-                    title={scoreTooltip}
-                    aria-label={scoreTooltip}
-                    className={`inline-flex h-5 items-center gap-0.5 rounded-full border px-1.5 font-mono text-[10px] font-semibold tabular-nums ${scoreTone}`}
-                  >
-                    <Flame aria-hidden="true" className="size-3 shrink-0" />
-                    <span>{score}</span>
-                  </span>
-                )}
-                <span className="text-xs tabular-nums text-muted-foreground">{formatMomentTime(candidate.start)}–{formatMomentTime(candidate.end)}</span>
-              </span>
-            </span>
-            <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{candidate.reason}</span>
-          </span>
-        </label>
-      })}</div></div>
-      <div><p className="mb-2 text-sm font-medium">{t.transcript}</p><p className="mb-2 text-xs text-muted-foreground">{t.selectCueRange}</p><div role="group" aria-label={t.transcript} className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border/80 bg-card p-2">{cues.map((cue, index) => {
-        const isStart = selectedCueStart === index
-        const isEnd = selectedCueEnd === index
-        return <button key={`${cue.start}-${index}`} type="button" aria-pressed={isStart || isEnd} onClick={() => { if (selectedCueStart === null || selectedCueEnd !== null) { setSelectedCueStart(index); setSelectedCueEnd(null) } else setSelectedCueEnd(index) }} className={`flex w-full gap-3 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isStart || isEnd ? "bg-primary/10 ring-1 ring-primary" : ""}`}><span className="shrink-0 font-mono text-xs text-muted-foreground">{formatMomentTime(cue.start)}{isStart ? ` · ${t.startSec}` : isEnd ? ` · ${t.endSec}` : ""}</span><span>{cue.text}</span></button>
-      })}</div><div className="mt-3 flex flex-wrap items-center gap-2"><Button type="button" variant="outline" size="sm" disabled={selectedCueStart === null || selectedCueEnd === null || selectedCount >= maxSelectable || cues[selectedCueStart]?.start === cues[selectedCueEnd]?.end} onClick={addCueRange}>{t.addRange}</Button><span aria-live="polite" className="text-xs text-muted-foreground">{selectedCueStart === null ? t.chooseStartCue : selectedCueEnd === null ? t.chooseEndCue : `${t.selectedMoments}: ${formatMomentTime(cues[selectedCueStart]?.start ?? 0)}–${formatMomentTime(cues[selectedCueEnd]?.end ?? 0)}`}</span></div></div>
-      <div className="space-y-2"><p className="text-sm font-medium">{t.selectedMoments} ({selectedCount}/{maxSelectable})</p>
-        {selectedCount > maxSelectable && <p role="alert" className="text-xs text-destructive">{t.selectedMomentsOverLimit.replace("{max}", String(maxSelectable))}</p>}
-        {selectedCandidates.map((index) => { const candidate = candidates[index]; return candidate ? <div key={`candidate-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-3 py-2 text-sm"><span className="min-w-0 truncate">{candidate.title} <span className="text-xs text-muted-foreground">{formatMomentTime(candidate.start)}–{formatMomentTime(candidate.end)}</span></span><Button type="button" variant="ghost" size="sm" onClick={() => setSelectedCandidates((current) => current.filter((item) => item !== index))}>{t.removeRange}</Button></div> : null })}{cueRanges.map((range, index) => <div key={`cue-range-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-3 py-2 text-sm"><span>{formatMomentTime(range.start)}–{formatMomentTime(range.end)}</span><Button type="button" variant="ghost" size="sm" onClick={() => setCueRanges((current) => current.filter((_, item) => item !== index))}>{t.removeRange}</Button></div>)}</div>
-      <Button type="button" className="w-full rounded-md" disabled={selectedCount < 1 || selectedCount > maxSelectable || createPending} onClick={() => renderSelected([...selectedCandidates.flatMap((index) => candidates[index] ? [{ start: candidates[index].start, end: candidates[index].end, title: candidates[index].title, reason: candidates[index].reason, ...(candidates[index].hookText ? { hookText: candidates[index].hookText } : {}) }] : []), ...cueRanges])}>{createPending && <LoaderCircle className="mr-2 size-4 animate-spin" />}{t.renderClips.replace("{count}", String(selectedCount))}</Button>
-    </>}
-  </section>
 }
 
 function Dashboard() {
@@ -185,7 +92,7 @@ function Dashboard() {
   const navigate = useNavigate()
   const [draft] = useState(loadReviewDraft)
   const [mode, setMode] = useState<"auto" | "manual">(draft?.mode ?? "auto")
-  const [reframe, setReframe] = useState<Job["reframe"]>(draft?.reframe ?? "face_tracking")
+  const [reframe, setReframe] = useState<Job["reframe"]>(draft?.reframe ?? "center_crop")
   const [captions, setCaptions] = useState(draft?.captions ?? true)
   const [hookBanner, setHookBanner] = useState(draft?.hookBanner ?? true)
   const [normalizeAudio, setNormalizeAudio] = useState(draft?.normalizeAudio ?? true)
@@ -224,7 +131,7 @@ function Dashboard() {
     validators: { onSubmit: ({ value }) => {
       if (!value.url.trim()) return t.urlRequired
       if (!/^https?:\/\//i.test(value.url.trim())) return t.urlInvalid
-      if (!Number.isInteger(value.clipCount) || value.clipCount < 1 || value.clipCount > 10) return t.clipCountInvalid
+      if (mode === "auto" && !reviewFirst && (!Number.isInteger(value.clipCount) || value.clipCount < 1 || value.clipCount > 10)) return t.clipCountInvalid
       if (!Number.isInteger(value.duration) || value.duration < 15 || value.duration > 180) return t.durationInvalid
       if (mode === "auto" && maxSourceChoice === "custom" && (!/^\d+$/.test(value.customMinutes) || Number(value.customMinutes) < 1 || Number(value.customMinutes) > 600)) return t.customMinutesInvalid
       if (mode === "manual" && (!value.ranges.length || value.ranges.length > 10 || value.ranges.some(({ start, end }) => !start.trim() || !end.trim() || !Number.isFinite(Number(start)) || !Number.isFinite(Number(end)) || Number(start) < 0 || Number(end) <= Number(start)))) return t.rangesInvalid
@@ -234,7 +141,7 @@ function Dashboard() {
       if (generationLocked.current) return
       setError("")
       if (mode === "auto" && reviewFirst) {
-        createPreview.mutate({ url: value.url.trim(), clipCount: value.clipCount, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) })
+        createPreview.mutate({ url: value.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) })
         return
       }
       const body: JobInput = { url: value.url.trim(), mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, captionLanguage, transcriptSource, captionStyle: captions ? captionStyle : null, customHashtags: parsedCustomHashtags, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end, title, reason, hookText }) => ({ start: Number(start), end: Number(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}), ...(hookText ? { hookText } : {}) })) }) }
@@ -242,9 +149,11 @@ function Dashboard() {
     },
   })
   const formValues = useSyncExternalStore((onChange) => { const subscription = form.store.subscribe(onChange); return () => subscription.unsubscribe() }, () => form.state.values, () => form.state.values)
-  const maxSelectable = Number.isInteger(formValues.clipCount)
-    ? Math.max(1, Math.min(10, formValues.clipCount))
-    : 3
+  const maxSelectable = mode === "auto" && reviewFirst
+    ? REVIEW_MAX_SELECTABLE
+    : Number.isInteger(formValues.clipCount)
+      ? Math.max(1, Math.min(10, formValues.clipCount))
+      : 3
   const reviewRef = useRef<HTMLDivElement>(null)
   const preview = useQuery({
     queryKey: ["previews", previewId],
@@ -649,13 +558,20 @@ function Dashboard() {
     { key: "black" as const, hex: "#000000" },
     { key: "white" as const, hex: "#FFFFFF" },
   ]
+  const editingPreview = (monitorView === "frame" && activeFrame) || appliedWatermarkLayers.length > 0
+  const monitorAspectClass = !editingPreview || aspectRatio === "16:9"
+    ? "aspect-video"
+    : aspectRatio === "9:16"
+      ? "aspect-[4/5] min-h-[340px] sm:aspect-video sm:min-h-0"
+      : "aspect-square sm:aspect-video"
+
   return <WorkspaceShell user={user}>
     <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,400px)] lg:grid-rows-[minmax(560px,calc(100vh-120px))_auto]">
     <form noValidate onSubmit={submit} className="contents">
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:col-start-1 lg:row-start-1 lg:h-full" aria-label={t.sourceMonitor}>
-        <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border px-4 text-sm text-muted-foreground">
-          <span className="min-w-0 truncate">{formValues.url.trim() ? sourceLabel(formValues.url.trim()) : t.noSource}</span>
-          <div className="flex shrink-0 items-center gap-2">
+        <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-border px-4 py-1.5 text-sm text-muted-foreground sm:py-0">
+          <span className="min-w-0 flex-[1_1_100%] truncate sm:flex-[1_1_8rem]">{formValues.url.trim() ? sourceLabel(formValues.url.trim()) : t.noSource}</span>
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 sm:gap-2">
             {hookBanner && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -665,9 +581,9 @@ function Dashboard() {
                     size="sm"
                     aria-pressed={showHookPreview}
                     onClick={() => setShowHookPreview((value) => !value)}
-                    className={`h-8 gap-1.5 px-2.5 text-xs ${showHookPreview ? "border-amber-400/50 bg-amber-500/12 text-amber-700 hover:bg-amber-500/18 dark:text-amber-300" : ""}`}
+                    className={`min-h-9 gap-1.5 px-2 text-xs sm:min-h-8 sm:px-2.5 ${showHookPreview ? "border-amber-400/50 bg-amber-500/12 text-amber-700 hover:bg-amber-500/18 dark:text-amber-300" : ""}`}
                   >
-                    <PanelTop aria-hidden="true" className="size-3.5" />
+                    <PanelTop aria-hidden="true" className="hidden size-3.5 sm:block" />
                     {t.hookPreviewButton}
                   </Button>
                 </TooltipTrigger>
@@ -683,18 +599,18 @@ function Dashboard() {
                     size="sm"
                     aria-pressed={showSafeZone}
                     onClick={() => setShowSafeZone((value) => !value)}
-                    className={`h-8 gap-1.5 px-2.5 text-xs ${showSafeZone ? "border-rose-400/50 bg-rose-500/12 text-rose-600 hover:bg-rose-500/18 dark:text-rose-300" : ""}`}
+                    className={`min-h-9 gap-1.5 px-2 text-xs sm:min-h-8 sm:px-2.5 ${showSafeZone ? "border-rose-400/50 bg-rose-500/12 text-rose-600 hover:bg-rose-500/18 dark:text-rose-300" : ""}`}
                   >
-                    <Scan aria-hidden="true" className="size-3.5" />
+                    <Scan aria-hidden="true" className="hidden size-3.5 sm:block" />
                     {t.safeZone}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{t.safeZoneTooltip}</TooltipContent>
               </Tooltip>
             )}
-            {activeFrame && <ToggleGroup type="single" aria-label={t.frameViewLabel} size="sm" value={monitorView} onValueChange={(value) => { if (value) setMonitorView(value as "video" | "frame") }} className="shrink-0 rounded-md border border-border bg-secondary/40 p-0.5">
-              <ToggleGroupItem value="video" className="gap-1.5 px-2.5 text-xs data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"><Play className="size-3.5"/>{t.frameViewVideo}</ToggleGroupItem>
-              <ToggleGroupItem value="frame" className="gap-1.5 px-2.5 text-xs data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"><ImageIcon className="size-3.5"/>{t.frameViewFrame}</ToggleGroupItem>
+            {activeFrame && <ToggleGroup type="single" aria-label={t.frameViewLabel} size="sm" value={monitorView} onValueChange={(value) => { if (value) setMonitorView(value as "video" | "frame") }} className="shrink-0 gap-0.5 rounded-md border border-border bg-secondary/40 p-0.5 sm:gap-2">
+              <ToggleGroupItem value="video" className="min-h-9 gap-1.5 px-2 text-xs sm:min-h-8 sm:px-2.5 data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"><Play aria-hidden="true" className="hidden size-3.5 sm:block"/>{t.frameViewVideo}</ToggleGroupItem>
+              <ToggleGroupItem value="frame" className="min-h-9 gap-1.5 px-2 text-xs sm:min-h-8 sm:px-2.5 data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"><ImageIcon aria-hidden="true" className="hidden size-3.5 sm:block"/>{t.frameViewFrame}</ToggleGroupItem>
             </ToggleGroup>}
           </div>
         </div>
@@ -713,13 +629,13 @@ function Dashboard() {
               aria-invalid={framePreview.parsedSec === null}
               value={framePreview.timeText}
               onChange={(event) => framePreview.setTimeText(event.target.value)}
-              className="h-8 w-24 shrink-0 rounded-md bg-background font-mono text-xs tabular-nums"
+              className="h-8 min-h-9 sm:min-h-8 w-24 shrink-0 rounded-md bg-background font-mono text-xs tabular-nums"
             />
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="h-8 shrink-0 px-2.5 text-xs"
+              className="h-8 min-h-9 sm:min-h-8 shrink-0 px-2.5 text-xs"
               disabled={!framePreview.hasUrl || framePreview.parsedSec === null || framePreview.running}
               onClick={() => framePreview.render()}
             >
@@ -731,14 +647,14 @@ function Dashboard() {
                 type="button"
                 variant="secondary"
                 size="sm"
-                className="h-8 shrink-0 px-2.5 text-xs"
+                className="h-8 min-h-9 sm:min-h-8 shrink-0 px-2.5 text-xs"
                 disabled={!framePreview.hasUrl || framePreview.running}
                 onClick={() => framePreview.renderAnother()}
               >
                 {t.frameAnother}
               </Button>
             )}
-            <div className="ml-auto flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2 sm:ml-auto">
               {framePreview.stale && !framePreview.running ? (
                 <span role="status" className="truncate text-[11px] font-medium text-accent">{t.frameStale}</span>
               ) : activeFrame && !framePreview.running ? (
@@ -766,7 +682,7 @@ function Dashboard() {
           {frameError && <Alert variant="destructive" className="mt-2 px-2.5 py-1.5"><AlertDescription className="text-xs">{frameError}</AlertDescription></Alert>}
         </div>
         <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted p-4">
-          <div className={`relative aspect-video w-full max-w-full overflow-hidden shadow-xl ${embed && monitorView === "video" ? "bg-black" : "border border-border bg-[radial-gradient(ellipse_at_center,var(--monitor-empty-center),var(--monitor-empty-edge))]"}`}>
+          <div className={`relative w-full max-w-full overflow-hidden shadow-xl ${monitorAspectClass} ${embed && monitorView === "video" ? "bg-black" : "border border-border bg-[radial-gradient(ellipse_at_center,var(--monitor-empty-center),var(--monitor-empty-edge))]"}`}>
             {monitorView === "frame" && activeFrame ? <>
               <WatermarkOverlay
                 aspectRatio={aspectRatio}
@@ -816,7 +732,7 @@ function Dashboard() {
               aria-describedby="transcript-source-hint"
               value={transcriptSource}
               onValueChange={(value) => { if (isTranscriptSource(value)) setTranscriptSource(value) }}
-              className="grid grid-cols-3 gap-1.5 rounded-lg bg-secondary p-1"
+              className="grid grid-cols-1 gap-1.5 rounded-lg bg-secondary p-1 sm:grid-cols-3"
             >
               {TRANSCRIPT_SOURCES.map((value) => {
                 const Icon = transcriptSourceIcons[value]
@@ -824,7 +740,7 @@ function Dashboard() {
                   <label
                     key={value}
                     htmlFor={`transcript-source-${value}`}
-                    className="group relative flex min-w-0 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border border-transparent px-1.5 py-2 text-center transition-colors has-[:checked]:border-accent/50 has-[:checked]:bg-accent/15 has-[:checked]:shadow-sm has-[[data-state=checked]]:border-accent/50 has-[[data-state=checked]]:bg-accent/15 has-[[data-state=checked]]:shadow-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring hover:bg-card/60"
+                    className="group relative flex min-w-0 cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-2 transition-colors sm:flex-col sm:justify-center sm:gap-0.5 sm:px-1.5 sm:text-center has-[:checked]:border-accent/50 has-[:checked]:bg-accent/15 has-[:checked]:shadow-sm has-[[data-state=checked]]:border-accent/50 has-[[data-state=checked]]:bg-accent/15 has-[[data-state=checked]]:shadow-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring hover:bg-card/60"
                   >
                     <RadioGroupItem
                       id={`transcript-source-${value}`}
@@ -836,11 +752,14 @@ function Dashboard() {
                       aria-hidden="true"
                       className="mb-0.5 size-4 shrink-0 text-muted-foreground transition-colors group-has-[:checked]:text-accent group-has-[[data-state=checked]]:text-accent"
                     />
-                    <span className="w-full truncate text-xs font-medium leading-tight text-foreground">
-                      {t.transcriptSourceShort[value]}
-                    </span>
-                    <span className="w-full truncate text-[10px] leading-tight text-muted-foreground group-has-[:checked]:text-foreground/80 group-has-[[data-state=checked]]:text-foreground/80">
-                      {t.transcriptSourceSub[value]}
+                    <span className="min-w-0 space-y-0.5">
+                      <span className="block text-xs font-medium leading-tight text-foreground">
+                        <span className="sm:hidden">{t.transcriptSourceOptions[value]}</span>
+                        <span className="hidden sm:inline">{t.transcriptSourceShort[value]}</span>
+                      </span>
+                      <span className="block text-[10px] leading-tight text-muted-foreground group-has-[:checked]:text-foreground/80 group-has-[[data-state=checked]]:text-foreground/80">
+                        {t.transcriptSourceSub[value]}
+                      </span>
                     </span>
                   </label>
                 )
@@ -854,7 +773,7 @@ function Dashboard() {
           </Field>
            <Field><FieldLabel id="aspect-ratio-label">{t.outputFormat}</FieldLabel><RadioGroup aria-labelledby="aspect-ratio-label" value={aspectRatio} onValueChange={changeAspectRatio} className="grid grid-cols-3 gap-1.5 rounded-lg bg-secondary p-1">{([{ value: "9:16", shape: "h-5 w-3" }, { value: "1:1", shape: "size-4" }, { value: "16:9", shape: "w-6 h-3.5" }] as const).map(({ value, shape }) => <label key={value} htmlFor={`aspect-${value}`} className="group relative flex min-w-0 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-transparent px-1 py-2.5 !transition-none has-[:checked]:border-accent/50 has-[:checked]:bg-accent/15 has-[:checked]:shadow-sm hover:bg-card/60"><RadioGroupItem id={`aspect-${value}`} value={value} className="sr-only"/><span aria-hidden="true" className={`block ${shape} rounded-[3px] border-2 border-muted-foreground group-has-[:checked]:border-accent`}/><span className="font-mono text-xs font-semibold tabular-nums text-foreground">{value}</span></label>)}</RadioGroup><p className="mt-2 truncate text-xs text-muted-foreground">{{ "9:16": t.aspectPortrait, "1:1": t.aspectSquare, "16:9": t.aspectLandscape }[aspectRatio]}</p></Field>
            <Field className={twoSpeakers || facecam || aspectRatio === "16:9" ? "opacity-50" : undefined}>
-               <FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup disabled={twoSpeakers || facecam || aspectRatio === "16:9"} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers && !facecam && aspectRatio !== "16:9") setReframe(value as Job["reframe"]) }} className="mt-2 grid min-w-0 gap-1.5">{([{ value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-2 transition-colors has-[:checked]:bg-accent/15 has-[:checked]:ring-1 has-[:checked]:ring-accent/40 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5 shrink-0"/><span className="min-w-0"><span className="block text-sm font-medium leading-5 text-foreground">{option.label}</span><span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers || facecam ? <FieldDescription>{t.reframeIgnored}</FieldDescription> : aspectRatio === "16:9" ? <FieldDescription>{t.reframeUnavailable}</FieldDescription> : null}</Field>
+               <FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup disabled={twoSpeakers || facecam || aspectRatio === "16:9"} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers && !facecam && aspectRatio !== "16:9") setReframe(value as Job["reframe"]) }} className="mt-2 grid min-w-0 gap-1.5">{([{ value: "center_crop", label: t.centerCrop, hint: t.centerCropHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }, { value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-2 transition-colors has-[:checked]:bg-accent/15 has-[:checked]:ring-1 has-[:checked]:ring-accent/40 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5 shrink-0"/><span className="min-w-0"><span className="block text-sm font-medium leading-5 text-foreground">{option.label}</span><span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers || facecam ? <FieldDescription>{t.reframeIgnored}</FieldDescription> : aspectRatio === "16:9" ? <FieldDescription>{t.reframeUnavailable}</FieldDescription> : null}</Field>
             <Field>
               <FieldLabel>{t.processingOptions}</FieldLabel>
               <div className="divide-y divide-border border-y border-border">
@@ -1054,13 +973,14 @@ function Dashboard() {
                              )}
                            </span>
                          </button>
-                         <div className="flex shrink-0 items-center gap-0.5">
+                         <div className="flex shrink-0 items-center gap-1.5 sm:gap-0.5">
                            {watermarkLayers.length > 1 && (
                              <>
                                <Button
                                  type="button"
                                  variant="ghost"
                                  size="icon-xs"
+                                 className="size-9 sm:size-6"
                                  disabled={index === 0}
                                  aria-label={t.watermarkMoveUp.replace("{index}", String(layerNum))}
                                  title={t.watermarkMoveUp.replace("{index}", String(layerNum))}
@@ -1072,6 +992,7 @@ function Dashboard() {
                                  type="button"
                                  variant="ghost"
                                  size="icon-xs"
+                                 className="size-9 sm:size-6"
                                  disabled={index === watermarkLayers.length - 1}
                                  aria-label={t.watermarkMoveDown.replace("{index}", String(layerNum))}
                                  title={t.watermarkMoveDown.replace("{index}", String(layerNum))}
@@ -1087,7 +1008,7 @@ function Dashboard() {
                              size="icon-xs"
                              aria-label={t.watermarkRemoveLayer.replace("{index}", String(layerNum))}
                              title={t.watermarkRemoveLayer.replace("{index}", String(layerNum))}
-                             className="text-muted-foreground hover:text-destructive"
+                             className="size-9 text-muted-foreground hover:text-destructive sm:size-6"
                              onClick={() => removeWatermarkLayer(layer.layerId)}
                            >
                              <X aria-hidden="true"/>
@@ -1140,8 +1061,8 @@ function Dashboard() {
                    }))
                  }}
                />
-               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeSelectedLayer.scale * 100)}%</span></div><input id="watermark-size" type="range" min={WATERMARK_SCALE_MIN} max={WATERMARK_SCALE_MAX} step={0.01} value={activeSelectedLayer.scale} onChange={(event) => updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => ({ ...stripLayerId(layer), scale: clamp(Number(event.target.value), WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX) }))} className="h-5 w-full cursor-pointer accent-accent"/></div>
-               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-opacity" className="text-xs font-normal text-muted-foreground">{t.watermarkOpacity}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeSelectedLayer.opacity * 100)}%</span></div><input id="watermark-opacity" type="range" min={0.1} max={1} step={0.05} value={activeSelectedLayer.opacity} onChange={(event) => updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => ({ ...stripLayerId(layer), opacity: clamp(Number(event.target.value), 0.1, 1) }))} className="h-5 w-full cursor-pointer accent-accent"/></div>
+               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-size" className="text-xs font-normal text-muted-foreground">{t.watermarkSize}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeSelectedLayer.scale * 100)}%</span></div><input id="watermark-size" type="range" min={WATERMARK_SCALE_MIN} max={WATERMARK_SCALE_MAX} step={0.01} value={activeSelectedLayer.scale} onChange={(event) => updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => ({ ...stripLayerId(layer), scale: clamp(Number(event.target.value), WATERMARK_SCALE_MIN, WATERMARK_SCALE_MAX) }))} className="h-8 w-full cursor-pointer accent-accent sm:h-5"/></div>
+               <div className="space-y-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="watermark-opacity" className="text-xs font-normal text-muted-foreground">{t.watermarkOpacity}</FieldLabel><span className="font-mono text-xs tabular-nums text-foreground">{Math.round(activeSelectedLayer.opacity * 100)}%</span></div><input id="watermark-opacity" type="range" min={0.1} max={1} step={0.05} value={activeSelectedLayer.opacity} onChange={(event) => updateWatermarkLayer(activeSelectedLayer.layerId, (layer) => ({ ...stripLayerId(layer), opacity: clamp(Number(event.target.value), 0.1, 1) }))} className="h-8 w-full cursor-pointer accent-accent sm:h-5"/></div>
                <p className="text-xs leading-relaxed text-muted-foreground">{t.watermarkPositionHint}</p>
                {selectedWatermarkIsVideo && (
                  <Field className="relative space-y-2.5 rounded-lg border border-border/70 bg-card/60 p-2.5">
@@ -1157,20 +1078,22 @@ function Dashboard() {
                    <FieldDescription className="text-[11px] leading-relaxed">{t.watermarkChromaKeyHint}</FieldDescription>
                    {activeChromaKey.enabled && (
                      <div className="space-y-3 border-t border-border/60 pt-2.5">
-                       <div className="flex items-center justify-between gap-2">
+                       <div className="flex flex-wrap items-center justify-between gap-2">
                          <label htmlFor="watermark-chroma-color" className="text-xs text-muted-foreground">{t.watermarkChromaColor}</label>
-                         <div className="flex items-center gap-1.5">
+                         <div className="flex flex-wrap items-center gap-1.5">
                            {chromaPresets.map((preset) => {
                              const selected = activeChromaKey.color.toUpperCase() === preset.hex
                              return (
-                               <button
+                               <Button
                                  key={preset.key}
+                                  variant="ghost"
+                                  size="icon-xs"
                                  type="button"
                                  aria-label={`${t.watermarkChromaColor}: ${t.watermarkChromaPresets[preset.key]}`}
                                  title={t.watermarkChromaPresets[preset.key]}
                                  aria-pressed={selected}
                                  onClick={() => updateChromaKey({ color: preset.hex })}
-                                 className={`size-5 rounded-full border border-black/20 transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-ring dark:border-white/20 ${selected ? "ring-2 ring-accent ring-offset-1 ring-offset-background" : ""}`}
+                                 className={`size-7 rounded-full sm:size-5 border border-black/20 transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-ring dark:border-white/20 ${selected ? "ring-2 ring-accent ring-offset-1 ring-offset-background" : ""}`}
                                  style={{ backgroundColor: preset.hex }}
                                />
                              )
@@ -1181,7 +1104,7 @@ function Dashboard() {
                              value={activeChromaKey.color}
                              onChange={(event) => updateChromaKey({ color: event.target.value.toUpperCase() })}
                              aria-label={t.watermarkChromaColor}
-                             className="size-6 cursor-pointer rounded-full border-0 bg-transparent p-0"
+                             className="size-8 cursor-pointer sm:size-6 rounded-full border-0 bg-transparent p-0"
                            />
                            <span className="font-mono text-[11px] tabular-nums text-foreground">{activeChromaKey.color}</span>
                          </div>
@@ -1199,7 +1122,7 @@ function Dashboard() {
                            step={0.01}
                            value={activeChromaKey.similarity}
                            onChange={(event) => updateChromaKey({ similarity: Number(event.target.value) })}
-                           className="h-5 w-full cursor-pointer accent-accent"
+                           className="h-8 w-full cursor-pointer accent-accent sm:h-5"
                          />
                        </div>
                        <div className="space-y-1.5">
@@ -1215,7 +1138,7 @@ function Dashboard() {
                            step={0.01}
                            value={activeChromaKey.blend}
                            onChange={(event) => updateChromaKey({ blend: Number(event.target.value) })}
-                           className="h-5 w-full cursor-pointer accent-accent"
+                           className="h-8 w-full cursor-pointer accent-accent sm:h-5"
                          />
                        </div>
                      </div>
@@ -1223,12 +1146,12 @@ function Dashboard() {
                    <p className="text-[11px] leading-relaxed text-muted-foreground">{t.watermarkVideoLoopNote}</p>
                  </Field>
                )}
-               <div className="flex items-center gap-2">
+               <div className="flex flex-wrap items-center gap-2">
                  <Button
                    type="button"
                    variant="outline"
                    size="sm"
-                   className="flex-1 rounded-md"
+                   className="flex-auto rounded-md"
                    disabled={saveWatermarkDefault.isPending || !serializedWatermark}
                    onClick={() => persistWatermarkDefault(serializedWatermark)}
                  >
@@ -1313,15 +1236,15 @@ function Dashboard() {
              )}
              <FieldDescription id="custom-hashtags-hint">{parsedCustomHashtags.length > 0 ? t.customHashtagsActiveHint.replace("{count}", String(parsedCustomHashtags.length)) : t.customHashtagsHint}</FieldDescription>
            </Field>
-           {mode === "auto" ? <div className="grid gap-4 sm:grid-cols-2"><Field><FieldLabel htmlFor="clip-count">{t.clipCount}</FieldLabel><Input id="clip-count" type="number" min={1} max={10} step={1} required value={Number.isNaN(formValues.clipCount) ? "" : formValues.clipCount} onChange={(e) => form.setFieldValue("clipCount", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md tabular-nums" /></Field><Field><FieldLabel htmlFor="target-duration">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field><Field className="sm:col-span-2"><div className="flex items-center justify-between gap-2"><FieldLabel htmlFor="clip-description">{t.description}</FieldLabel><div className="flex items-center gap-1.5 sm:gap-2"><span className="text-xs tabular-nums text-muted-foreground">{description.length}/500</span><BriefHistoryMenu brief={description} disabled={locked} onPick={(text) => { setDescription(text.slice(0, 500)); setPreviousBrief(null); setEnhanceError("") }}/><Button type="button" variant="outline" size="sm" className="h-7 gap-1 rounded-md px-2 text-xs" aria-label={t.enhanceBrief} disabled={description.trim().length < 2 || enhanceBrief.isPending || locked} onClick={() => { setEnhanceError(""); setPreviousBrief(null); enhanceBrief.mutate(description.trim()) }}>{enhanceBrief.isPending ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" /> : <Sparkles aria-hidden="true" className="size-3" />}{enhanceBrief.isPending ? t.enhancingBrief : t.enhanceBrief}</Button></div></div><textarea id="clip-description" maxLength={500} rows={3} value={description} onChange={(e) => { setDescription(e.target.value); setPreviousBrief(null); setEnhanceError("") }} readOnly={enhanceBrief.isPending} placeholder={t.descriptionHint} className="w-full resize-y rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none transition read-only:opacity-70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" />{previousBrief !== null && <div className="mt-1 flex justify-end"><Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setDescription(previousBrief); setPreviousBrief(null) }}>{t.undoEnhance}</Button></div>}{enhanceError && <FieldDescription role="alert" className="text-destructive">{enhanceError}</FieldDescription>}</Field></div> : <div className="space-y-3 rounded-lg border border-border/80 bg-secondary/25 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{t.manualRanges}</p><p className="mt-1 text-xs text-muted-foreground">{t.rangeHint}</p></div><Badge variant="secondary" className="rounded-full font-normal">{formValues.ranges.length}/10</Badge></div><div className="space-y-2">{formValues.ranges.map((_, index) => <div key={index} className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 rounded-lg border border-border/70 bg-card p-3 max-[380px]:grid-cols-[auto_minmax(0,1fr)_auto]"><span className="pb-3 text-xs font-medium tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><Field className="max-[380px]:col-start-2"><FieldLabel htmlFor={`range-start-${index}`}>{t.startSec}</FieldLabel><Input id={`range-start-${index}`} type="number" min="0" step="any" required aria-label={`${t.startSec} ${index + 1}`} placeholder="0" value={formValues.ranges[index]?.start ?? ""} onChange={(e) => updateRange(index, "start", e.target.value)} className="h-10 rounded-lg" /></Field><Field className="max-[380px]:col-start-2"><FieldLabel htmlFor={`range-end-${index}`}>{t.endSec}</FieldLabel><Input id={`range-end-${index}`} type="number" min="0" step="any" required aria-label={`${t.endSec} ${index + 1}`} placeholder="30" value={formValues.ranges[index]?.end ?? ""} onChange={(e) => updateRange(index, "end", e.target.value)} className="h-10 rounded-lg" /></Field><Button type="button" variant="ghost" size="icon" aria-label={`${t.removeRange} ${index + 1}`} disabled={formValues.ranges.length === 1} onClick={() => form.setFieldValue("ranges", formValues.ranges.filter((_, i) => i !== index))} className="mb-0.5 text-muted-foreground hover:text-destructive max-[380px]:row-span-2"><X className="size-4" /></Button></div>)}</div><Button type="button" variant="outline" size="sm" disabled={formValues.ranges.length >= 10} onClick={() => form.setFieldValue("ranges", [...formValues.ranges, { start: "", end: "" }])} className="rounded-lg"><Plus className="size-4" />{t.addRange}</Button></div>}
+           {mode === "auto" ? <div className="grid gap-4 sm:grid-cols-2">{!reviewFirst && <Field><FieldLabel htmlFor="clip-count">{t.clipCount}</FieldLabel><Input id="clip-count" type="number" min={1} max={10} step={1} required value={Number.isNaN(formValues.clipCount) ? "" : formValues.clipCount} onChange={(e) => form.setFieldValue("clipCount", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md tabular-nums" /></Field>}<Field className={reviewFirst ? "sm:col-span-2" : undefined}><FieldLabel htmlFor="target-duration">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field><Field className="sm:col-span-2"><div className="flex flex-wrap items-center justify-between gap-2"><FieldLabel htmlFor="clip-description">{t.description}</FieldLabel><div className="flex flex-wrap items-center gap-1.5 sm:gap-2"><span className="text-xs tabular-nums text-muted-foreground">{description.length}/500</span><BriefHistoryMenu brief={description} disabled={locked} onPick={(text) => { setDescription(text.slice(0, 500)); setPreviousBrief(null); setEnhanceError("") }}/><Button type="button" variant="outline" size="sm" className="min-h-9 gap-1 rounded-md px-2 text-xs sm:min-h-7" aria-label={t.enhanceBrief} disabled={description.trim().length < 2 || enhanceBrief.isPending || locked} onClick={() => { setEnhanceError(""); setPreviousBrief(null); enhanceBrief.mutate(description.trim()) }}>{enhanceBrief.isPending ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" /> : <Sparkles aria-hidden="true" className="size-3" />}{enhanceBrief.isPending ? t.enhancingBrief : t.enhanceBrief}</Button></div></div><textarea id="clip-description" maxLength={500} rows={3} value={description} onChange={(e) => { setDescription(e.target.value); setPreviousBrief(null); setEnhanceError("") }} readOnly={enhanceBrief.isPending} placeholder={t.descriptionHint} className="w-full resize-y rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none transition read-only:opacity-70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" />{previousBrief !== null && <div className="mt-1 flex justify-end"><Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setDescription(previousBrief); setPreviousBrief(null) }}>{t.undoEnhance}</Button></div>}{enhanceError && <FieldDescription role="alert" className="text-destructive">{enhanceError}</FieldDescription>}</Field></div> : <div className="space-y-3 rounded-lg border border-border/80 bg-secondary/25 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{t.manualRanges}</p><p className="mt-1 text-xs text-muted-foreground">{t.rangeHint}</p></div><Badge variant="secondary" className="rounded-full font-normal">{formValues.ranges.length}/10</Badge></div><div className="space-y-2">{formValues.ranges.map((_, index) => <div key={index} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-end gap-2 rounded-lg border border-border/70 bg-card p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto]"><span className="pb-3 text-xs font-medium tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><Field className="col-start-2 sm:col-start-auto"><FieldLabel htmlFor={`range-start-${index}`}>{t.startSec}</FieldLabel><Input id={`range-start-${index}`} type="number" min="0" step="any" required aria-label={`${t.startSec} ${index + 1}`} placeholder="0" value={formValues.ranges[index]?.start ?? ""} onChange={(e) => updateRange(index, "start", e.target.value)} className="h-10 rounded-lg" /></Field><Field className="col-start-2 sm:col-start-auto"><FieldLabel htmlFor={`range-end-${index}`}>{t.endSec}</FieldLabel><Input id={`range-end-${index}`} type="number" min="0" step="any" required aria-label={`${t.endSec} ${index + 1}`} placeholder="30" value={formValues.ranges[index]?.end ?? ""} onChange={(e) => updateRange(index, "end", e.target.value)} className="h-10 rounded-lg" /></Field><Button type="button" variant="ghost" size="icon" aria-label={`${t.removeRange} ${index + 1}`} disabled={formValues.ranges.length === 1} onClick={() => form.setFieldValue("ranges", formValues.ranges.filter((_, i) => i !== index))} className="mb-0.5 text-muted-foreground hover:text-destructive col-start-3 row-span-2 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto"><X className="size-4" /></Button></div>)}</div><Button type="button" variant="outline" size="sm" disabled={formValues.ranges.length >= 10} onClick={() => form.setFieldValue("ranges", [...formValues.ranges, { start: "", end: "" }])} className="rounded-lg"><Plus className="size-4" />{t.addRange}</Button></div>}
 
           {mode === "manual" && <Field><FieldLabel htmlFor="target-duration-manual">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration-manual" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field>}
       </div></div>
-        <div className="sticky bottom-0 border-t border-border bg-card/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/80">{error && <Alert variant="destructive" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}<div className="flex flex-col items-stretch gap-3"><div className="min-w-0"><p className="text-xs leading-5 text-muted-foreground">{mode === "auto" ? t.autoSummary.replace("{count}", String(formValues.clipCount)).replace("{duration}", String(formValues.duration)) : t.manualSummary.replace("{count}", String(formValues.ranges.length))}</p>{mode === "auto" && <LlmStatus compact prominent jobStatus={jobs.data?.find((job) => ["done", "failed", "cancelled"].includes(job.status))?.status}/>}</div>{blockingJob && <div role="status" className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-xs leading-5 text-foreground"><LoaderCircle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent motion-reduce:animate-none"/><span className="min-w-0">{blockingHint}{blockingJob.id !== selectedJobId && <> <Link to="/" search={(previous) => ({ ...previous, job: blockingJob.id })} className="font-medium text-accent underline-offset-2 hover:underline">{t.viewProgress}</Link></>}</span></div>}<Button type="submit" className="h-11 w-full shrink-0 rounded-md px-4" aria-busy={locked} disabled={locked}>{locked ? <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin motion-reduce:animate-none"/> : <ArrowUpRight className="mr-2 size-4"/>}{create.isPending || blockingJob ? t.generatingClips : reviewFirst && mode === "auto" ? t.startReview : mode === "auto" ? t.generateClips.replace("{count}", String(formValues.clipCount)) : t.generateManualClips.replace("{count}", String(formValues.ranges.length))}</Button></div></div>
+        <div className="shrink-0 border-t border-border bg-card/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur lg:sticky lg:bottom-0 lg:pb-3 supports-[backdrop-filter]:bg-card/80">{error && <Alert variant="destructive" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}<div className="flex flex-col items-stretch gap-3"><div className="min-w-0"><p className="text-xs leading-5 text-muted-foreground">{mode === "auto" ? (reviewFirst ? t.reviewSummary.replace("{duration}", Number.isFinite(formValues.duration) ? String(formValues.duration) : "—").replace("{max}", String(REVIEW_MAX_SELECTABLE)) : t.autoSummary.replace("{count}", String(formValues.clipCount)).replace("{duration}", String(formValues.duration))) : t.manualSummary.replace("{count}", String(formValues.ranges.length))}</p>{mode === "auto" && <LlmStatus compact prominent jobStatus={jobs.data?.find((job) => ["done", "failed", "cancelled"].includes(job.status))?.status}/>}</div>{blockingJob && <div role="status" className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-xs leading-5 text-foreground"><LoaderCircle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent motion-reduce:animate-none"/><span className="min-w-0">{blockingHint}{blockingJob.id !== selectedJobId && <> <Link to="/" search={(previous) => ({ ...previous, job: blockingJob.id })} className="font-medium text-accent underline-offset-2 hover:underline">{t.viewProgress}</Link></>}</span></div>}<Button type="submit" className="h-11 w-full shrink-0 rounded-md px-4" aria-busy={locked} disabled={locked}>{locked ? <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin motion-reduce:animate-none"/> : <ArrowUpRight className="mr-2 size-4"/>}{create.isPending || blockingJob ? t.generatingClips : reviewFirst && mode === "auto" ? t.startReview : mode === "auto" ? t.generateClips.replace("{count}", String(formValues.clipCount)) : t.generateManualClips.replace("{count}", String(formValues.ranges.length))}</Button></div></div>
       </aside>
     </form>
-    <section aria-labelledby="results-heading" className="mt-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-span-2 lg:row-start-2"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3"><div><h3 id="results-heading" className="font-display text-lg font-medium">{t.results}</h3></div>{resultJob && <div className="flex flex-wrap items-center gap-2">{publishEnabled && resultActiveClips.length > 0 && <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setBatchScheduleOpen(true)}><CalendarClock aria-hidden="true" className="size-3.5" />{t.scheduleBatch}</Button>}<Link to="/jobs/$jobId" params={{ jobId: resultJob.id }} className="inline-flex min-h-10 items-center gap-2 text-xs text-muted-foreground hover:text-foreground">{t.openFullJob}<ArrowUpRight className="size-4"/></Link></div>}</div><div className="space-y-4 p-4">
-      {reviewFirst && mode === "auto" && <ReviewPanel preview={preview.data} loading={createPreview.isPending || (!!previewId && preview.isPending) || preview.data?.status === "queued" || preview.data?.status === "running"} error={previewExpired ? t.previewExpired : createPreview.isError || preview.isError || preview.data?.status === "failed" ? preview.data?.error || t.previewFailed : ""} t={t} maxSelectable={maxSelectable} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} selectedCueStart={selectedCueStart} setSelectedCueStart={setSelectedCueStart} selectedCueEnd={selectedCueEnd} setSelectedCueEnd={setSelectedCueEnd} cueRanges={cueRanges} setCueRanges={setCueRanges} createPending={locked} renderSelected={renderSelected} retry={() => { setError(""); if (!formValues.url.trim()) { setError(t.urlRequired); return } if (!/^https?:\/\//i.test(formValues.url.trim())) { setError(t.urlInvalid); return } if (!Number.isInteger(formValues.clipCount) || formValues.clipCount < 1 || formValues.clipCount > 10) { setError(t.clipCountInvalid); return } if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return } if (!validCustomMinutes) { setError(t.customMinutesInvalid); return } createPreview.mutate({ url: formValues.url.trim(), clipCount: formValues.clipCount, targetDurationSec: formValues.duration, maxSourceSec: selectedMaxSourceSec(), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) }) }} reviewRef={reviewRef} />}
+    <section aria-labelledby="results-heading" className="mt-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-span-2 lg:row-start-2"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3"><div><h3 id="results-heading" className="font-display text-lg font-medium">{t.results}</h3></div>{resultJob && <div className="flex flex-wrap items-center gap-2">{publishEnabled && resultActiveClips.length > 0 && <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => setBatchScheduleOpen(true)}><CalendarClock aria-hidden="true" className="size-3.5" />{t.scheduleBatch}</Button>}<Link to="/jobs/$jobId" params={{ jobId: resultJob.id }} className="inline-flex min-h-10 items-center gap-2 text-xs text-muted-foreground hover:text-foreground">{t.openFullJob}<ArrowUpRight className="size-4"/></Link></div>}</div><div className="space-y-4 p-4">
+      {reviewFirst && mode === "auto" && <ReviewPanel preview={preview.data} loading={createPreview.isPending || (!!previewId && preview.isPending) || preview.data?.status === "queued" || preview.data?.status === "running"} error={previewExpired ? t.previewExpired : createPreview.isError || preview.isError || preview.data?.status === "failed" ? preview.data?.error || t.previewFailed : ""} t={t} maxSelectable={maxSelectable} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} selectedCueStart={selectedCueStart} setSelectedCueStart={setSelectedCueStart} selectedCueEnd={selectedCueEnd} setSelectedCueEnd={setSelectedCueEnd} cueRanges={cueRanges} setCueRanges={setCueRanges} createPending={locked} renderSelected={renderSelected} retry={() => { setError(""); if (!formValues.url.trim()) { setError(t.urlRequired); return } if (!/^https?:\/\//i.test(formValues.url.trim())) { setError(t.urlInvalid); return } if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return } if (!validCustomMinutes) { setError(t.customMinutesInvalid); return } createPreview.mutate({ url: formValues.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: formValues.duration, maxSourceSec: selectedMaxSourceSec(), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) }) }} reviewRef={reviewRef} />}
       {selectedJobId && selectedJob.isPending ? <div role="status" className="flex items-center gap-3 py-5 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin text-primary"/>{t.loading}</div> : selectedJob.isError ? <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{t.apiError}</span><Button variant="outline" onClick={() => selectedJob.refetch()}>{t.retry}</Button></AlertDescription></Alert> : resultJob ? resultJob.status === "failed" || resultJob.status === "cancelled" ? <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-destructive/25 bg-destructive/5 p-4"><div className="flex min-w-0 gap-3"><CircleAlert className="mt-0.5 size-5 shrink-0 text-destructive"/><div><p className="font-medium">{t.status[resultJob.status]}</p><p className="mt-1 break-words text-sm text-muted-foreground">{resultJob.error || t.jobFailedFallback}</p></div></div><Button className="min-h-11" disabled={retryJob.isPending} onClick={() => retryJob.mutate()}>{retryJob.isPending && <LoaderCircle className="mr-2 size-4 animate-spin"/>}{t.retryJobInline}</Button></div> : <JobAssembly job={resultJob} t={t} layout="carousel"/>
       : activeJobs.length || failedJobs.length ? <div className="grid gap-3 md:grid-cols-2">{[...activeJobs, ...failedJobs].map((job) => <Link key={job.id} to="/" search={(previous) => ({ ...previous, job: job.id })} className="min-w-0 rounded-lg border border-border p-3 transition-colors hover:bg-secondary/40"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{sourceLabel(job.url)}</span><span className="text-xs text-muted-foreground">{job.status === "running" && job.stage ? t.stages[job.stage] : t.status[job.status]}</span></div><div className="mt-3 h-1 overflow-hidden rounded-full bg-secondary"><span className="block h-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }}/></div></Link>)}</div> : <div className="grid min-h-28 place-items-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">{t.generatedAppear}</div>}
       </div></section>

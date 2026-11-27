@@ -15,7 +15,6 @@ type AspectSpec = {
   refW: number
   refH: number
   maxTextWidthPct: number
-  bottomAnchorPct: number
   startFontRef: number
   minFontRef: number
 }
@@ -24,33 +23,31 @@ const ASPECT_SPECS: Record<AspectRatio, AspectSpec> = {
   "9:16": {
     refW: 1080,
     refH: 1920,
-    maxTextWidthPct: 80,
-    bottomAnchorPct: 23.5,
-    startFontRef: Math.round(1080 * 0.082),
+    maxTextWidthPct: 74,
+    startFontRef: Math.round(1080 * 0.078),
     minFontRef: Math.round(1080 * 0.048),
   },
   "1:1": {
     refW: 1080,
     refH: 1080,
-    maxTextWidthPct: 84,
-    bottomAnchorPct: 16,
+    maxTextWidthPct: 80,
     startFontRef: Math.round(1080 * 0.068),
     minFontRef: Math.round(1080 * 0.048),
   },
   "16:9": {
     refW: 1920,
     refH: 1080,
-    maxTextWidthPct: 78,
-    bottomAnchorPct: 15,
+    maxTextWidthPct: 76,
     startFontRef: Math.round(1080 * 0.08),
     minFontRef: Math.round(1080 * 0.048),
   },
 }
 
 const SCRIM_BACKGROUNDS = [
-  "linear-gradient(to bottom, rgba(5, 8, 17, 0.38) 0%, rgba(5, 8, 17, 0) 20%)",
-  "linear-gradient(to bottom, rgba(5, 8, 17, 0) 36%, rgba(5, 8, 17, 0.58) 56%, rgba(5, 8, 17, 0.84) 78%, rgba(5, 8, 17, 0.94) 100%)",
-  "radial-gradient(ellipse at center, transparent 58%, rgba(5, 8, 17, 0.24) 100%)",
+  "linear-gradient(to bottom, rgba(5, 8, 17, 0.24) 0%, rgba(5, 8, 17, 0) 18%)",
+  "linear-gradient(to bottom, rgba(5, 8, 17, 0) 26%, rgba(5, 8, 17, 0.36) 38%, rgba(5, 8, 17, 0.56) 50%, rgba(5, 8, 17, 0.36) 62%, rgba(5, 8, 17, 0) 74%)",
+  "linear-gradient(to bottom, rgba(5, 8, 17, 0) 72%, rgba(5, 8, 17, 0.28) 100%)",
+  "radial-gradient(ellipse at center, transparent 58%, rgba(5, 8, 17, 0.22) 100%)",
 ].join(", ")
 
 const HEADLINE_FONT_FAMILY = '"Montserrat", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif'
@@ -85,7 +82,7 @@ function normalizeHookText(raw: string): string {
 }
 
 /**
- * Mirrors worker/clipper/hook_thumbnail.py `_balanced_lines`:
+ * Mirrors rust/crates/dartclip-core/src/hook_thumbnail.rs `balanced_lines`:
  * finds the fewest fitting lines (1–3), then minimizes line-width variance and orphan last words.
  */
 function findBalancedLines(words: string[], measure: (line: string) => number, maxWidth: number): string[] {
@@ -229,7 +226,7 @@ export function HookThumbnailOverlay({ aspectRatio, text, frameWidthPx, frameHei
       aria-hidden="true"
       className={`pointer-events-none absolute inset-0 z-[12] select-none overflow-hidden ${hasFrame ? "" : "bg-zinc-950/60"}`}
     >
-      {/* Multi-stop cinematic scrim + subtle top & radial vignette matching worker/clipper/hook_thumbnail.py */}
+      {/* Center-balanced cinematic scrim + subtle top, bottom & radial vignette matching rust/crates/dartclip-core/src/hook_thumbnail.rs */}
       <div
         className="absolute inset-0"
         style={{ backgroundImage: SCRIM_BACKGROUNDS }}
@@ -240,11 +237,11 @@ export function HookThumbnailOverlay({ aspectRatio, text, frameWidthPx, frameHei
         {t.hookPreviewBadge}
       </span>
 
-      {/* Editorial headline + glowing gold accent pill anchored from bottom */}
+      {/* Editorial headline + glowing gold accent pill centered vertically & horizontally */}
       {lines.length > 0 && (
         <div
           className="absolute inset-x-0 flex flex-col items-center text-center"
-          style={{ bottom: `${spec.bottomAnchorPct}%` }}
+          style={{ top: "50%", transform: "translateY(-50%)" }}
         >
           <div
             className="rounded-full bg-[#FACC15]"

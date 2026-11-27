@@ -24,7 +24,13 @@ import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import {
+  ResponsiveDialog,
+  ResponsiveDialogClose,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
@@ -176,27 +182,28 @@ function Counter({ value, max, id, className }: { value: number; max: number; id
 export function PublishDialog({ clip, open, onOpenChange }: { clip: PublishableClip; open: boolean; onOpenChange: (open: boolean) => void }) {
   const t = useT()
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-w-xl gap-0 p-0 sm:p-0"
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent
+        className="flex max-w-xl flex-col gap-0 overflow-hidden p-0 sm:p-0"
+        mobileClassName="pb-0"
         onInteractOutside={(event) => {
           if ((event.target as Element | null)?.closest?.("[data-sonner-toaster]")) event.preventDefault()
         }}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-6 sm:py-4">
           <div className="min-w-0">
-            <DialogTitle className="font-display text-lg font-medium tracking-[-.02em]">{t.publishClip}</DialogTitle>
-            <DialogDescription className="mt-1 truncate">{clip.title || t.clip}</DialogDescription>
+            <ResponsiveDialogTitle className="font-display text-lg font-medium tracking-[-.02em]">{t.publishClip}</ResponsiveDialogTitle>
+            <ResponsiveDialogDescription className="mt-1 truncate">{clip.title || t.clip}</ResponsiveDialogDescription>
           </div>
-          <DialogClose asChild>
+          <ResponsiveDialogClose asChild>
             <Button type="button" variant="ghost" className="size-10 shrink-0 px-0" aria-label={t.closePlayer}>
               <X className="size-4" />
             </Button>
-          </DialogClose>
+          </ResponsiveDialogClose>
         </div>
         {open && <PublishBody key={clip.id} clip={clip} onClose={() => onOpenChange(false)} />}
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   )
 }
 
@@ -470,7 +477,7 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
 
   if (accounts.isPending) {
     return (
-      <div role="status" aria-label={t.loading} className="space-y-4 px-5 py-5 sm:px-6">
+      <div role="status" aria-label={t.loading} className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6">
         <Skeleton className="h-14 w-full rounded-lg" />
         <Skeleton className="h-9 w-full" />
         <Skeleton className="h-28 w-full" />
@@ -480,11 +487,11 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
 
   if (accounts.isError) {
     return (
-      <div className="px-5 py-5 sm:px-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6">
         <Alert variant="destructive">
           <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
             <span>{t.socialLoadError}</span>
-            <Button variant="outline" onClick={() => void accounts.refetch()}>
+            <Button variant="outline" className="min-h-9 sm:min-h-0" onClick={() => void accounts.refetch()}>
               {t.retry}
             </Button>
           </AlertDescription>
@@ -498,13 +505,13 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
 
   if (!available.length) {
     return (
-      <div className="px-5 py-8 text-center sm:px-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-8 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center sm:px-6">
         <span className="mx-auto grid size-12 place-items-center rounded-xl border border-border bg-background">
           <Send aria-hidden="true" className="size-5 text-muted-foreground" />
         </span>
         <p className="mt-4 font-medium">{t.publishNoAccounts}</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{t.publishNoAccountsBody}</p>
-        <Button asChild className="mt-5 h-10 px-4">
+        <Button asChild className="mt-5 min-h-11 px-4 sm:h-10 sm:min-h-10">
           <Link to="/settings" onClick={onClose}>
             {t.publishGoToSettings}
           </Link>
@@ -520,15 +527,17 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
 
   if (view === "progress") {
     return (
-      <div className="space-y-6 px-5 py-5 sm:px-6">
-        <PublicationList title={t.publishProgress} items={current} clipId={clip.id} live />
-        {publications.isError && <p className="text-sm text-destructive">{t.publishLoadError}</p>}
-        {history.length > 0 && <PublicationList title={t.publishHistory} items={history} clipId={clip.id} />}
-        <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+          <PublicationList title={t.publishProgress} items={current} clipId={clip.id} live />
+          {publications.isError && <p className="text-sm text-destructive">{t.publishLoadError}</p>}
+          {history.length > 0 && <PublicationList title={t.publishHistory} items={history} clipId={clip.id} />}
+        </div>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-border bg-card px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
           <Button
             type="button"
             variant="outline"
-            className="h-10 px-4"
+            className="min-h-11 flex-1 px-4 sm:h-10 sm:min-h-10 sm:flex-none"
             onClick={() => {
               setView("form")
               setSubmittedIds([])
@@ -536,7 +545,7 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
           >
             {t.publishAnother}
           </Button>
-          <Button type="button" className="h-10 px-4" onClick={onClose}>
+          <Button type="button" className="min-h-11 flex-1 px-4 sm:h-10 sm:min-h-10 sm:flex-none" onClick={onClose}>
             {t.publishDone}
           </Button>
         </div>
@@ -613,8 +622,8 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
         : t.publishSubmit
 
   return (
-    <form noValidate onSubmit={handleSubmit}>
-      <div className="space-y-6 px-5 py-5 sm:px-6">
+    <form noValidate onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
         <FieldGroup className="gap-5">
           {/* Account selector */}
           <fieldset className="space-y-2">
@@ -674,9 +683,9 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                 </div>
 
                 {/* AI Regenerate controls */}
-                <div className="relative flex items-center gap-1.5">
+                <div className="relative flex flex-wrap items-center gap-1.5">
                   <Select value={captionLanguage} onValueChange={(value) => { if (isCaptionLanguage(value)) setCaptionLanguage(value) }}>
-                    <SelectTrigger aria-label={t.captionLanguage} className="h-8 w-auto min-w-24 gap-1.5 rounded-md bg-background px-2.5 text-xs">
+                    <SelectTrigger aria-label={t.captionLanguage} className="min-h-10 w-auto min-w-24 gap-1.5 rounded-md bg-background px-2.5 text-xs sm:h-8 sm:min-h-0">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent position="popper">
@@ -691,7 +700,7 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-8 gap-1.5 rounded-md bg-background px-2.5 text-xs"
+                    className="min-h-10 gap-1.5 rounded-md bg-background px-3 text-xs sm:h-8 sm:min-h-0 sm:px-2.5"
                     disabled={regenerate.isPending}
                     onClick={() => regenerate.mutate(captionLanguage)}
                   >
@@ -714,17 +723,20 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                   }}
                   aria-label={t.platformCopyTabsLabel}
                   spacing={1}
-                  className="grid w-full grid-cols-2 rounded-lg border border-border bg-secondary/50 p-1 sm:flex"
+                  className={cn(
+                    "grid w-full rounded-lg border border-border bg-secondary/50 p-1 sm:flex",
+                    selectedPlatforms.length === 3 ? "grid-cols-3" : "grid-cols-2",
+                  )}
                 >
                   {selectedPlatforms.map((platform) => (
                     <ToggleGroupItem
                       key={platform}
                       value={platform}
                       size="sm"
-                      className="relative h-8 flex-1 gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
+                      className="relative min-h-10 min-w-0 flex-1 gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs sm:h-8 sm:min-h-8 sm:px-3"
                     >
                       <PlatformIcon platform={platform} className="size-3.5 shrink-0" />
-                      <span>{t.socialPlatforms[platform]}</span>
+                      <span className="truncate">{t.socialPlatforms[platform]}</span>
                       {platformHasError[platform] && (
                         <span
                           aria-label={t.platformTabHasError}
@@ -875,7 +887,7 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-9"
+                    className="min-h-10 sm:h-9 sm:min-h-0"
                     onClick={() => {
                       void navigator.clipboard
                         .writeText(platformCopy.tiktok)
@@ -896,9 +908,9 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                     </p>
                   ) : creatorQuery.isError ? (
                     <Alert variant="destructive">
-                      <AlertDescription className="flex items-center justify-between gap-2">
+                      <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
                         <span>{t.tiktokCreatorError}</span>
-                        <Button type="button" variant="outline" onClick={() => void creatorQuery.refetch()}>
+                        <Button type="button" variant="outline" className="min-h-9 sm:min-h-0" onClick={() => void creatorQuery.refetch()}>
                           {t.retry}
                         </Button>
                       </AlertDescription>
@@ -1126,14 +1138,14 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                 <ToggleGroupItem
                   value="now"
                   size="sm"
-                  className="h-7 rounded-md px-2.5 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
+                  className="min-h-9 rounded-md px-3 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs sm:h-7 sm:min-h-0 sm:px-2.5"
                 >
                   {t.publishTimingNow}
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="schedule"
                   size="sm"
-                  className="h-7 gap-1 rounded-md px-2.5 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
+                  className="min-h-9 gap-1 rounded-md px-3 text-xs font-medium data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs sm:h-7 sm:min-h-0 sm:px-2.5"
                 >
                   <CalendarClock aria-hidden="true" className="size-3.5" />
                   {t.publishTimingSchedule}
@@ -1165,7 +1177,7 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-7 rounded-full bg-background px-2.5 text-xs font-normal"
+                      className="min-h-9 rounded-full bg-background px-3 text-xs font-normal sm:h-7 sm:min-h-0 sm:px-2.5"
                       onClick={() => setScheduledLocal(toDatetimeLocalValue(preset.date()))}
                     >
                       {preset.label}
@@ -1203,11 +1215,11 @@ function PublishBody({ clip, onClose }: { clip: PublishableClip; onClose: () => 
         </FieldGroup>
       </div>
 
-      <div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-card px-5 py-3 sm:px-6">
-        <Button type="button" variant="ghost" className="h-10 px-4" onClick={onClose}>
+      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
+        <Button type="button" variant="ghost" className="min-h-11 px-4 sm:h-10 sm:min-h-10" onClick={onClose}>
           {t.cancelAction}
         </Button>
-        <Button type="submit" className="h-10 min-w-36 px-4" disabled={publish.isPending || submitBlocked}>
+        <Button type="submit" className="min-h-11 flex-1 px-4 sm:h-10 sm:min-h-10 sm:flex-none sm:min-w-36" disabled={publish.isPending || submitBlocked}>
           {publish.isPending ? (
             <>
               <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
@@ -1296,7 +1308,7 @@ function PublicationList({ title, items, clipId, live = false }: { title: string
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+            className="min-h-9 gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground sm:h-7 sm:min-h-0 sm:px-2"
             disabled={refreshMetrics.isPending}
             onClick={() => refreshMetrics.mutate()}
           >
@@ -1383,87 +1395,95 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
   const formattedSchedule = item.scheduledAt ? formatScheduledDateTime(item.scheduledAt, locale) : ""
   const canRetry = (item.status === "failed" || item.status === "cancelled") && item.accountId !== null
 
+  const hasAction = (item.status === "published" && Boolean(item.externalUrl)) || item.status === "scheduled" || canRetry
+
   return (
     <li className="px-3 py-3">
-      <div className="flex items-center gap-3">
-        <StatusIcon status={item.status} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <p className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
-              <PlatformMarkIcon className="size-3.5 shrink-0" />
-              <span className="truncate">{accountLabel}</span>
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2 sm:flex-nowrap sm:items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <StatusIcon status={item.status} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <p className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
+                <PlatformMarkIcon className="size-3.5 shrink-0" />
+                <span className="truncate">{accountLabel}</span>
+              </p>
+              {item.status === "scheduled" && (
+                <Badge
+                  variant="outline"
+                  className="h-5 gap-1 border-sky-500/35 bg-sky-500/12 px-2 text-[11px] font-medium text-sky-700 dark:border-sky-400/35 dark:bg-sky-400/15 dark:text-sky-300"
+                >
+                  <Clock aria-hidden="true" className="size-3" />
+                  {formattedSchedule ? t.scheduledAtLabel.replace("{time}", formattedSchedule) : t.publishStatus.scheduled}
+                </Badge>
+              )}
+              {item.status === "cancelled" && (
+                <Badge variant="secondary" className="h-5 px-2 text-[11px] font-medium text-muted-foreground">
+                  {t.publishStatus.cancelled}
+                </Badge>
+              )}
+            </div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {item.status === "scheduled" ? (
+                <>
+                  {privacyLabel}
+                  {item.scheduledAt && <> · {relativeAge(item.scheduledAt, locale)}</>}
+                </>
+              ) : item.status === "cancelled" ? (
+                <>
+                  {privacyLabel} · {relativeAge(when, locale)}
+                </>
+              ) : (
+                <>
+                  <span className={cn(item.status === "failed" && "text-destructive", item.status === "published" && "text-foreground")}>
+                    {statusText}
+                    {item.status === "uploading" && <span className="tabular-nums"> · {progress}%</span>}
+                  </span>{" "}
+                  · {privacyLabel} · {relativeAge(when, locale)}
+                </>
+              )}
             </p>
-            {item.status === "scheduled" && (
-              <Badge
-                variant="outline"
-                className="h-5 gap-1 border-sky-500/35 bg-sky-500/12 px-2 text-[11px] font-medium text-sky-700 dark:border-sky-400/35 dark:bg-sky-400/15 dark:text-sky-300"
+          </div>
+        </div>
+        {hasAction && (
+          <div className="ml-11 flex w-full flex-wrap items-center gap-2 sm:ml-0 sm:w-auto sm:shrink-0">
+            {item.status === "published" && item.externalUrl && (
+              <a
+                href={item.externalUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted sm:border-0 sm:bg-transparent sm:text-sm"
               >
-                <Clock aria-hidden="true" className="size-3" />
-                {formattedSchedule ? t.scheduledAtLabel.replace("{time}", formattedSchedule) : t.publishStatus.scheduled}
-              </Badge>
+                {item.platform === "tiktok" ? t.openOnTikTok : item.platform === "instagram" ? t.openOnInstagram : t.openOnYouTube}
+                <ExternalLink aria-hidden="true" className="size-3.5" />
+              </a>
             )}
-            {item.status === "cancelled" && (
-              <Badge variant="secondary" className="h-5 px-2 text-[11px] font-medium text-muted-foreground">
-                {t.publishStatus.cancelled}
-              </Badge>
+            {item.status === "scheduled" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="min-h-9 shrink-0 px-2.5 text-xs text-muted-foreground hover:text-destructive sm:h-8 sm:min-h-0"
+                disabled={cancelScheduled.isPending}
+                onClick={() => cancelScheduled.mutate()}
+              >
+                {cancelScheduled.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <X aria-hidden="true" className="size-3.5" />}
+                {t.cancelSchedule}
+              </Button>
+            )}
+            {canRetry && (
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-9 shrink-0 px-3 sm:h-9"
+                disabled={retry.isPending}
+                onClick={() => retry.mutate()}
+              >
+                {retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <RotateCcw aria-hidden="true" className="size-3.5" />}
+                {t.retryUpload}
+              </Button>
             )}
           </div>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {item.status === "scheduled" ? (
-              <>
-                {privacyLabel}
-                {item.scheduledAt && <> · {relativeAge(item.scheduledAt, locale)}</>}
-              </>
-            ) : item.status === "cancelled" ? (
-              <>
-                {privacyLabel} · {relativeAge(when, locale)}
-              </>
-            ) : (
-              <>
-                <span className={cn(item.status === "failed" && "text-destructive", item.status === "published" && "text-foreground")}>
-                  {statusText}
-                  {item.status === "uploading" && <span className="tabular-nums"> · {progress}%</span>}
-                </span>{" "}
-                · {privacyLabel} · {relativeAge(when, locale)}
-              </>
-            )}
-          </p>
-        </div>
-        {item.status === "published" && item.externalUrl && (
-          <a
-            href={item.externalUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            {item.platform === "tiktok" ? t.openOnTikTok : item.platform === "instagram" ? t.openOnInstagram : t.openOnYouTube}
-            <ExternalLink aria-hidden="true" className="size-3.5" />
-          </a>
-        )}
-        {item.status === "scheduled" && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 shrink-0 px-2.5 text-xs text-muted-foreground hover:text-destructive"
-            disabled={cancelScheduled.isPending}
-            onClick={() => cancelScheduled.mutate()}
-          >
-            {cancelScheduled.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <X aria-hidden="true" className="size-3.5" />}
-            {t.cancelSchedule}
-          </Button>
-        )}
-        {canRetry && (
-          <Button
-            type="button"
-            variant="outline"
-            className="h-9 shrink-0 px-3"
-            disabled={retry.isPending}
-            onClick={() => retry.mutate()}
-          >
-            {retry.isPending ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <RotateCcw aria-hidden="true" className="size-3.5" />}
-            {t.retryUpload}
-          </Button>
         )}
       </div>
 
@@ -1474,7 +1494,9 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
               <TooltipTrigger asChild>
                 <span tabIndex={0} className="inline-flex items-center gap-1 font-mono font-medium tabular-nums text-foreground">
                   <Eye aria-hidden="true" className="size-3.5 text-muted-foreground" />
-                  {formatCompactCount(item.viewCount)}
+                  <span className="sm:hidden">{formatExactCount(item.viewCount, language)}</span>
+                  <span className="hidden sm:inline">{formatCompactCount(item.viewCount)}</span>
+                  <span className="font-sans text-[11px] font-normal text-muted-foreground sm:hidden">{t.views}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top">
@@ -1488,7 +1510,8 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
               <TooltipTrigger asChild>
                 <span tabIndex={0} className="inline-flex items-center gap-1 font-mono tabular-nums">
                   <Heart aria-hidden="true" className="size-3.5" />
-                  {formatCompactCount(item.likeCount)}
+                  <span className="sm:hidden">{formatExactCount(item.likeCount, language)}</span>
+                  <span className="hidden sm:inline">{formatCompactCount(item.likeCount)}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top">
@@ -1502,7 +1525,8 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
               <TooltipTrigger asChild>
                 <span tabIndex={0} className="inline-flex items-center gap-1 font-mono tabular-nums">
                   <MessageCircle aria-hidden="true" className="size-3.5" />
-                  {formatCompactCount(item.commentCount)}
+                  <span className="sm:hidden">{formatExactCount(item.commentCount, language)}</span>
+                  <span className="hidden sm:inline">{formatCompactCount(item.commentCount)}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top">
@@ -1513,7 +1537,7 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
           )}
           {item.metricsUpdatedAt && (
             <>
-              <Separator orientation="vertical" className="h-3" />
+              <Separator orientation="vertical" className="hidden h-3 sm:block" />
               <span className="text-[11px] text-muted-foreground/80">{t.statsUpdatedAgo.replace("{age}", relativeAge(item.metricsUpdatedAt, locale))}</span>
             </>
           )}
@@ -1525,7 +1549,7 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
                   variant="ghost"
                   size="icon-xs"
                   aria-label={errorHint}
-                  className="size-5 text-muted-foreground/80 hover:text-foreground"
+                  className="hidden size-5 text-muted-foreground/80 hover:text-foreground sm:inline-flex"
                 >
                   <Info aria-hidden="true" className="size-3.5" />
                 </Button>
@@ -1537,12 +1561,18 @@ function PublicationRow({ item, clipId }: { item: PublicationResponse; clipId: s
           )}
         </div>
       )}
+      {item.status === "published" && item.metricsError === "account_disconnected" && item.viewCount !== null && errorHint && (
+        <p className="mt-1.5 ml-11 flex items-start gap-1.5 text-xs leading-5 text-muted-foreground sm:hidden">
+          <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/80" />
+          <span>{errorHint}</span>
+        </p>
+      )}
       {item.status === "published" && item.viewCount === null && errorHint && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <p className="mt-2 ml-11 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Info aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/80" />
-              <span className="truncate">{errorHint}</span>
+            <p className="mt-2 ml-11 flex items-start gap-1.5 text-xs leading-5 text-muted-foreground sm:items-center">
+              <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/80 sm:mt-0" />
+              <span className="whitespace-normal sm:truncate">{errorHint}</span>
             </p>
           </TooltipTrigger>
           <TooltipContent side="top" align="start">

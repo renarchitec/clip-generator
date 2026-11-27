@@ -1,6 +1,6 @@
 import { useRuntime } from "@/lib/use-runtime"
 import { apiUrl, revealClipInFinder } from "@/lib/desktop"
-import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Clock, Copy, ExternalLink, Eye, Flame, FolderOpen, Heart, LoaderCircle, MessageCircle, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
+import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Clock, Copy, ExternalLink, Eye, Flame, FolderOpen, Heart, Info, LoaderCircle, MessageCircle, MoreVertical, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 import { Children, createContext, isValidElement, useContext, useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -10,7 +10,9 @@ import { Badge } from "@/components/ui/badge"
 import { api, type PlatformCaptions } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { formatScheduledDateTime, sourceLabel } from "@/lib/format"
 import { formatCompactCount, formatExactCount, summarizeClipViews } from "@/lib/format-views"
 import { useLanguage, useT } from "@/lib/i18n"
@@ -61,7 +63,7 @@ export function clipAspectClass(aspectRatio: ClipCardData["job"]["aspectRatio"])
 
 export function ClipCardGrid({ aspectRatio, children, className = "", ...props }: { aspectRatio: ClipCardData["job"]["aspectRatio"]; children: React.ReactNode; className?: string; "aria-label"?: string }) {
   const columns = aspectRatio === "16:9"
-    ? "grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+    ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
     : aspectRatio === "1:1"
       ? "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
       : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8"
@@ -71,8 +73,10 @@ export function ClipCardGrid({ aspectRatio, children, className = "", ...props }
 export function ClipCard({ clip, meta, downloaded = false, index, frame }: { clip: ClipCardData; meta: string; downloaded?: boolean; index?: number; /** Force one media frame (e.g. mixed-ratio library) */ frame?: "uniform" }) {
   const t = useT()
   const { isDesktop, publishEnabled } = useRuntime()
+  const isMobile = useIsMobile()
   const { language } = useLanguage()
   const [playerOpen, setPlayerOpen] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
   const [failedThumbnailId, setFailedThumbnailId] = useState<string | null>(null)
@@ -82,6 +86,7 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
     onSuccess: () => {
       setConfirmOpen(false)
       setPlayerOpen(false)
+      setActionsOpen(false)
       void client.invalidateQueries({ queryKey: ["jobs"] })
       void client.invalidateQueries({ queryKey: ["clips", "recent"] })
       toast.success(t.clipDeleted)
@@ -91,6 +96,10 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
   const title = clip.title || `${t.clip} ${index === undefined ? "" : index + 1}`.trim()
   const duration = Math.max(0, clip.endSec - clip.startSec)
   const viewsSummary = summarizeClipViews(clip.publications)
+  const isDownloaded = Boolean(downloaded || clip.downloadedAt)
+  const hookText = clip.hookText?.trim() ?? ""
+  const showHookText = Boolean(hookText && hookText.toLowerCase() !== title.trim().toLowerCase())
+
   return <article className={`clip-card group relative isolate min-w-0 overflow-hidden rounded-lg border border-border bg-card ${frame === "uniform" ? "aspect-[9/16]" : clipAspectClass(clip.job.aspectRatio)}`}>
     {isDesktop && failedThumbnailId !== clip.id ? (
       <img key={clip.id} src={apiUrl(`/clips/${clip.id}/thumbnail`)} alt="" loading="lazy" decoding="async" aria-hidden="true" onError={() => setFailedThumbnailId(clip.id)} className="absolute inset-0 size-full bg-black object-contain"/>
@@ -101,11 +110,17 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
       <span className="clip-card-play grid size-11 place-items-center rounded-full border border-accent/60 bg-background/75 text-primary shadow-lg backdrop-blur-sm transition duration-150 group-hover:scale-105 group-hover:ring-4 group-hover:ring-accent/20"><Play className="ml-0.5 size-[18px] fill-current"/></span>
       <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent px-3 pb-3 pt-16 text-left text-white"><span className="line-clamp-2 block min-h-10 text-xs font-semibold leading-5 sm:text-sm">{title}</span><span className="mt-1 line-clamp-2 block text-[10px] leading-4 text-white/80 sm:text-xs">{meta}</span></span>
     </button>
-    <div className="pointer-events-none absolute left-2 top-2 z-[2] flex flex-col items-start gap-1.5">
+    <div className="pointer-events-none absolute left-2 right-12 top-2 z-[2] flex flex-col items-start gap-1.5 sm:right-2">
       <span className="flex flex-wrap items-center gap-1">
         <span className="rounded-full border border-accent/40 bg-accent/90 px-2 py-1 font-mono text-[10px] font-semibold tabular-nums text-accent-foreground shadow-sm">{shortDuration(duration)}</span>
         {typeof clip.viralScore === "number" && <ViralScorePill score={clip.viralScore} />}
         {publishEnabled && <PublishBadge publications={clip.publications}/>}
+        {isDownloaded && (
+          <span title={t.downloaded} className="inline-flex h-[22px] items-center justify-center rounded-full border border-accent/40 bg-background/85 px-1.5 text-primary shadow-sm sm:hidden">
+            <CircleCheck aria-hidden="true" className="size-3.5"/>
+            <span className="sr-only">{t.downloaded}</span>
+          </span>
+        )}
       </span>
       {publishEnabled && viewsSummary.totalViews !== null && (
         <Tooltip>
@@ -114,7 +129,8 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
               type="button"
               onClick={(event) => {
                 event.stopPropagation()
-                setPlayerOpen(true)
+                if (isMobile) setActionsOpen(true)
+                else setPlayerOpen(true)
               }}
               aria-label={`${t.totalViews}: ${formatExactCount(viewsSummary.totalViews, language)}`}
               className="pointer-events-auto inline-flex h-[22px] items-center gap-1 rounded-full border border-white/15 bg-black/60 px-2 font-mono text-[10px] font-semibold tabular-nums text-white shadow-sm backdrop-blur-sm transition-colors hover:border-white/30 hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -145,13 +161,173 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
         </Tooltip>
       )}
     </div>
-    {(downloaded || clip.downloadedAt) && <span title={t.downloaded} className="absolute right-2 top-2 z-[2] transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0 [@media(hover:none)]:hidden inline-flex size-7 items-center justify-center rounded-full border border-accent/40 bg-background/85 text-primary shadow-sm"><CircleCheck aria-hidden="true" className="size-4"/><span className="sr-only">{t.downloaded}</span></span>}
-    <div className="clip-card-actions absolute right-2 top-2 z-[3] flex -translate-y-1 items-center gap-1 rounded-md border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100">
+    {isDownloaded && <span title={t.downloaded} className="absolute right-2 top-2 z-[2] hidden size-7 items-center justify-center rounded-full border border-accent/40 bg-background/85 text-primary shadow-sm transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0 sm:inline-flex"><CircleCheck aria-hidden="true" className="size-4"/><span className="sr-only">{t.downloaded}</span></span>}
+    {/* Mobile crisp MoreVertical trigger -> Clip Actions & Details Drawer */}
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        setActionsOpen(true)
+      }}
+      aria-label={`${t.moreActions}: ${title}`}
+      className="absolute right-1.5 top-1.5 z-[3] grid size-9 place-items-center rounded-full border border-white/20 bg-black/60 text-white shadow-md backdrop-blur-sm transition-colors active:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:hidden"
+    >
+      <MoreVertical aria-hidden="true" className="size-4"/>
+    </button>
+    {/* Desktop hover 3-icon bar */}
+    <div className="clip-card-actions absolute right-2 top-2 z-[3] hidden -translate-y-1 items-center gap-1 rounded-md border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 sm:flex">
       <a href={apiUrl(`/clips/${clip.id}/download`)} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-3.5"/></a>
       {publishEnabled && <button type="button" onClick={() => setPublishOpen(true)} aria-label={`${t.publish}: ${title}`} title={t.publish} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Send className="size-3.5"/></button>}
       {isDesktop && <button type="button" onClick={() => void revealClipInFinder(clip.id).catch(() => toast.error(t.desktop.revealFailed))} aria-label={`${t.desktop.showInFinder}: ${title}`} title={t.desktop.showInFinder} className="grid size-7 shrink-0 place-items-center rounded-md text-white hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><FolderOpen aria-hidden="true" className="size-3.5"/></button>}
       <button type="button" onClick={() => setConfirmOpen(true)} disabled={remove.isPending} aria-label={`${t.deleteClip}: ${title}`} title={t.deleteClip} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-destructive/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive disabled:opacity-50"><Trash2 className="size-3.5"/></button>
     </div>
+
+    {/* Mobile Clip Actions & Details Drawer */}
+    <Drawer open={actionsOpen} onOpenChange={setActionsOpen}>
+      <DrawerContent className="flex max-h-[88dvh] flex-col overflow-hidden pb-0">
+        <DrawerHeader className="shrink-0 border-b border-border px-4 py-3.5 text-left">
+          <DrawerTitle className="line-clamp-2 font-display text-base font-semibold leading-snug">{title}</DrawerTitle>
+          <DrawerDescription asChild>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <Badge variant="secondary" className="h-5 font-mono text-[11px] font-medium tabular-nums">
+                {shortDuration(duration)}
+              </Badge>
+              {typeof clip.viralScore === "number" && <ViralScorePill score={clip.viralScore} surface="card" />}
+              {isDownloaded && (
+                <Badge variant="outline" className="h-5 gap-1 text-[11px]">
+                  <CircleCheck aria-hidden="true" className="size-3 text-accent"/>
+                  {t.downloaded}
+                </Badge>
+              )}
+              {meta && <span className="truncate">{meta}</span>}
+            </div>
+          </DrawerDescription>
+        </DrawerHeader>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+          {showHookText && (
+            <div className="rounded-lg border border-border bg-muted/35 px-3 py-2.5 text-xs">
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t.hookLabel}</span>
+              <p className="mt-1 italic leading-5 text-foreground">“{hookText}”</p>
+            </div>
+          )}
+
+          {publishEnabled && viewsSummary.hasPublished && (
+            <div className="space-y-2 rounded-xl border border-border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium uppercase tracking-[.06em] text-muted-foreground">{t.viewStats}</span>
+                {viewsSummary.totalViews !== null && (
+                  <span className="inline-flex items-center gap-1 font-mono text-xs font-semibold tabular-nums text-foreground">
+                    <Eye aria-hidden="true" className="size-3.5 text-muted-foreground"/>
+                    {formatExactCount(viewsSummary.totalViews, language)}
+                  </span>
+                )}
+              </div>
+              <div className="divide-y divide-border/70">
+                {viewsSummary.byPlatform.map((entry) => (
+                  <div key={entry.platform} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-1 last:pb-0 text-xs">
+                    <span className="flex items-center gap-2 font-medium text-foreground">
+                      <PlatformMark platform={entry.platform} className="size-4 shrink-0"/>
+                      {t.socialPlatforms[entry.platform]}
+                    </span>
+                    {entry.viewCount !== null ? (
+                      <div className="flex flex-wrap items-center gap-3 font-mono tabular-nums text-muted-foreground">
+                        <span className="inline-flex items-center gap-1 text-foreground">
+                          <Eye aria-hidden="true" className="size-3 text-muted-foreground"/>
+                          {formatExactCount(entry.viewCount, language)}
+                        </span>
+                        {entry.likeCount !== null && (
+                          <span className="inline-flex items-center gap-1">
+                            <Heart aria-hidden="true" className="size-3"/>
+                            {formatExactCount(entry.likeCount, language)}
+                          </span>
+                        )}
+                        {entry.commentCount !== null && (
+                          <span className="inline-flex items-center gap-1">
+                            <MessageCircle aria-hidden="true" className="size-3"/>
+                            {formatExactCount(entry.commentCount, language)}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">{entry.metricsError ? metricsErrorMessage(entry.metricsError, t) : t.statsPending}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2">
+            <Button
+              type="button"
+              variant="default"
+              className="min-h-11 w-full justify-start gap-3 px-4 text-sm"
+              onClick={() => {
+                setActionsOpen(false)
+                setPlayerOpen(true)
+              }}
+            >
+              <Play aria-hidden="true" className="size-4 fill-current"/>
+              {t.playClip}
+            </Button>
+            {publishEnabled && (
+              <Button
+                type="button"
+                variant="secondary"
+                className="min-h-11 w-full justify-start gap-3 px-4 text-sm"
+                onClick={() => {
+                  setActionsOpen(false)
+                  setPublishOpen(true)
+                }}
+              >
+                <Send aria-hidden="true" className="size-4"/>
+                {t.publish}
+              </Button>
+            )}
+            <Button asChild variant="outline" className="min-h-11 w-full justify-start gap-3 px-4 text-sm">
+              <a href={apiUrl(`/clips/${clip.id}/download`)} download onClick={() => setActionsOpen(false)}>
+                <ArrowDownToLine aria-hidden="true" className="size-4"/>
+                {t.download}
+              </a>
+            </Button>
+            {isDesktop && (
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11 w-full justify-start gap-3 px-4 text-sm"
+                onClick={() => {
+                  setActionsOpen(false)
+                  void revealClipInFinder(clip.id).catch(() => toast.error(t.desktop.revealFailed))
+                }}
+              >
+                <FolderOpen aria-hidden="true" className="size-4"/>
+                {t.desktop.showInFinder}
+              </Button>
+            )}
+            <Button asChild variant="outline" className="min-h-11 w-full justify-start gap-3 px-4 text-sm">
+              <Link to="/jobs/$jobId" params={{ jobId: clip.job.id }} onClick={() => setActionsOpen(false)}>
+                <ExternalLink aria-hidden="true" className="size-4"/>
+                {t.openJob}
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={remove.isPending}
+              className="min-h-11 w-full justify-start gap-3 px-4 text-sm text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => {
+                setActionsOpen(false)
+                setConfirmOpen(true)
+              }}
+            >
+              <Trash2 aria-hidden="true" className="size-4"/>
+              {t.deleteClip}
+            </Button>
+          </div>
+        </div>
+      </DrawerContent>
+    </Drawer>
+
     <ClipPlayerDialog clip={clip} open={playerOpen} onOpenChange={setPlayerOpen} meta={meta}/>
     {publishEnabled && <PublishDialog clip={clip} open={publishOpen} onOpenChange={setPublishOpen}/>}
     <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!remove.isPending) setConfirmOpen(open) }}>
@@ -169,6 +345,7 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
 export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onPublish }: { clip: ClipCardData | null; open: boolean; onOpenChange: (open: boolean) => void; meta?: string; onDelete?: () => void; onPublish?: () => void }) {
   const t = useT()
   const { isDesktop, publishEnabled } = useRuntime()
+  const isMobile = useIsMobile()
   const { language } = useLanguage()
   const client = useQueryClient()
   const feed = useContext(ClipFeedContext)
@@ -179,6 +356,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
   const [mediaDuration, setMediaDuration] = useState(0)
   const [bufferedTime, setBufferedTime] = useState(0)
   const [captionExpanded, setCaptionExpanded] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [publishClip, setPublishClip] = useState<ClipCardData | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -250,11 +428,16 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
   }, [open, clip?.id])
 
   useEffect(() => {
-    if (!open || !activeClip) return
+    if (!open) {
+      setDetailsOpen(false)
+      return
+    }
+    if (!activeClip) return
     setCurrentTime(0)
     setBufferedTime(0)
     setMediaDuration(0)
     setCaptionExpanded(false)
+    setDetailsOpen(false)
     setCopied(false)
     setPlaying(true)
     const video = videoRef.current
@@ -387,8 +570,8 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
 
   return <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-1.5rem)] w-auto max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border border-white/15 bg-black p-0 text-white shadow-2xl outline-none sm:p-0" onKeyDown={handleKeyDown}>
-        <div className="relative aspect-[9/16] h-[min(88dvh,764px,167vw)] max-h-[min(88dvh,820px)] w-auto max-w-[min(94vw,430px)] overflow-hidden rounded-2xl bg-black">
+      <DialogContent className="inset-0 left-0 top-0 h-dvh w-screen max-h-none max-w-none translate-x-0 translate-y-0 overflow-hidden rounded-none border-0 bg-black p-0 text-white shadow-2xl outline-none sm:inset-auto sm:left-1/2 sm:top-1/2 sm:h-auto sm:max-h-[calc(100dvh-1.5rem)] sm:w-auto sm:max-w-[calc(100vw-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border sm:border-white/15 sm:p-0" onKeyDown={handleKeyDown}>
+        <div className="relative size-full overflow-hidden bg-black sm:aspect-[9/16] sm:h-[min(88dvh,764px,167vw)] sm:max-h-[min(88dvh,820px)] sm:w-auto sm:max-w-[min(94vw,430px)] sm:rounded-2xl">
           <div
             role="button"
             tabIndex={-1}
@@ -422,7 +605,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
             {!playing && <span className="pointer-events-none absolute inset-0 grid place-items-center"><span className="grid size-16 place-items-center rounded-full border border-white/20 bg-black/55 shadow-xl backdrop-blur-md"><Play className="ml-1 size-7 fill-current"/></span></span>}
           </div>
 
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 bg-gradient-to-b from-black/80 via-black/35 to-transparent pb-12 pl-3 pr-2 pt-3">
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 bg-gradient-to-b from-black/80 via-black/35 to-transparent pb-12 pl-3 pr-2 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -438,13 +621,17 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
                     {viewsSummary.totalViews !== null && viewsSummary.byPlatform.length > 1 && (
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <span
-                            tabIndex={0}
-                            className="inline-flex h-6 items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isMobile) setDetailsOpen(true)
+                            }}
+                            aria-label={`${t.totalViews}: ${formatExactCount(viewsSummary.totalViews, language)}`}
+                            className="inline-flex h-7 items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2.5 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:h-6 sm:px-2"
                           >
                             <Eye aria-hidden="true" className="size-3 text-accent"/>
                             {formatCompactCount(viewsSummary.totalViews)}
-                          </span>
+                          </button>
                         </TooltipTrigger>
                         <TooltipContent side="bottom" align="start">
                           <span>{t.totalViews}:</span>
@@ -455,13 +642,17 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
                     {viewsSummary.byPlatform.map((entry) => (
                       <Tooltip key={entry.platform}>
                         <TooltipTrigger asChild>
-                          <span
-                            tabIndex={0}
-                            className="inline-flex h-6 items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 font-mono text-[10px] font-medium tabular-nums text-white/95 backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isMobile) setDetailsOpen(true)
+                            }}
+                            aria-label={`${t.socialPlatforms[entry.platform]} ${t.views}: ${entry.viewCount !== null ? formatExactCount(entry.viewCount, language) : t.statsPending}`}
+                            className="inline-flex h-7 items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2.5 font-mono text-[10px] font-medium tabular-nums text-white/95 backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:h-6 sm:px-2"
                           >
                             <PlatformMark platform={entry.platform} className="size-3.5 shrink-0 [&_.fill-foreground]:fill-white"/>
                             {entry.viewCount !== null ? <span>{formatCompactCount(entry.viewCount)}</span> : <span className="text-white/55">—</span>}
-                          </span>
+                          </button>
                         </TooltipTrigger>
                         <TooltipContent side="bottom" align="start" className="flex-col items-start gap-1 p-2">
                           <span className="font-medium">{t.socialPlatforms[entry.platform]}</span>
@@ -489,9 +680,9 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
                             refreshMetrics.mutate(activeClip.id)
                           }}
                           aria-label={refreshMetrics.isPending ? t.refreshingStats : t.refreshStats}
-                          className="size-6 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70"
+                          className="size-8 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70 sm:size-6"
                         >
-                          <RefreshCw aria-hidden="true" className={cn("size-3", refreshMetrics.isPending && "animate-spin")}/>
+                          <RefreshCw aria-hidden="true" className={cn("size-3.5 sm:size-3", refreshMetrics.isPending && "animate-spin")}/>
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">
@@ -501,9 +692,9 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
                   </div>
                 )}
               </div>
-              <div className="pointer-events-auto flex shrink-0 items-center gap-1">
-                <Button type="button" variant="ghost" size="icon-sm" onClick={toggleMute} aria-label={muted ? t.unmuteClip : t.muteClip} title={muted ? t.unmuteClip : t.muteClip} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70">{muted ? <VolumeX className="size-4"/> : <Volume2 className="size-4"/>}</Button>
-                <DialogClose asChild><Button type="button" variant="ghost" size="icon-sm" aria-label={t.closePlayer} title={t.closePlayer} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70"><X className="size-4"/></Button></DialogClose>
+              <div className="pointer-events-auto flex shrink-0 items-center gap-1.5 sm:gap-1">
+                <Button type="button" variant="ghost" size="icon-sm" onClick={toggleMute} aria-label={muted ? t.unmuteClip : t.muteClip} title={muted ? t.unmuteClip : t.muteClip} className="size-10 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70 sm:size-9">{muted ? <VolumeX className="size-4"/> : <Volume2 className="size-4"/>}</Button>
+                <DialogClose asChild><Button type="button" variant="ghost" size="icon-sm" aria-label={t.closePlayer} title={t.closePlayer} className="size-10 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70 sm:size-9"><X className="size-4"/></Button></DialogClose>
               </div>
             </div>
           </div>
@@ -513,7 +704,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
             <Button type="button" variant="ghost" size="icon-sm" onClick={goNext} disabled={activeIndex >= feed.length - 1} aria-label={t.nextClip} title={t.nextClip} className="size-9 rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md hover:bg-black/75 hover:text-white focus-visible:ring-white/70 disabled:opacity-35"><ChevronDown className="size-4"/></Button>
           </div>}
 
-          <div className="absolute bottom-16 right-2 z-30 flex w-14 flex-col items-center gap-3">
+          <div className="absolute bottom-[calc(4rem+env(safe-area-inset-bottom))] right-2 z-30 flex w-14 flex-col items-center gap-2 sm:bottom-16 sm:gap-3">
             {publishEnabled && <button type="button" onClick={openPublish} aria-label={`${t.publish}: ${title}`} title={t.publish} className="group/rail flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
               <span className="grid size-11 place-items-center rounded-full border border-accent/50 bg-accent text-accent-foreground shadow-lg backdrop-blur-md transition-transform group-hover/rail:scale-105"><Send className="size-[18px]"/></span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.publish}</span>
@@ -526,11 +717,15 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
               <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105"><ArrowDownToLine className="size-[18px]"/></span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.download}</span>
             </a>
-            <button type="button" onClick={copyCaption} aria-label={t.tiktokCopyCaption} title={t.tiktokCopyCaption} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+            <button type="button" onClick={() => setDetailsOpen(true)} aria-label={t.clipDetails} title={t.clipDetails} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:hidden">
+              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform active:scale-95"><Info className="size-[18px]"/></span>
+              <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.clipDetails}</span>
+            </button>
+            <button type="button" onClick={copyCaption} aria-label={t.tiktokCopyCaption} title={t.tiktokCopyCaption} className="hidden w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:flex">
               <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105">{copied ? <Check className="size-[18px] text-accent"/> : <Copy className="size-[18px]"/>}</span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.tiktokCopyCaption}</span>
             </button>
-            <Link to="/jobs/$jobId" params={{ jobId: activeClip.job.id }} onClick={() => onOpenChange(false)} aria-label={`${t.openJob}: ${title}`} title={t.openJob} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+            <Link to="/jobs/$jobId" params={{ jobId: activeClip.job.id }} onClick={() => onOpenChange(false)} aria-label={`${t.openJob}: ${title}`} title={t.openJob} className="hidden w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:flex">
               <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105"><ExternalLink className="size-[18px]"/></span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.openJob}</span>
             </Link>
@@ -540,7 +735,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
             </button>
           </div>
 
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/70 to-transparent pb-12 pl-3 pr-20 pt-16">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/70 to-transparent pb-[calc(3.75rem+env(safe-area-inset-bottom))] pl-3 pr-20 pt-16 sm:pb-12">
             <DialogDescription className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] leading-4 text-white/75 sm:text-xs">
               <span className="line-clamp-1 min-w-0">{metaLabel}</span>
               {showTimeRange && <>
@@ -550,49 +745,241 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
               {typeof activeClip.viralScore === "number" && <ViralScorePill score={activeClip.viralScore} />}
               {activeClip.job.aspectRatio !== "9:16" && <Badge variant="outline" className="h-5 border-white/20 bg-black/50 px-1.5 text-[10px] text-white">{activeClip.job.aspectRatio}</Badge>}
             </DialogDescription>
-            <DialogTitle className="mt-1 line-clamp-2 font-display text-sm font-semibold leading-snug text-white sm:text-base">{title}</DialogTitle>
+            <DialogTitle className="mt-1 line-clamp-2 font-display text-sm font-semibold leading-snug text-white sm:text-base">
+              {isMobile ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setDetailsOpen(true)
+                  }}
+                  className="pointer-events-auto text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                >
+                  {title}
+                </button>
+              ) : (
+                title
+              )}
+            </DialogTitle>
             {showHookText && (
               <p className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] leading-4 text-white/90 backdrop-blur-sm">
                 <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-wide text-accent">{t.hookLabel}:</span>
                 <span className="line-clamp-1 min-w-0 italic">“{hookText}”</span>
               </p>
             )}
-            {hasCaption && <div className="pointer-events-auto mt-1.5">
-              {captionExpanded ? (
-                <div className="max-h-36 overflow-y-auto rounded-lg bg-black/60 p-2 text-xs leading-5 text-white/90 backdrop-blur-sm sm:text-sm">
-                  {captionText && <p className="whitespace-pre-line">{captionText}</p>}
-                  {tags.length > 0 && <p className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">{tags.map((tag) => <span key={tag} className="font-semibold text-accent">#{tag}</span>)}</p>}
-                </div>
+            {hasCaption && (
+              isMobile ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setDetailsOpen(true)
+                  }}
+                  className="pointer-events-auto mt-1.5 block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                >
+                  <p className="line-clamp-2 text-xs leading-5 text-white/90">
+                    {captionText}
+                    {captionText && tags.length > 0 ? " " : ""}
+                    {tags.map((tag) => <span key={tag} className="mr-1.5 font-semibold text-accent">#{tag}</span>)}
+                  </p>
+                </button>
               ) : (
-                <p className="line-clamp-2 text-xs leading-5 text-white/90 sm:text-sm">
-                  {captionText}
-                  {captionText && tags.length > 0 ? " " : ""}
-                  {tags.map((tag) => <span key={tag} className="mr-1.5 font-semibold text-accent">#{tag}</span>)}
-                </p>
-              )}
-              {canExpandCaption && <button type="button" onClick={() => setCaptionExpanded((value) => !value)} className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70 transition-colors hover:text-white sm:text-xs">{captionExpanded ? t.lessCaption : t.moreCaption}</button>}
-            </div>}
+                <div className="pointer-events-auto mt-1.5">
+                  {captionExpanded ? (
+                    <div className="max-h-36 overflow-y-auto rounded-lg bg-black/60 p-2 text-xs leading-5 text-white/90 backdrop-blur-sm sm:text-sm">
+                      {captionText && <p className="whitespace-pre-line">{captionText}</p>}
+                      {tags.length > 0 && <p className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">{tags.map((tag) => <span key={tag} className="font-semibold text-accent">#{tag}</span>)}</p>}
+                    </div>
+                  ) : (
+                    <p className="line-clamp-2 text-xs leading-5 text-white/90 sm:text-sm">
+                      {captionText}
+                      {captionText && tags.length > 0 ? " " : ""}
+                      {tags.map((tag) => <span key={tag} className="mr-1.5 font-semibold text-accent">#{tag}</span>)}
+                    </p>
+                  )}
+                  {canExpandCaption && <button type="button" onClick={() => setCaptionExpanded((value) => !value)} className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70 transition-colors hover:text-white sm:text-xs">{captionExpanded ? t.lessCaption : t.moreCaption}</button>}
+                </div>
+              )
+            )}
           </div>
 
-          <div className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/90 to-transparent pb-2 pl-3 pr-3 pt-6">
+          <div
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/90 to-transparent pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-3 pr-3 pt-4 sm:pb-2 sm:pt-6"
+          >
             <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={0}
-                max={seekDuration}
-                step={0.1}
-                value={Math.min(currentTime, seekDuration)}
-                onChange={(event) => seek(Number(event.target.value))}
-                aria-label={t.seekVideo}
-                className="h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/70 [&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow"
-                style={{ background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${playedPercent}%, rgba(255,255,255,.45) ${playedPercent}%, rgba(255,255,255,.45) ${trackFill}%, rgba(255,255,255,.22) ${trackFill}%, rgba(255,255,255,.22) 100%)` }}
-              />
+              <div className="relative flex h-8 min-w-0 flex-1 touch-none items-center py-2 sm:h-6">
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-x-0 h-1.5 rounded-full"
+                  style={{ background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${playedPercent}%, rgba(255,255,255,.45) ${playedPercent}%, rgba(255,255,255,.45) ${trackFill}%, rgba(255,255,255,.22) ${trackFill}%, rgba(255,255,255,.22) 100%)` }}
+                />
+                <input
+                  type="range"
+                  min={0}
+                  max={seekDuration}
+                  step={0.1}
+                  value={Math.min(currentTime, seekDuration)}
+                  onChange={(event) => seek(Number(event.target.value))}
+                  aria-label={t.seekVideo}
+                  className="relative z-10 h-8 w-full cursor-pointer appearance-none bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:h-6 [&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:shadow [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow sm:[&::-moz-range-thumb]:size-3 sm:[&::-webkit-slider-thumb]:size-3"
+                />
+              </div>
               <span className="shrink-0 font-mono text-[10px] tabular-nums text-white/85">{formatTimecode(currentTime)} / {formatTimecode(seekDuration)}</span>
             </div>
           </div>
         </div>
       </DialogContent>
     </Dialog>
+
+    {/* Player Clip Details & Stats Drawer (mobile) */}
+    <Drawer open={detailsOpen} onOpenChange={setDetailsOpen}>
+      <DrawerContent className="flex max-h-[85dvh] flex-col overflow-hidden pb-0">
+        <DrawerHeader className="shrink-0 border-b border-border px-4 py-3.5 text-left">
+          <DrawerTitle className="font-display text-base font-semibold leading-snug">{title}</DrawerTitle>
+          <DrawerDescription asChild>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              {metaLabel && <span className="min-w-0 truncate">{metaLabel}</span>}
+              {showTimeRange && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono tabular-nums">{timeRange}</span>
+                </>
+              )}
+              {typeof activeClip.viralScore === "number" && <ViralScorePill score={activeClip.viralScore} surface="card" />}
+              {activeClip.job.aspectRatio !== "9:16" && (
+                <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                  {activeClip.job.aspectRatio}
+                </Badge>
+              )}
+            </div>
+          </DrawerDescription>
+        </DrawerHeader>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+          {showHookText && (
+            <div className="rounded-lg border border-border bg-muted/35 px-3 py-2.5 text-xs">
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t.hookLabel}</span>
+              <p className="mt-1 italic leading-5 text-foreground">“{hookText}”</p>
+            </div>
+          )}
+
+          {/* Full caption + hashtags + copy */}
+          <div className="space-y-2.5 rounded-xl border border-border bg-muted/20 p-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium uppercase tracking-[.06em] text-muted-foreground">{t.publishCaptionLabelTikTok}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={copyCaption}
+                className="min-h-10 gap-1.5 px-3 text-xs"
+              >
+                {copied ? <Check aria-hidden="true" className="size-3.5 text-accent"/> : <Copy aria-hidden="true" className="size-3.5"/>}
+                {t.tiktokCopyCaption}
+              </Button>
+            </div>
+            {hasCaption ? (
+              <div className="space-y-2 text-sm leading-6 text-foreground">
+                {captionText && <p className="whitespace-pre-line">{captionText}</p>}
+                {tags.length > 0 && (
+                  <p className="flex flex-wrap gap-x-2 gap-y-1 text-xs">
+                    {tags.map((tag) => (
+                      <span key={tag} className="font-semibold text-primary">#{tag}</span>
+                    ))}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t.noCaptionYet}</p>
+            )}
+          </div>
+
+          {/* Per-platform performance stats + refresh */}
+          {publishEnabled && viewsSummary.hasPublished && (
+            <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs font-medium uppercase tracking-[.06em] text-muted-foreground">{t.viewStats}</span>
+                  {viewsSummary.totalViews !== null && (
+                    <p className="mt-0.5 flex items-center gap-1.5 font-mono text-sm font-semibold tabular-nums text-foreground">
+                      <Eye aria-hidden="true" className="size-4 text-muted-foreground"/>
+                      {formatExactCount(viewsSummary.totalViews, language)}
+                      <span className="font-sans text-xs font-normal text-muted-foreground">{t.views}</span>
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={refreshMetrics.isPending}
+                  onClick={() => refreshMetrics.mutate(activeClip.id)}
+                  className="min-h-10 gap-1.5 px-3 text-xs"
+                >
+                  <RefreshCw aria-hidden="true" className={cn("size-3.5", refreshMetrics.isPending && "animate-spin")}/>
+                  {refreshMetrics.isPending ? t.refreshingStats : t.refreshStats}
+                </Button>
+              </div>
+              <div className="divide-y divide-border/70">
+                {viewsSummary.byPlatform.map((entry) => (
+                  <div key={entry.platform} className="space-y-1 py-2.5 first:pt-1 last:pb-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="flex items-center gap-2 font-medium text-foreground">
+                        <PlatformMark platform={entry.platform} className="size-4 shrink-0"/>
+                        {t.socialPlatforms[entry.platform]}
+                      </span>
+                      {entry.viewCount !== null ? (
+                        <div className="flex flex-wrap items-center gap-3 font-mono tabular-nums text-muted-foreground">
+                          <span className="inline-flex items-center gap-1 text-foreground">
+                            <Eye aria-hidden="true" className="size-3.5 text-muted-foreground"/>
+                            {formatExactCount(entry.viewCount, language)}
+                          </span>
+                          {entry.likeCount !== null && (
+                            <span className="inline-flex items-center gap-1">
+                              <Heart aria-hidden="true" className="size-3.5"/>
+                              {formatExactCount(entry.likeCount, language)}
+                            </span>
+                          )}
+                          {entry.commentCount !== null && (
+                            <span className="inline-flex items-center gap-1">
+                              <MessageCircle aria-hidden="true" className="size-3.5"/>
+                              {formatExactCount(entry.commentCount, language)}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">{t.statsPending}</span>
+                      )}
+                    </div>
+                    {entry.metricsError && (
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        {metricsErrorMessage(entry.metricsError, t)}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Button asChild variant="outline" className="min-h-11 w-full justify-center gap-2 text-sm">
+            <Link
+              to="/jobs/$jobId"
+              params={{ jobId: activeClip.job.id }}
+              onClick={() => {
+                setDetailsOpen(false)
+                onOpenChange(false)
+              }}
+            >
+              <ExternalLink aria-hidden="true" className="size-4"/>
+              {t.openJob}
+            </Link>
+          </Button>
+        </div>
+      </DrawerContent>
+    </Drawer>
 
     {publishEnabled && publishClip && <PublishDialog clip={publishClip} open={Boolean(publishClip)} onOpenChange={(value) => { if (!value) setPublishClip(null) }}/>}
 
@@ -608,22 +995,29 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
   </>
 }
 
-function ViralScorePill({ score, className }: { score: number; className?: string }) {
+function ViralScorePill({ score, className, surface = "overlay" }: { score: number; className?: string; surface?: "overlay" | "card" }) {
   const t = useT()
   if (!Number.isFinite(score)) return null
   const rounded = Math.max(0, Math.min(100, Math.round(score)))
-  const tone = rounded >= 80
-    ? "border-emerald-400/30 bg-emerald-500/20 text-emerald-300"
-    : rounded >= 60
-      ? "border-amber-400/30 bg-amber-500/20 text-amber-300"
-      : "border-zinc-400/30 bg-zinc-500/25 text-zinc-200"
+  const tone = surface === "card"
+    ? rounded >= 80
+      ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
+      : rounded >= 60
+        ? "border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-300"
+        : "border-zinc-500/30 bg-zinc-500/12 text-zinc-700 dark:text-zinc-300"
+    : rounded >= 80
+      ? "border-emerald-400/30 bg-emerald-500/20 text-emerald-300"
+      : rounded >= 60
+        ? "border-amber-400/30 bg-amber-500/20 text-amber-300"
+        : "border-zinc-400/30 bg-zinc-500/25 text-zinc-200"
   const tooltip = t.viralScoreTooltip.replace("{score}", String(rounded))
   return (
     <span
       title={tooltip}
       aria-label={tooltip}
       className={cn(
-        "pointer-events-auto inline-flex h-[22px] items-center gap-0.5 rounded-full border px-1.5 font-mono text-[10px] font-semibold tabular-nums shadow-sm backdrop-blur-md [text-shadow:0_1px_2px_rgb(0_0_0/60%)]",
+        "pointer-events-auto inline-flex h-[22px] items-center gap-0.5 rounded-full border px-1.5 font-mono text-[10px] font-semibold tabular-nums",
+        surface === "overlay" && "shadow-sm backdrop-blur-md [text-shadow:0_1px_2px_rgb(0_0_0/60%)]",
         tone,
         className,
       )}

@@ -20,9 +20,9 @@ export type JobStage = (typeof JOB_STAGES)[number];
 export type JobMode = 'auto' | 'manual';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
-export const REFRAME_MODES = ['face_tracking', 'black_bars', 'blurred_fill'] as const;
+export const REFRAME_MODES = ['center_crop', 'face_tracking', 'black_bars', 'blurred_fill'] as const;
 export type ReframeMode = (typeof REFRAME_MODES)[number];
-export const DEFAULT_REFRAME: ReframeMode = 'face_tracking';
+export const DEFAULT_REFRAME: ReframeMode = 'center_crop';
 
 /** Rasio output klip: 9:16 (default), 1:1, 16:9. */
 export const ASPECT_RATIOS = ['9:16', '1:1', '16:9'] as const;

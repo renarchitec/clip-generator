@@ -38,6 +38,7 @@ impl AspectRatio {
 #[serde(rename_all = "snake_case")]
 pub enum ReframeMode {
     #[default]
+    CenterCrop,
     FaceTracking,
     BlackBars,
     BlurredFill,
@@ -537,7 +538,7 @@ impl Default for JobData {
             job_id: String::new(),
             url: String::new(),
             mode: JobMode::Auto,
-            reframe: ReframeMode::FaceTracking,
+            reframe: ReframeMode::default(),
             captions: true,
             two_speakers: false,
             facecam: false,
@@ -586,11 +587,14 @@ impl JobData {
             "manual" => JobMode::Manual,
             s => bail!("mode tidak dikenal: {s:?} (pakai auto/manual)"),
         };
-        let reframe = match parse_enum("reframe", "face_tracking").as_str() {
+        let reframe = match parse_enum("reframe", "center_crop").as_str() {
+            "center_crop" => ReframeMode::CenterCrop,
             "face_tracking" => ReframeMode::FaceTracking,
             "black_bars" => ReframeMode::BlackBars,
             "blurred_fill" => ReframeMode::BlurredFill,
-            s => bail!("reframe tidak dikenal: {s:?} (face_tracking/black_bars/blurred_fill)"),
+            s => bail!(
+                "reframe tidak dikenal: {s:?} (center_crop/face_tracking/black_bars/blurred_fill)"
+            ),
         };
         let list = |v: &Value| {
             v.as_array()
@@ -886,6 +890,26 @@ mod tests {
         assert_eq!((wm.x, wm.opacity), (1., 1.));
         assert_eq!(wm.chroma_key.as_ref().unwrap().similarity, 0.01);
         assert_eq!(wm.chroma_key.as_ref().unwrap().blend, 0.5);
+    }
+    #[test]
+    fn job_reframe_defaults_to_center_crop_and_accepts_all_modes() {
+        let mut raw = json!({"jobId":"test","url":"local"});
+        assert_eq!(JobData::default().reframe, ReframeMode::CenterCrop);
+        assert_eq!(
+            JobData::from_json(raw.clone()).unwrap().reframe,
+            ReframeMode::CenterCrop
+        );
+        for (value, mode) in [
+            ("center_crop", ReframeMode::CenterCrop),
+            ("face_tracking", ReframeMode::FaceTracking),
+            ("black_bars", ReframeMode::BlackBars),
+            ("blurred_fill", ReframeMode::BlurredFill),
+        ] {
+            raw["reframe"] = json!(value);
+            let job = JobData::from_json(raw.clone()).unwrap();
+            assert_eq!(job.reframe, mode);
+            assert_eq!(serde_json::to_value(job).unwrap()["reframe"], value);
+        }
     }
     #[test]
     fn caption_preset_is_recomputed() {

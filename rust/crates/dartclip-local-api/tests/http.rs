@@ -545,6 +545,7 @@ async fn job_creation_sse_cancellation_retry_and_delete() {
     let id = job["id"].as_str().unwrap();
     let path = format!("/jobs/{id}");
     assert_eq!(job["status"], "queued");
+    assert_eq!(job["reframe"], "center_crop");
     assert_eq!(job["transcriptSource"], "youtube");
     assert_eq!(job["clips"], json!([]));
     assert_eq!(job["clipCount"], 2);

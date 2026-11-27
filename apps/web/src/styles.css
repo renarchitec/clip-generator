@@ -224,9 +224,19 @@
 
 @layer base {
   * { @apply border-border outline-ring/50; }
+  html, body { overflow-x: clip; }
   body { @apply bg-background text-foreground font-sans antialiased; }
   html { @apply font-sans; font-feature-settings: "ss01" on, "cv11" on; }
   ::selection { background: color-mix(in oklab, var(--primary) 25%, transparent); }
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Long alerts can scroll natively; the drawer handle retains swipe gestures. */
+[data-vaul-drawer][data-slot="alert-dialog-content"] {
+  touch-action: pan-y;
 }
 
 @keyframes publish-slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }

@@ -6,6 +6,7 @@ use image::{
     GrayImage, Luma, RgbImage,
 };
 use std::{path::Path, time::Duration};
+use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 pub const HOOK_INTRO_DURATION_SEC: f64 = 0.9;
@@ -39,20 +40,76 @@ pub(crate) async fn cover_frame(
     out: &Path,
     cancel: &CancellationToken,
 ) -> Result<()> {
+    pick_cover(
+        sample_offsets(duration, 0.1),
+        |offset| {
+            let mut cmd = tools::ffmpeg(ffmpeg);
+            cmd.args(["-ss", &format!("{:.3}", start + offset), "-i"])
+                .arg(video)
+                .args(["-map", "0:v:0"]);
+            cmd
+        },
+        out,
+        cancel,
+    )
+    .await
+}
+
+pub(crate) async fn cover_frame_filtered(
+    ffmpeg: &Path,
+    video: &Path,
+    (start, duration): (f64, f64),
+    filter_args: &[&str],
+    time_dependent: bool,
+    out: &Path,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    pick_cover(
+        sample_offsets(duration, 0.05),
+        |offset| {
+            let mut cmd = tools::ffmpeg(ffmpeg);
+            let seek = if time_dependent {
+                start
+            } else {
+                start + offset
+            };
+            cmd.args(["-ss", &format!("{seek:.3}"), "-i"])
+                .arg(video)
+                .args(filter_args);
+            if time_dependent {
+                // Crop expressions must see time relative to the start of the clip.
+                cmd.args(["-ss", &format!("{offset:.3}")]);
+            }
+            cmd
+        },
+        out,
+        cancel,
+    )
+    .await
+}
+
+fn sample_offsets(duration: f64, end_pad: f64) -> impl Iterator<Item = f64> {
+    [0.25, 0.8, 1.6, (duration.max(0.5) * 0.35).min(3.)]
+        .into_iter()
+        .map(move |offset: f64| offset.clamp(0., (duration - end_pad).max(0.)))
+}
+
+async fn pick_cover(
+    offsets: impl Iterator<Item = f64>,
+    command: impl Fn(f64) -> Command,
+    out: &Path,
+    cancel: &CancellationToken,
+) -> Result<()> {
     let mut seen = Vec::new();
     let mut lit = None;
     let mut brightest = None;
-    for offset in [0.25, 0.8, 1.6, (duration.max(0.5) * 0.35).min(3.)] {
-        let at = (start + offset).clamp(start, (start + duration - 0.1).max(start));
-        if seen.contains(&at) {
+    for offset in offsets {
+        if seen.contains(&offset) {
             continue;
         }
-        seen.push(at);
-        let args = ["-ss", &format!("{at:.3}"), "-i"];
+        seen.push(offset);
         let Ok(output) = tools::run(
-            tools::ffmpeg(ffmpeg).args(args).arg(video).args([
-                "-map",
-                "0:v:0",
+            command(offset).args([
                 "-frames:v",
                 "1",
                 "-an",
@@ -138,25 +195,29 @@ fn byte(x: f64) -> u8 {
     x.round_ties_even().clamp(0., 255.) as u8
 }
 fn background(frame: &RgbImage, w: u32, h: u32, focus: (f32, f32)) -> RgbImage {
-    let scale = (w as f64 / frame.width() as f64).max(h as f64 / frame.height() as f64);
-    let (sw, sh) = (
-        ((frame.width() as f64 * scale).ceil() as u32).max(w),
-        ((frame.height() as f64 * scale).ceil() as u32).max(h),
-    );
-    let resized = imageops::resize(frame, sw, sh, FilterType::Lanczos3);
-    let origin = |size: u32, target: u32, focus: f32| {
-        (size as f64 * focus as f64 - target as f64 / 2.)
-            .round_ties_even()
-            .clamp(0., (size - target) as f64) as u32
+    let mut img = if frame.dimensions() == (w, h) {
+        frame.clone()
+    } else {
+        let scale = (w as f64 / frame.width() as f64).max(h as f64 / frame.height() as f64);
+        let (sw, sh) = (
+            ((frame.width() as f64 * scale).ceil() as u32).max(w),
+            ((frame.height() as f64 * scale).ceil() as u32).max(h),
+        );
+        let resized = imageops::resize(frame, sw, sh, FilterType::Lanczos3);
+        let origin = |size: u32, target: u32, focus: f32| {
+            (size as f64 * focus as f64 - target as f64 / 2.)
+                .round_ties_even()
+                .clamp(0., (size - target) as f64) as u32
+        };
+        imageops::crop_imm(
+            &resized,
+            origin(sw, w, focus.0),
+            origin(sh, h, focus.1),
+            w,
+            h,
+        )
+        .to_image()
     };
-    let mut img = imageops::crop_imm(
-        &resized,
-        origin(sw, w, focus.0),
-        origin(sh, h, focus.1),
-        w,
-        h,
-    )
-    .to_image();
     let mean = (img.pixels().map(|c| luminance(&c.0)).sum::<f64>() / (w as f64 * h as f64)).round();
     for c in img.pixels_mut() {
         c.0 = c.0.map(|v| byte(mean + (v as f64 - mean) * 1.12));
@@ -187,12 +248,14 @@ fn background(frame: &RgbImage, w: u32, h: u32, focus: (f32, f32)) -> RgbImage {
         let nx = 2. * x as f64 / w.saturating_sub(1).max(1) as f64 - 1.;
         let ny = y as f64 / h.saturating_sub(1).max(1) as f64;
         let radius = nx.hypot(2. * ny - 1.);
-        let top = 0.38 * (1. - ny / 0.20).clamp(0., 1.);
-        let bottom = 0.58 * smoothstep((ny - 0.36) / 0.20)
-            + 0.26 * smoothstep((ny - 0.56) / 0.22)
-            + 0.10 * smoothstep((ny - 0.78) / 0.22);
-        let edges = 0.22 * smoothstep((radius - 0.48) / (std::f64::consts::SQRT_2 - 0.48));
-        let a = byte(255. * (1. - (1. - top - bottom) * (1. - edges))) as f64 / 255.;
+        let top = 0.24 * (1. - ny / 0.18).clamp(0., 1.);
+        let center_dist = ((ny - 0.50).abs() / 0.24).clamp(0., 1.);
+        let center = 0.56 * (1. - smoothstep(center_dist));
+        let bottom = 0.28 * smoothstep((ny - 0.72) / 0.28);
+        let edges = 0.22 * smoothstep((radius - 0.50) / (std::f64::consts::SQRT_2 - 0.50));
+        let a = byte(255. * (1. - (1. - top) * (1. - center) * (1. - bottom) * (1. - edges)))
+            as f64
+            / 255.;
         for (k, b) in [5., 8., 17.].into_iter().enumerate() {
             c[k] = byte(c[k] as f64 * (1. - a) + b * a);
         }
@@ -360,19 +423,16 @@ fn composite(img: &mut RgbImage, mask: &GrayImage, color: [u8; 3], opacity: f64,
         }
     }
 }
-fn pill_mask(w: u32, h: u32, headline_top: i32, size: f32) -> GrayImage {
+fn pill_mask(w: u32, h: u32, top: i32, pill_h: i32) -> GrayImage {
     let mut mask = GrayImage::new(w, h);
     let pw = (w as f32 * 0.105).round_ties_even().max(1.) as i32;
-    let ph = (h as f32 * 0.005).round_ties_even().max(6.) as i32;
     let left = (w as i32 - pw) / 2;
-    let bottom = headline_top - (size * 0.38).round_ties_even() as i32;
-    let top = bottom - ph + 1;
-    let r = (ph.min(pw)) as f64 / 2.;
-    for y in top.max(0)..=bottom.min(h as i32 - 1) {
+    let r = (pill_h.min(pw)) as f64 / 2.;
+    for y in top.max(0)..(top + pill_h).min(h as i32) {
         for x in left.max(0)..(left + pw).min(w as i32) {
             let cx = (x - left) as f64 + 0.5;
             let cy = (y - top) as f64 + 0.5;
-            if (cx - cx.clamp(r, pw as f64 - r)).hypot(cy - ph as f64 / 2.) <= r {
+            if (cx - cx.clamp(r, pw as f64 - r)).hypot(cy - pill_h as f64 / 2.) <= r {
                 mask.put_pixel(x as u32, y as u32, Luma([255]));
             }
         }
@@ -417,12 +477,12 @@ pub fn render_hook_thumbnail(
                     .map_err(|_| anyhow!("invalid bundled Montserrat font"))?,
             );
         let (w, h) = (width as f32, height as f32);
-        let (max_w, bottom, start) = if height > width {
-            (w * 0.80, h * 0.765, w * 0.082)
+        let (max_w, start) = if height > width {
+            (w * 0.74, w * 0.078)
         } else if width == height {
-            (w * 0.84, h * 0.84, w * 0.068)
+            (w * 0.80, w * 0.068)
         } else {
-            (w * 0.78, h * 0.85, h * 0.080)
+            (w * 0.76, h * 0.080)
         };
         let min = (w.min(h) * 0.048).round_ties_even().max(1.);
         let mut size = start.round_ties_even().max(min);
@@ -461,9 +521,12 @@ pub fn render_hook_thumbnail(
         }
         let boxes: Vec<_> = lines.iter().map(|s| bounds(&scaled, s, stroke)).collect();
         let gap = (size * 0.13).round_ties_even() as i32;
-        let headline_top = bottom as i32
-            - boxes.iter().map(|b| b.height()).sum::<i32>()
-            - gap * (lines.len() as i32 - 1);
+        let pill_h = (h * 0.005).round_ties_even().max(4.) as i32;
+        let pill_gap = (size * 0.38).round_ties_even().max(8.) as i32;
+        let text_h = boxes.iter().map(|b| b.height()).sum::<i32>() + gap * (lines.len() as i32 - 1);
+        let total_h = pill_h + pill_gap + text_h;
+        let block_top = ((height as i32 - total_h) / 2).max(0);
+        let headline_top = block_top + pill_h + pill_gap;
         let mut y = headline_top;
         let mut white = GrayImage::new(width, height);
         let mut gold = white.clone();
@@ -493,7 +556,7 @@ pub fn render_hook_thumbnail(
                 );
             }
         }
-        let pill = pill_mask(width, height, headline_top, size);
+        let pill = pill_mask(width, height, block_top, pill_h);
         composite(&mut img, &imageops::blur(&pill, 12.), GOLD, 90. / 255., 0);
         let mut body = white.clone();
         for (p, q) in body.pixels_mut().zip(gold.pixels()) {
@@ -620,10 +683,118 @@ mod tests {
         assert!(frame_stats(&edges).1 > 0.);
     }
     #[test]
-    fn scrim_is_strongest_at_bottom() {
+    fn scrim_is_strongest_at_center() {
         let frame = RgbImage::from_pixel(45, 50, Rgb([120; 3]));
         let scrim = background(&frame, 40, 40, (0.5, 0.38));
-        assert!(scrim.get_pixel(20, 39)[0] < scrim.get_pixel(20, 0)[0]);
-        assert!(scrim.get_pixel(20, 0)[0] < scrim.get_pixel(20, 15)[0]);
+        assert!(scrim.get_pixel(20, 20)[0] < scrim.get_pixel(20, 0)[0]);
+        assert!(scrim.get_pixel(20, 20)[0] < scrim.get_pixel(20, 39)[0]);
+    }
+
+    #[test]
+    fn headline_and_pill_pixels_are_centered() {
+        let dir = tempfile::tempdir().unwrap();
+        let cover = dir.path().join("cover.png");
+        let thumb = dir.path().join("thumb.png");
+        let (w, h) = (360, 640);
+        RgbImage::new(w, h).save(&cover).unwrap();
+        render_hook_thumbnail(
+            &cover,
+            "This Changes Everything",
+            w,
+            h,
+            None,
+            dir.path(),
+            &thumb,
+        )
+        .unwrap();
+        let img = image::open(thumb).unwrap().to_rgb8();
+        let mut foreground = img
+            .enumerate_pixels()
+            .filter(|(_, _, p)| p.0 == WHITE || p.0 == GOLD);
+        let first = foreground.next().unwrap().1;
+        let last = foreground.last().unwrap().1;
+        assert!(first < h / 2 && last > h / 2);
+        assert!(
+            ((first + last) / 2).abs_diff(h / 2) <= 4,
+            "block: {first}..{last}"
+        );
+        let white_text = img.enumerate_pixels().filter(|(_, _, p)| p.0 == WHITE);
+        assert!(
+            white_text.count() > 100,
+            "must contain headline glyphs as well as the pill"
+        );
+        assert!(img.enumerate_pixels().all(|(x, _, p)| {
+            (w * 13 / 100..w * 87 / 100).contains(&x) || (p.0 != WHITE && p.0 != GOLD)
+        }));
+    }
+
+    #[tokio::test]
+    async fn filtered_cover_uses_clip_relative_tracking_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let ffmpeg = tools::ensure_tool_installed(dir.path(), "ffmpeg")
+            .await
+            .unwrap();
+        let source = dir.path().join("source.mp4");
+        tools::run(
+            tools::ffmpeg(&ffmpeg)
+                .args([
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=black:s=320x160:r=20:d=3,drawbox=x=160:w=160:color=red:t=fill",
+                    "-c:v",
+                    "libx264",
+                ])
+                .arg(&source),
+            Duration::from_secs(20),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let crop = crate::pipeline::cut_crop_filter(&[(0., 0.5, 0.25), (0.5, 2., 0.75)], 90, 160);
+        let filter = format!("setpts=PTS-STARTPTS,{crop},setsar=1");
+        let cover = dir.path().join("cover.png");
+        cover_frame_filtered(
+            &ffmpeg,
+            &source,
+            (1., 2.),
+            &["-vf", &filter, "-map", "0:v:0"],
+            true,
+            &cover,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let img = image::open(cover).unwrap().to_rgb8();
+        assert_eq!(img.dimensions(), (90, 160));
+        // The bright right panel is only selected after the 0.5s crop cut.
+        let p = img.get_pixel(45, 80);
+        assert!(
+            p[0] > 200 && p[1] < 30 && p[2] < 30,
+            "expected red, got {p:?}"
+        );
+    }
+
+    #[test]
+    fn matching_size_cover_preserves_split_boundary() {
+        let (w, h) = (90, 160);
+        let split = h / 2;
+        let frame = RgbImage::from_fn(w, h, |_, y| {
+            if y < split {
+                Rgb([210, 35, 35])
+            } else {
+                Rgb([35, 35, 210])
+            }
+        });
+        // Even an off-center focus must not change a pre-reframed cover's geometry.
+        let img = background(&frame, w, h, (0.1, 0.1));
+        assert_eq!(img.dimensions(), (w, h));
+        assert!(img.enumerate_pixels().all(|(_, y, p)| {
+            if y < split {
+                p[0] > p[2] + 50
+            } else {
+                p[2] > p[0] + 50
+            }
+        }));
     }
 }

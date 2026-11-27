@@ -17,7 +17,8 @@ export function JobAssembly({ job, t, layout = "grid" }: { job: JobSnapshot; t: 
   const running = job.status === "queued" || job.status === "running"
   const done = job.status === "done"
   const stage = job.stage ?? "download"
-  const stageIndex = stages.indexOf(stage as typeof stages[number])
+  const stageIndex = stages.indexOf(stage)
+  const stepLabel = t.stageStep.replace("{current}", String(stageIndex + 1)).replace("{total}", String(stages.length))
   const progress = Math.max(0, Math.min(100, job.progress ?? 0))
   const clips = job.clips.filter((clip) => !clip.deletedAt)
   const expected = job.mode === "manual" && job.ranges?.length ? job.ranges.length : (job.clipCount ?? 3)
@@ -26,11 +27,22 @@ export function JobAssembly({ job, t, layout = "grid" }: { job: JobSnapshot; t: 
   return <div className="space-y-5">
     {running && <div className="rounded-lg border border-border bg-secondary/20 p-4">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div><p className="font-medium">{job.status === "queued" ? t.status.queued : t.stages[stage]}</p><p className="mt-1 text-xs text-muted-foreground">{job.message || t.assemblingClips}</p></div>
+        <div><p className={job.status === "queued" ? "font-medium" : "hidden font-medium sm:block"}>{job.status === "queued" ? t.status.queued : t.stages[stage]}</p><p className="mt-1 text-xs text-muted-foreground">{job.message || t.assemblingClips}</p></div>
         <span className="font-mono text-sm tabular-nums text-muted-foreground">{progress}%</span>
       </div>
       <div role="progressbar" aria-label={t.processing} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="mb-4 h-1.5 overflow-hidden rounded-full bg-secondary"><div className="h-full bg-primary transition-[width] duration-500" style={{ width: `${progress}%` }}/></div>
-      <ol aria-label={t.processing} className="mb-4 grid grid-cols-5 gap-1">{stages.map((item, index) => <li key={item} className={`min-w-0 border-t-2 pt-2 text-[10px] leading-4 ${index < stageIndex ? "border-primary/60 text-muted-foreground" : index === stageIndex ? "border-primary text-foreground" : "border-border text-muted-foreground/65"}`}><span className="flex items-center gap-1">{index < stageIndex ? <Check className="size-3 shrink-0"/> : index === stageIndex ? <LoaderCircle className="size-3 shrink-0 animate-spin motion-reduce:animate-none"/> : <span className="size-3 shrink-0 rounded-full border border-current"/>}<span className="truncate">{t.stages[item]}</span></span></li>)}</ol>
+      <div className="mb-4 sm:hidden">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs">
+          <span className="font-medium text-foreground">{t.stages[stage]}</span>
+          <span className="text-muted-foreground tabular-nums">{stepLabel}</span>
+        </div>
+        <div aria-hidden="true" className="grid grid-cols-5 gap-1.5">
+          {stages.map((item, index) => (
+            <span key={item} className={`h-1.5 rounded-full ${index < stageIndex ? "bg-primary/55" : index === stageIndex ? "bg-primary" : "bg-border"}`} />
+          ))}
+        </div>
+      </div>
+      <ol aria-label={t.processing} className="mb-4 hidden grid-cols-5 gap-1 sm:grid">{stages.map((item, index) => <li key={item} aria-current={index === stageIndex ? "step" : undefined} className={`min-w-0 border-t-2 pt-2 text-[10px] leading-4 ${index < stageIndex ? "border-primary/60 text-muted-foreground" : index === stageIndex ? "border-primary text-foreground" : "border-border text-muted-foreground/65"}`}><span className="flex items-start gap-1">{index < stageIndex ? <Check className="mt-0.5 size-3 shrink-0"/> : index === stageIndex ? <LoaderCircle className="mt-0.5 size-3 shrink-0 animate-spin motion-reduce:animate-none"/> : <span className="mt-0.5 size-3 shrink-0 rounded-full border border-current"/>}<span>{t.stages[item]}</span></span></li>)}</ol>
       <Cards aspectRatio={job.aspectRatio} aria-label={t.assemblingClips} className={`job-assembly ${`job-stage-${stage}`}`}>
         {clips.map((clip, index) => <ClipCard key={clip.id} clip={{ ...clip, job: { id: job.id, url: job.url, aspectRatio: job.aspectRatio } }} index={index} meta={`${timecode(clip.startSec)}–${timecode(clip.endSec)}`}/>) }
         {Array.from({ length: remaining }, (_, index) => <article key={`placeholder-${index}`} aria-label={`${t.clip} ${clips.length + index + 1} ${t.assemblingClips}`} className={`job-assembly__placeholder ${clipAspectClass(job.aspectRatio)} relative min-w-0 overflow-hidden rounded-lg border border-border bg-card`}>

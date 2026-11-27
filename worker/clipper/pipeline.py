@@ -20,6 +20,7 @@ from . import live_chat, llm, stt
 from . import reframe as reframe_mod
 from .hook_thumbnail import extract_cover_frame, prepend_hook_intro, render_hook_thumbnail
 from .models import (
+    DEFAULT_REFRAME,
     JOB_ID_RE,
     MAX_DESCRIPTION_CHARS,
     CaptionStyle,
@@ -777,7 +778,7 @@ def _reframe_filters(
 
     16:9 (landscape): reframe diabaikan — skala pas 1920x1080 di atas latar buram
     dari video yang sama bila sumber bukan 16:9 (sumber 16:9 menutup penuh latar).
-    Mode centered (black_bars, blurred_fill) lewat tanpa deteksi frame.
+    Mode centered (center_crop, black_bars, blurred_fill) lewat tanpa deteksi frame.
     face_tracking memanggil MediaPipe; dep hilang -> raise RuntimeError.
     """
     reset_pts = "setpts=PTS-STARTPTS"
@@ -804,7 +805,17 @@ def _reframe_filters(
             "setsar=1",
         ]
 
-    # Default / fallback eksplisit: face_tracking (cut per pembicara aktif)
+    if reframe == "center_crop":
+        ratio = width / height
+        return [
+            reset_pts,
+            f"crop=w='min(in_w,ih*{ratio:.5f})':h='min(in_h,iw/{ratio:.5f})'"
+            ":x='(in_w-out_w)/2':y='(in_h-out_h)/2'",
+            f"scale={width}:{height}",
+            "setsar=1",
+        ]
+
+    # face_tracking: cut per pembicara aktif.
     segments = reframe_mod.face_track_samples(video, moment.start, moment.end)
     if segments:
         return [reset_pts, reframe_mod.cut_crop_filter(segments, width, height), "setsar=1"]
@@ -1302,7 +1313,7 @@ def parse_frame_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("invalid_frame_path")
     return {
         "url": url, "atSec": at_sec, "aspectRatio": aspect_ratio,
-        "reframe": str(payload.get("reframe") or "face_tracking"),
+        "reframe": str(payload.get("reframe") or DEFAULT_REFRAME),
         "twoSpeakers": bool(payload.get("twoSpeakers", False)),
         "facecam": bool(payload.get("facecam", False)),
         "captions": bool(payload.get("captions", False)),
@@ -1375,7 +1386,7 @@ def _render_one(
     cues: Sequence[Cue],
     outdir: str,
     filename: str,
-    reframe: str = "face_tracking",
+    reframe: str = DEFAULT_REFRAME,
     captions: bool = True,
     two_speakers: bool = False,
     facecam: bool = False,

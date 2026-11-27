@@ -34,6 +34,10 @@ _EXPRESSION_TERMS = {
 }
 _NON_CUE_BLOCKS = {"NOTE", "STYLE", "REGION"}
 MAX_TAIL_WORD_SEC = 1.2
+MAX_WORD_DISPLAY_SEC = 0.9
+MAX_INTRA_CHUNK_PAUSE_SEC = 0.25
+MAX_CHUNK_LEAD_SEC = 0.9
+MAX_CHUNK_LEAD_SEC_WIDE = 1.4
 
 # Anton (condensed, huruf besar) jauh lebih lebar per karakter daripada DejaVu:
 # 4 kata / 18 karakter supaya takarir tetap satu baris di 1080px.
@@ -318,10 +322,15 @@ def _ass_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "\\{")
 
 
+def ends_sentence(text: str) -> bool:
+    return text.rstrip('"\'”’)]').endswith((".", "?", "!"))
+
+
 def _split_words(
     cue: Cue,
     max_words: int = MAX_WORDS_PER_CUE,
     max_chars: int = WRAP_CHARS,
+    max_lead_sec: Optional[float] = None,
 ) -> List[Cue]:
     """Pecah jadi baris ringkas sambil mempertahankan timing karaoke."""
     timed_words = cue_to_words(cue)
@@ -330,7 +339,13 @@ def _split_words(
     char_count = 0
     for word in timed_words:
         word_length = len(word.text)
-        if current and (len(current) >= max_words or char_count + 1 + word_length > max_chars):
+        if current and (
+            len(current) >= max_words
+            or char_count + 1 + word_length > max_chars
+            or word.start - current[-1].end >= MAX_INTRA_CHUNK_PAUSE_SEC
+            or ends_sentence(current[-1].text)
+            or (max_lead_sec is not None and word.start - current[0].start > max_lead_sec)
+        ):
             chunks.append(current)
             current = []
             char_count = 0
@@ -387,22 +402,32 @@ def _render_cue_parts(
     cues: Sequence[Cue],
     max_words: int = MAX_WORDS_PER_CUE,
     max_chars: int = WRAP_CHARS,
+    max_lead_sec: float = MAX_CHUNK_LEAD_SEC,
 ) -> List[Cue]:
     """Normalize overlaps and split oversized captions without losing word timing."""
     parts: List[Cue] = []
     for cue in _non_overlapping_cues(cues):
+        timed = bool(cue.words)
         timed_words = _render_words(cue)
+        last_index = len(timed_words) - 1
         words: List[Word] = []
         cursor = cue.start
-        for word in timed_words:
+        for index, word in enumerate(timed_words):
             start = max(cursor, cue.start, word.start)
             end = min(cue.end, word.end)
+            if timed and index < last_index:
+                end = min(end, start + MAX_WORD_DISPLAY_SEC)
             if end > start:
                 words.append(Word(start, end, word.text))
                 cursor = end
         if words:
             parts.extend(
-                _split_words(Cue(cue.start, cue.end, cue.text, words), max_words, max_chars)
+                _split_words(
+                    Cue(cue.start, cue.end, cue.text, words),
+                    max_words,
+                    max_chars,
+                    max_lead_sec=max_lead_sec if timed else None,
+                )
             )
     return parts
 
@@ -512,7 +537,8 @@ def write_ass(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
-    for part in _render_cue_parts(cues, max_words, max_chars):
+    max_lead_sec = MAX_CHUNK_LEAD_SEC_WIDE if max_words > MAX_WORDS_PER_CUE else MAX_CHUNK_LEAD_SEC
+    for part in _render_cue_parts(cues, max_words, max_chars, max_lead_sec=max_lead_sec):
         _write_cue_part(
             part, lines, uppercase=uppercase, primary_col=primary_col,
             highlight_col=highlight_col, pos_tag=pos_tag, animate=animate,

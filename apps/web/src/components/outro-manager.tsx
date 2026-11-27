@@ -113,17 +113,19 @@ export function OutroManager() {
           : <ul className="space-y-2">{outros.map((outro) => {
             const isDefault = outro.id === defaultId
             return <li key={outro.id} className={cn("flex flex-wrap items-center gap-3 rounded-lg border bg-card p-2.5 transition-colors", isDefault ? "border-accent/60 ring-1 ring-accent/40" : "border-border")}>
-              <OutroPreview outro={outro} className="h-14 w-20"/>
-              <div className="min-w-0 flex-1 basis-40">
-                <div className="flex min-w-0 items-center gap-2"><p className="truncate text-sm font-medium" title={outro.name}>{outro.name}</p>{isDefault && <Badge variant="secondary" className="shrink-0">{t.outroDefault}</Badge>}</div>
-                <p className="mt-0.5 font-mono text-xs tabular-nums text-muted-foreground">{formatOutroDuration(outro.durationSec)} · {outro.width}×{outro.height} · {formatBytes(outro.sizeBytes)}</p>
+              <div className="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-60">
+                <OutroPreview outro={outro} className="h-14 w-20"/>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><p className="min-w-0 text-sm font-medium wrap-anywhere sm:truncate" title={outro.name}>{outro.name}</p>{isDefault && <Badge variant="secondary" className="shrink-0">{t.outroDefault}</Badge>}</div>
+                  <p className="mt-0.5 font-mono text-xs tabular-nums text-muted-foreground">{formatOutroDuration(outro.durationSec)} · {outro.width}×{outro.height} · {formatBytes(outro.sizeBytes)}</p>
+                </div>
               </div>
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2 sm:gap-1">
                 {isDefault
-                  ? <Button type="button" variant="ghost" size="sm" disabled={setDefault.isPending} onClick={() => setDefault.mutate(null)}>{t.outroClearDefault}</Button>
-                  : <Button type="button" variant="outline" size="sm" disabled={setDefault.isPending} onClick={() => setDefault.mutate(outro.id)}>{t.outroSetDefault}</Button>}
+                  ? <Button type="button" variant="ghost" size="sm" className="min-h-10 max-w-full whitespace-normal sm:min-h-8" disabled={setDefault.isPending} onClick={() => setDefault.mutate(null)}>{t.outroClearDefault}</Button>
+                  : <Button type="button" variant="outline" size="sm" className="min-h-10 max-w-full whitespace-normal sm:min-h-8" disabled={setDefault.isPending} onClick={() => setDefault.mutate(outro.id)}>{t.outroSetDefault}</Button>}
                 <AlertDialog>
-                  <AlertDialogTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`${t.outroDelete} ${outro.name}`} className="size-8 text-muted-foreground hover:text-destructive"><Trash2 className="size-4"/></Button></AlertDialogTrigger>
+                  <AlertDialogTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`${t.outroDelete} ${outro.name}`} className="size-10 shrink-0 text-muted-foreground hover:text-destructive sm:size-8"><Trash2 className="size-4"/></Button></AlertDialogTrigger>
                   <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t.outroDeleteTitle}</AlertDialogTitle><AlertDialogDescription>{t.outroDeleteBody.replace("{name}", outro.name)}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t.cancelAction}</AlertDialogCancel><AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={(event) => { event.preventDefault(); remove.mutate(outro.id) }}>{remove.isPending && <LoaderCircle aria-hidden="true" className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"/>}{t.outroDelete}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
                 </AlertDialog>
               </div>

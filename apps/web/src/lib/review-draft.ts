@@ -41,7 +41,7 @@ export function loadReviewDraft(): ReviewDraft | null {
     if (!Array.isArray(d.cueRanges) || d.cueRanges.some((r) => typeof r?.start !== "number" || typeof r?.end !== "number")) return null
     if (d.cueRanges.length > 10) return null
     if (!Array.isArray(d.ranges) || d.ranges.some((r) => typeof r?.start !== "string" || typeof r?.end !== "string")) return null
-    if (!["face_tracking", "blurred_fill", "black_bars"].includes(d.reframe)) return null
+    if (!["center_crop", "face_tracking", "blurred_fill", "black_bars"].includes(d.reframe)) return null
     return {
       ...d,
       ...(typeof d.hookBanner === "boolean" ? { hookBanner: d.hookBanner } : {}),

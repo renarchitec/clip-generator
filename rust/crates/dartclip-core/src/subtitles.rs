@@ -25,6 +25,16 @@ fn parse_timestamp(s: &str) -> Option<f64> {
     Some(n(1)? * 3600. + n(2)? * 60. + n(3)? + n(4)? / 10_f64.powi(m[4].len() as i32))
 }
 pub const MAX_TAIL_WORD_SEC: f64 = 1.2;
+pub const MAX_WORD_DISPLAY_SEC: f64 = 0.9;
+pub const MAX_INTRA_CHUNK_PAUSE_SEC: f64 = 0.25;
+pub const MAX_CHUNK_LEAD_SEC: f64 = 0.9;
+pub const MAX_CHUNK_LEAD_SEC_WIDE: f64 = 1.4;
+
+pub(crate) fn ends_sentence(text: &str) -> bool {
+    text.trim_end_matches(['"', '\'', '”', '’', ')', ']'])
+        .ends_with(['.', '?', '!'])
+}
+
 static CAPTION_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[♪♫♬♩]+|[^\s♪♫♬♩]+").unwrap());
 static ANNOTATION: LazyLock<Regex> =
@@ -420,7 +430,12 @@ pub fn hex_to_ass_color(hex: &str, alpha: u8) -> String {
         (color >> 16) & 255
     )
 }
-fn render_parts(cues: &[Cue], max_words: usize, max_chars: usize) -> Vec<Vec<Word>> {
+fn render_parts(
+    cues: &[Cue],
+    max_words: usize,
+    max_chars: usize,
+    max_lead_sec: f64,
+) -> Vec<Vec<Word>> {
     let mut ordered: Vec<_> = cues.iter().filter(|c| c.end > c.start).collect();
     ordered.sort_by(|a, b| a.start.total_cmp(&b.start));
     let mut result = Vec::new();
@@ -431,7 +446,8 @@ fn render_parts(cues: &[Cue], max_words: usize, max_chars: usize) -> Vec<Vec<Wor
         if end <= cue.start {
             continue;
         }
-        let mut chunk = Vec::new();
+        let timed = !cue.words.is_empty();
+        let mut chunk = Vec::<Word>::new();
         let mut count = 0;
         let mut cursor = cue.start;
         // Python recomputes inferred timings using the shortened cue duration.
@@ -439,17 +455,29 @@ fn render_parts(cues: &[Cue], max_words: usize, max_chars: usize) -> Vec<Vec<Wor
             end,
             ..(*cue).clone()
         };
-        for mut w in render_words(&shortened) {
+        let words = render_words(&shortened);
+        let last_idx = words.len().saturating_sub(1);
+        for (idx, mut w) in words.into_iter().enumerate() {
             w.start = w.start.max(cursor);
             w.end = w.end.min(end);
+            if timed && idx < last_idx {
+                w.end = w.end.min(w.start + MAX_WORD_DISPLAY_SEC);
+            }
             if w.end <= w.start {
                 continue;
             }
             cursor = w.end;
             let n = w.text.chars().count();
-            if !chunk.is_empty() && (chunk.len() >= max_words || count + 1 + n > max_chars) {
-                result.push(std::mem::take(&mut chunk));
-                count = 0;
+            if let Some(prev) = chunk.last() {
+                if chunk.len() >= max_words
+                    || count + 1 + n > max_chars
+                    || w.start - prev.end >= MAX_INTRA_CHUNK_PAUSE_SEC
+                    || ends_sentence(&prev.text)
+                    || (timed && w.start - chunk[0].start > max_lead_sec)
+                {
+                    result.push(std::mem::take(&mut chunk));
+                    count = 0;
+                }
             }
             count += n + usize::from(!chunk.is_empty());
             chunk.push(w);
@@ -469,10 +497,14 @@ pub fn ass_text(
     style: Option<&CaptionStyle>,
 ) -> String {
     let wide = width > height;
-    let (max_words, mut max_chars) = if wide {
-        (MAX_WORDS_PER_CUE_WIDE, WRAP_CHARS_WIDE)
+    let (max_words, mut max_chars, max_lead_sec) = if wide {
+        (
+            MAX_WORDS_PER_CUE_WIDE,
+            WRAP_CHARS_WIDE,
+            MAX_CHUNK_LEAD_SEC_WIDE,
+        )
     } else {
-        (MAX_WORDS_PER_CUE, WRAP_CHARS)
+        (MAX_WORDS_PER_CUE, WRAP_CHARS, MAX_CHUNK_LEAD_SEC)
     };
     let scaled = |n: u32| (n as f64 * height as f64 / 1920.).round_ties_even() as u32;
     let margin = if two_speakers { 0 } else { scaled(180).max(1) };
@@ -557,7 +589,7 @@ pub fn ass_text(
     } else {
         ("", "")
     };
-    for part in render_parts(cues, max_words, max_chars) {
+    for part in render_parts(cues, max_words, max_chars, max_lead_sec) {
         let texts: Vec<_> = part
             .iter()
             .map(|w| {
@@ -622,6 +654,116 @@ pub fn write_ass(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn timed_cue(timings: &[(f64, f64, &str)]) -> Cue {
+        Cue {
+            start: timings[0].0,
+            end: timings.last().unwrap().1,
+            text: timings
+                .iter()
+                .map(|&(_, _, text)| text)
+                .collect::<Vec<_>>()
+                .join(" "),
+            words: timings
+                .iter()
+                .map(|&(start, end, text)| Word {
+                    start,
+                    end,
+                    text: text.into(),
+                })
+                .collect(),
+        }
+    }
+
+    fn small_font_ass(cue: Cue, (width, height): (u32, u32)) -> String {
+        let mut style = CaptionStyle::from_preset("hook");
+        style.font_size = 60;
+        style.uppercase = false;
+        ass_text(&[cue], width, height, false, Some(&style))
+    }
+
+    fn dialogue_texts(ass: &str) -> Vec<String> {
+        let tags = Regex::new(r"\{[^}]*\}").unwrap();
+        ass.lines()
+            .filter(|line| line.starts_with("Dialogue: "))
+            .map(|line| {
+                tags.replace_all(line.splitn(10, ',').nth(9).unwrap(), "")
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn timed_ass_splits_at_quarter_second_pause() {
+        for dimensions in [(1080, 1920), (1920, 1080)] {
+            let cue = timed_cue(&[(0., 0.25, "one"), (0.5, 0.75, "two")]);
+            assert_eq!(
+                dialogue_texts(&small_font_ass(cue, dimensions)),
+                ["one", "two"]
+            );
+        }
+    }
+
+    #[test]
+    fn timed_ass_splits_at_sentence_endings() {
+        for dimensions in [(1080, 1920), (1920, 1080)] {
+            for ending in ["one.", "one?", "one!", "one.\"", "one?’", "one!)]"] {
+                let cue = timed_cue(&[(0., 0.25, ending), (0.25, 0.5, "two")]);
+                assert_eq!(
+                    dialogue_texts(&small_font_ass(cue, dimensions)),
+                    [ending, "two"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn timed_ass_splits_only_above_orientation_lead_cap() {
+        for (dimensions, last_start, split) in [
+            ((1080, 1920), 0.9, false),
+            ((1080, 1920), 0.91, true),
+            ((1920, 1080), 0.91, false),
+            ((1920, 1080), 1.4, false),
+            ((1920, 1080), 1.41, true),
+        ] {
+            let cue = timed_cue(&[
+                (0., 0.6, "one"),
+                (0.6, last_start, "two"),
+                (last_start, last_start + 0.2, "go"),
+            ]);
+            let expected = if split {
+                ["one two", "one two", "go"]
+            } else {
+                ["one two go"; 3]
+            };
+            assert_eq!(dialogue_texts(&small_font_ass(cue, dimensions)), expected);
+        }
+    }
+
+    #[test]
+    fn timed_ass_keeps_fast_fluent_words_together() {
+        let cue = timed_cue(&[
+            (0., 0.2, "we"),
+            (0.2, 0.4, "can"),
+            (0.4, 0.6, "go"),
+            (0.6, 0.8, "now"),
+        ]);
+        assert_eq!(
+            dialogue_texts(&small_font_ass(cue, (1080, 1920))),
+            ["we can go now"; 4]
+        );
+    }
+
+    #[test]
+    fn timed_ass_caps_stretched_mid_cue_word_and_splits_before_next_word() {
+        let cue = timed_cue(&[(0., 1.25, "one"), (1.25, 2.45, "two")]);
+        // In landscape the lead cap alone would not split these words.
+        let ass = small_font_ass(cue, (1920, 1080));
+        assert_eq!(dialogue_texts(&ass), ["one", "two"]);
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:00.90,"));
+        assert!(ass.contains("Dialogue: 0,0:00:01.25,0:00:02.45,"));
+    }
+
     #[test]
     fn spaces_and_rolling_lines_preserve_cue_start_and_cap_tail() {
         let vtt = "WEBVTT\n\nNOTE\n \n00:01.000 --> 00:02.000\nignored\n\n\

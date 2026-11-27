@@ -7,6 +7,7 @@ RUN export PATH="$HOME/.cargo/bin:$PATH" \
     && strip rust/target/release/dartclip-worker
 
 FROM node:22-bookworm-slim
+LABEL org.opencontainers.image.source="https://github.com/renarchitec/clip-generator"
 ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-dejavu-core ca-certificates curl \

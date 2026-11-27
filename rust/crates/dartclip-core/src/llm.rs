@@ -794,7 +794,7 @@ fn selection_prompt(
     let total = cues.last().map_or(0., |c| c.end);
     let n = count(params);
     let task = if all {
-        format!("Tugas utama: pilih semua momen yang paling sesuai dengan preferensi pengguna, lalu paling menarik. Temukan dan kembalikan SEMUA kandidat momen kuat yang tidak tumpang tindih dari seluruh transkrip video ini untuk dijadikan video vertikal 9:16 berdurasi sekitar {t:.0} detik tanpa membatasi jumlahnya ke angka tertentu, agar pengguna dapat meninjau dan memilih sendiri.")
+        format!("Tugas utama: telusuri transkrip secara kronologis dari awal hingga akhir, termasuk bagian tengah dan akhir. Jangan berhenti setelah menemukan 2–3 momen. Kembalikan SEMUA momen yang benar-benar kuat, sesuai dengan preferensi pengguna, dan tidak tumpang tindih, untuk dijadikan video vertikal 9:16 berdurasi sekitar {t:.0} detik. Jangan membatasi jumlah kandidat, dan jangan menambahkan momen lemah hanya untuk menambah jumlah; pengguna akan meninjau dan memilih sendiri.")
     } else {
         format!("Tugas utama: pilih momen yang paling sesuai dengan preferensi pengguna, lalu paling menarik. Kembalikan {} kandidat momen dari transkrip video ini untuk dijadikan video vertikal 9:16 berdurasi sekitar {t:.0} detik; sistem memilih {n} terbaik.",n.saturating_add(2))
     };
@@ -1115,6 +1115,29 @@ mod tests {
         assert_eq!(yt.title.as_deref(), Some("Good"));
         assert_eq!(yt.hashtags, ["Custom"]);
     }
+    #[test]
+    fn review_keeps_valid_moments_beyond_clip_count() {
+        let cues = [TranscriptCue {
+            start: 0.,
+            end: 150.,
+            text: "Transcript.".into(),
+            words: vec![],
+        }];
+        let params = JobParams {
+            clip_count: 2,
+            target_duration_sec: 20.,
+        };
+        let items: Vec<_> = (0..5)
+            .map(|i| json!({"start": 30 * i, "end": 30 * i + 20, "viralScore": 90}))
+            .collect();
+        assert_eq!(validate_moments(&items, &cues, &params, false).len(), 2);
+        let reviewed = validate_moments(&items, &cues, &params, true);
+        assert_eq!(
+            reviewed.iter().map(|m| m.start).collect::<Vec<_>>(),
+            [0., 30., 60., 90., 120.]
+        );
+    }
+
     #[test]
     fn validates_and_ranks_nonoverlapping_moments() {
         let cues = [TranscriptCue {
