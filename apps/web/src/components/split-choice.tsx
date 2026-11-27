@@ -23,15 +23,12 @@ export function SplitChoice({
       className={cn(
         "min-h-11 max-w-full gap-1.5 whitespace-normal sm:min-h-9",
         selected
-          ? "bg-accent text-accent-foreground hover:bg-accent hover:text-accent-foreground"
+          ? "border-transparent bg-accent text-accent-foreground hover:bg-accent hover:text-accent-foreground"
           : "border-border bg-background text-foreground hover:bg-muted hover:text-foreground",
         className,
       )}
     >
-      <Check
-        aria-hidden="true"
-        className={cn("size-3.5", !selected && "invisible")}
-      />
+      {selected && <Check aria-hidden="true" className="size-3.5" />}
       {children}
     </Button>
   )
