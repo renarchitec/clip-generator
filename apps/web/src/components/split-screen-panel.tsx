@@ -1,3 +1,4 @@
+import { SplitChoice } from "./split-choice"
 import { useState } from "react"
 import { Button } from "./ui/button"
 import { Switch } from "./ui/switch"
@@ -27,16 +28,9 @@ function Options<K extends string>({
       <legend className="mb-1 text-xs font-medium">{title}</legend>
       <div className="flex flex-wrap gap-1">
         {options.map(([k, label]) => (
-          <Button
-            type="button"
-            key={k}
-            variant={k === value ? "secondary" : "outline"}
-            size="sm"
-            aria-pressed={k === value}
-            onClick={() => change(k)}
-          >
+          <SplitChoice selected={k === value} key={k} onClick={() => change(k)}>
             {label}
-          </Button>
+          </SplitChoice>
         ))}
       </div>
     </fieldset>
@@ -67,7 +61,15 @@ export function SplitScreenPanel({
     <section className="relative space-y-3 border-y py-3">
       <label className="relative flex items-center justify-between gap-2 text-sm font-medium">
         {t.split}
+        <span
+          aria-hidden="true"
+          className="ml-auto text-xs text-muted-foreground"
+        >
+          {v.enabled ? t.on : t.off}
+        </span>
         <Switch
+          aria-label={t.split}
+          className="data-checked:bg-accent data-[state=checked]:bg-accent"
           checked={v.enabled}
           onCheckedChange={(enabled) => patch({ enabled })}
         />
@@ -215,15 +217,12 @@ export function SplitScreenPanel({
             ]}
             change={(ratio) => patch({ ratio })}
           />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            aria-pressed={v.swap}
+          <SplitChoice
+            selected={v.swap}
             onClick={() => patch({ swap: !v.swap })}
           >
             {t.swap}
-          </Button>
+          </SplitChoice>
           {(
             [
               v.swap ? "secondaryFit" : "primaryFit",
@@ -252,18 +251,16 @@ export function SplitScreenPanel({
               value={[Math.round(v.secondaryVolume * 100)]}
               onValueChange={([v]) => patch({ secondaryVolume: v / 100 })}
             />
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
               {[0, 15, 50].map((n) => (
-                <Button
-                  type="button"
+                <SplitChoice
+                  selected={v.secondaryVolume === n / 100}
                   key={n}
-                  size="sm"
-                  variant="outline"
                   onClick={() => patch({ secondaryVolume: n / 100 })}
                 >
                   {!n ? t.mute + " " : ""}
                   {n}%
-                </Button>
+                </SplitChoice>
               ))}
             </div>
           </div>

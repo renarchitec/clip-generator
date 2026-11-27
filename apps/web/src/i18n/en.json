@@ -43,5 +43,7 @@
   "segment": "Add segment",
   "reset": "Reset to AI",
   "even": "Distribute evenly",
-  "select": "Choose video"
+  "select": "Choose video",
+  "on": "On",
+  "off": "Off"
 }

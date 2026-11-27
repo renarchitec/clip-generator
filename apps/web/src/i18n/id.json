@@ -43,5 +43,7 @@
   "segment": "Tambah segmen",
   "reset": "Pulihkan hasil AI",
   "even": "Bagi rata",
-  "select": "Pilih video"
+  "select": "Pilih video",
+  "on": "Aktif",
+  "off": "Nonaktif"
 }

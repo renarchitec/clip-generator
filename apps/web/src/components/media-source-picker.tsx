@@ -1,3 +1,4 @@
+import { SplitChoice } from "./split-choice"
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button } from "./ui/button"
@@ -83,19 +84,16 @@ export function MediaSourcePicker({
     <div className="min-w-0 space-y-2">
       <div role="group" aria-label={t.source} className="flex flex-wrap gap-1">
         {(["url", "upload", "clip"] as const).map((kind) => (
-          <Button
-            type="button"
+          <SplitChoice
+            selected={kind === value.kind}
             key={kind}
             disabled={upload.isPending}
-            aria-pressed={kind === value.kind}
-            variant={kind === value.kind ? "secondary" : "ghost"}
-            size="sm"
             onClick={() => {
               if (kind !== value.kind) onChange({ kind })
             }}
           >
             {t[kind]}
-          </Button>
+          </SplitChoice>
         ))}
       </div>
       {value.kind === "url" ? (
@@ -145,9 +143,11 @@ export function MediaSourcePicker({
           <div className="max-h-40 space-y-1 overflow-y-auto">
             {items.map((m) => (
               <div key={m.id} className="flex min-w-0 items-center gap-1">
-                <Button
-                  type="button"
-                  variant="outline"
+                <SplitChoice
+                  selected={
+                    m.id ===
+                    (value.kind === "upload" ? value.mediaId : value.clipId)
+                  }
                   className="min-w-0 flex-1 justify-start"
                   onClick={() =>
                     onChange({
@@ -164,7 +164,7 @@ export function MediaSourcePicker({
                   <Badge variant="secondary">
                     {Math.round(m.seconds)}s {m.size}
                   </Badge>
-                </Button>
+                </SplitChoice>
                 {value.kind === "upload" && (
                   <Button
                     type="button"
