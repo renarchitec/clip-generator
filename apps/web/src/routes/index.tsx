@@ -1,3 +1,6 @@
+import {defaultSplit,sourceVideo,splitScreenRatioTopFraction,type PrimaryMediaSource} from '@/lib/split-screen'
+import {SplitScreenPanel} from '@/components/split-screen-panel'
+import {MediaSourcePicker,useSplitText} from '@/components/media-source-picker'
 import { createFileRoute, Link, redirect, useNavigate, useSearch } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useForm } from "@tanstack/react-form"
@@ -73,7 +76,7 @@ export const Route = createFileRoute("/")({
 
 type ClipRange = { start: string; end: string; title?: string; reason?: string; hookText?: string }
 type RangePayload = { start: number; end: number; title?: string; reason?: string; hookText?: string }
-type JobInput = { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; hookBanner: boolean; normalizeAudio: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; transcriptSource: TranscriptSource; captionStyle?: CaptionStyle | null; customHashtags?: string[]; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkDefaultValue; outro: { outroId: string } | null }
+type JobInput = import("@/lib/api").SourceSettings & { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; hookBanner: boolean; normalizeAudio: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; transcriptSource: TranscriptSource; captionStyle?: CaptionStyle | null; customHashtags?: string[]; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkDefaultValue; outro: { outroId: string } | null }
 
 const REVIEW_MAX_SELECTABLE = 10
 
@@ -94,6 +97,20 @@ function Dashboard() {
   const [captions, setCaptions] = useState(draft?.captions ?? true)
   const [hookBanner, setHookBanner] = useState(draft?.hookBanner ?? true)
   const [normalizeAudio, setNormalizeAudio] = useState(draft?.normalizeAudio ?? true)
+  const st=useSplitText()
+  const [primarySource,setPrimary]=useState<PrimaryMediaSource>(draft?.primarySource??{kind:'url',url:draft?.url??''})
+  const [splitScreen,setSplit]=useState(draft?.splitScreen??defaultSplit)
+  const sourceSettings = {
+    primarySource: primarySource.kind === "url" ? null : primarySource,
+    splitScreen: splitScreen.enabled ? splitScreen : null,
+  }
+  function sourceError(url: string) {
+    if (primarySource.kind === "upload") return primarySource.mediaId ? undefined : st.select
+    if (primarySource.kind === "clip") return primarySource.clipId ? undefined : st.select
+    if (!url.trim()) return t.urlRequired
+    if (!/^https?:\/\//i.test(url.trim())) return t.urlInvalid
+  }
+  const videoSrc=sourceVideo(primarySource), seam=splitScreenRatioTopFraction(splitScreen.ratio)
   const [twoSpeakers, setTwoSpeakers] = useState(draft?.twoSpeakers ?? false)
   const [facecam, setFacecam] = useState(draft?.facecam ?? false)
   const [aspectRatio, setAspectRatio] = useState<Job["aspectRatio"]>(draft?.aspectRatio ?? "9:16")
@@ -127,8 +144,8 @@ function Dashboard() {
   const form = useForm({
     defaultValues: { url: draft?.url ?? "", clipCount: draft?.clipCount ?? 3, duration: draft?.duration ?? 45, customMinutes: draft?.maxSourceSec && ![600, 1200, 1800, 3600, 5400].includes(draft.maxSourceSec) ? String(draft.maxSourceSec / 60) : "10", ranges: draft?.ranges ?? [{ start: "", end: "" }] },
     validators: { onSubmit: ({ value }) => {
-      if (!value.url.trim()) return t.urlRequired
-      if (!/^https?:\/\//i.test(value.url.trim())) return t.urlInvalid
+      const invalidSource = sourceError(value.url)
+      if (invalidSource) return invalidSource
       if (mode === "auto" && !reviewFirst && (!Number.isInteger(value.clipCount) || value.clipCount < 1 || value.clipCount > 10)) return t.clipCountInvalid
       if (!Number.isInteger(value.duration) || value.duration < 15 || value.duration > 180) return t.durationInvalid
       if (mode === "auto" && maxSourceChoice === "custom" && (!/^\d+$/.test(value.customMinutes) || Number(value.customMinutes) < 1 || Number(value.customMinutes) > 600)) return t.customMinutesInvalid
@@ -139,10 +156,10 @@ function Dashboard() {
       if (generationLocked.current) return
       setError("")
       if (mode === "auto" && reviewFirst) {
-        createPreview.mutate({ url: value.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) })
+        createPreview.mutate({ ...sourceSettings, url: value.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) })
         return
       }
-      const body: JobInput = { url: value.url.trim(), mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, captionLanguage, transcriptSource, captionStyle: captions ? captionStyle : null, customHashtags: parsedCustomHashtags, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end, title, reason, hookText }) => ({ start: Number(start), end: Number(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}), ...(hookText ? { hookText } : {}) })) }) }
+      const body: JobInput = { ...sourceSettings, url: value.url.trim(), mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, captionLanguage, transcriptSource, captionStyle: captions ? captionStyle : null, customHashtags: parsedCustomHashtags, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end, title, reason, hookText }) => ({ start: Number(start), end: Number(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}), ...(hookText ? { hookText } : {}) })) }) }
       create.mutate(body)
     },
   })
@@ -166,14 +183,14 @@ function Dashboard() {
   const firstReviewedStart = (preview.data?.candidates ?? []).reduce<number | null>((first, candidate) => first === null ? candidate.start : Math.min(first, candidate.start), null)
   const firstManualStart = formValues.ranges.map(({ start }) => Number(start)).find((start) => Number.isFinite(start) && start >= 0)
   const suggestedFrameSec = firstReviewedStart ?? (mode === "manual" ? firstManualStart : null) ?? FRAME_DEFAULT_SEC
-  const framePreview = useFramePreview({ url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam }, suggestedFrameSec)
+  const framePreview = useFramePreview({ ...sourceSettings, url: formValues.url, aspectRatio, reframe, twoSpeakers, facecam }, suggestedFrameSec)
   const initializedPreview = useRef<string | null>(draft?.previewId ?? null)
   const { from, job: selectedJobId } = useSearch({ from: "/" })
   const source = useQuery({ queryKey: ["jobs", from], queryFn: () => api<JobSnapshot>(`/jobs/${from}`), enabled: !!from })
   useEffect(() => {
     const job = source.data
     if (!job) return
-    form.setFieldValue("url", job.url)
+    setPrimary(job.primarySource??{kind:"url",url:job.url}); setSplit(job.splitScreen??defaultSplit); form.setFieldValue("url", job.url)
     setMode(job.mode === "manual" ? "manual" : "auto")
     setReframe(job.reframe)
     setAspectRatio(job.aspectRatio ?? "9:16")
@@ -414,7 +431,7 @@ function Dashboard() {
   }, [preview.error])
   useEffect(() => {
     if (!reviewFirst) return
-    saveReviewDraft({
+    saveReviewDraft({ primarySource,splitScreen,
       url: formValues.url,
       mode,
       reframe,
@@ -440,13 +457,13 @@ function Dashboard() {
       selectedCueStart,
       selectedCueEnd,
     })
-  }, [formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, captionLanguage, transcriptSource, captionStyle, customHashtagsInput, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
+  }, [primarySource,splitScreen,formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, captionLanguage, transcriptSource, captionStyle, customHashtagsInput, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
   const hasTerminalJob = jobs.data?.some((job) => ["done", "failed", "cancelled"].includes(job.status)) ?? false
   const activeJobs = jobs.data?.filter((job) => ["queued", "running"].includes(job.status)) ?? []
   const failedJobs = jobs.data?.filter((job) => job.status === "failed").slice(0, 2) ?? []
   useEffect(() => { if (hasTerminalJob) { void client.invalidateQueries({ queryKey: ["system", "llm-status"] }); void client.invalidateQueries({ queryKey: ["clips", "recent"] }) } }, [hasTerminalJob, client])
   const createPreview = useMutation({
-    mutationFn: (body: { url: string; description?: string; clipCount?: number; targetDurationSec?: number; maxSourceSec?: number | null; transcriptSource?: TranscriptSource }) => api<{ id: string }>("/previews", { method: "POST", body: JSON.stringify(body) }),
+    mutationFn: (body: import("@/lib/api").SourceSettings & { url: string; description?: string; clipCount?: number; targetDurationSec?: number; maxSourceSec?: number | null; transcriptSource?: TranscriptSource }) => api<{ id: string }>("/previews", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: ({ id }) => { setPreviewExpired(false); setSelectedCandidates([]); setCueRanges([]); setSelectedCueStart(null); setSelectedCueEnd(null); initializedPreview.current = null; setPreviewId(id) },
     onError: () => { setPreviewId(null); setError(t.apiError) },
   })
@@ -464,7 +481,7 @@ function Dashboard() {
   const changeAspectRatio = (value: string) => {
     const next = value as Job["aspectRatio"]
     setAspectRatio(next)
-    if (next !== "9:16") { setTwoSpeakers(false); setFacecam(false) }
+    if (next !== "9:16") { setSplit(v=>({...v,enabled:false})); setTwoSpeakers(false); setFacecam(false) }
   }
   const selectedMaxSourceSec = () => maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(formValues.customMinutes) * 60 : Number(maxSourceChoice)
   const validCustomMinutes = maxSourceChoice !== "custom" || (/^\d+$/.test(formValues.customMinutes) && Number(formValues.customMinutes) >= 1 && Number(formValues.customMinutes) <= 600)
@@ -474,9 +491,9 @@ function Dashboard() {
       setError(selectedRanges.length > maxSelectable ? t.selectedMomentsOverLimit.replace("{max}", String(maxSelectable)) : t.rangesInvalid)
       return
     }
-    if (!formValues.url.trim()) { setError(t.urlRequired); return }
+    const invalidSource = sourceError(formValues.url); if (invalidSource) { setError(invalidSource); return }
     if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return }
-    create.mutate({ url: formValues.url.trim(), mode: "manual", ranges: selectedRanges, clipCount: selectedRanges.length, targetDurationSec: formValues.duration, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, captionLanguage, transcriptSource, captionStyle: captions ? captionStyle : null, customHashtags: parsedCustomHashtags, watermark: watermarkRef.current, outro: outroRef.current, ...(description.trim() ? { description: description.trim() } : {}) })
+    create.mutate({ ...sourceSettings, url: formValues.url.trim(), mode: "manual", ranges: selectedRanges, clipCount: selectedRanges.length, targetDurationSec: formValues.duration, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, captionLanguage, transcriptSource, captionStyle: captions ? captionStyle : null, customHashtags: parsedCustomHashtags, watermark: watermarkRef.current, outro: outroRef.current, ...(description.trim() ? { description: description.trim() } : {}) })
   }
   useEffect(() => {
     if (preview.data?.status === "done" && initializedPreview.current !== preview.data.id) {
@@ -501,7 +518,7 @@ function Dashboard() {
   const isActive = (job?: { status: Job["status"] } | null) => !!job && (job.status === "queued" || job.status === "running")
   const blockingJob = isActive(selectedJob.data) ? selectedJob.data : activeJobs[0]
   const submitting = create.isPending || createPreview.isPending
-  const locked = submitting || !!blockingJob
+  const locked = (splitScreen.enabled && !splitScreen.clips.length) || submitting || !!blockingJob
   generationLocked.current = locked
   const blockingProgress = Math.max(0, Math.min(100, Math.round(blockingJob?.progress ?? 0)))
   const blockingHint = blockingJob ? blockingJob.status === "queued" ? t.jobQueuedHint : t.jobRunningHint.replace("{stage}", blockingJob.stage ? t.stages[blockingJob.stage] : t.status.running).replace("{progress}", String(blockingProgress)) : ""
@@ -557,7 +574,7 @@ function Dashboard() {
     { key: "white" as const, hex: "#FFFFFF" },
   ]
   const editingPreview = (monitorView === "frame" && activeFrame) || appliedWatermarkLayers.length > 0
-  const monitorAspectClass = !editingPreview || aspectRatio === "16:9"
+  const monitorAspectClass = (!editingPreview && !splitScreen.enabled) || aspectRatio === "16:9"
     ? "aspect-video"
     : aspectRatio === "9:16"
       ? "aspect-[4/5] min-h-[340px] sm:aspect-video sm:min-h-0"
@@ -568,7 +585,7 @@ function Dashboard() {
     <form noValidate onSubmit={submit} className="contents">
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:col-start-1 lg:row-start-1 lg:h-full" aria-label={t.sourceMonitor}>
         <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-border px-4 py-1.5 text-sm text-muted-foreground sm:py-0">
-          <span className="min-w-0 flex-[1_1_100%] truncate sm:flex-[1_1_8rem]">{formValues.url.trim() ? sourceLabel(formValues.url.trim()) : t.noSource}</span>
+          <span className="min-w-0 flex-[1_1_100%] truncate sm:flex-[1_1_8rem]">{primarySource.label || (formValues.url.trim() ? sourceLabel(formValues.url.trim()) : t.noSource)}</span>
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 sm:gap-2">
             {hookBanner && (
               <Tooltip>
@@ -689,7 +706,7 @@ function Dashboard() {
                 onSelectLayer={setSelectedLayerId}
                 onChangeLayer={(layerId, next) => updateWatermarkLayer(layerId, () => next)}
                 captions={captions}
-                captionStyle={captionStyle}
+                captionStyle={splitScreen.enabled && captionStyle.positionY==null?{...captionStyle,positionY:seam}:captionStyle}
                 twoSpeakers={twoSpeakers}
                 onCaptionStyleChange={setCaptionStyle}
                 showSafeZone={showSafeZone && aspectRatio === "9:16"}
@@ -698,8 +715,8 @@ function Dashboard() {
                 frame={{ imageUrl: activeFrame.imageUrl, width: activeFrame.width, height: activeFrame.height, alt: t.frameImageAlt.replace("{time}", formatFrameTime(activeFrame.atSec)), caption: `${activeFrame.width}×${activeFrame.height} · ${formatFrameTime(activeFrame.atSec)}`, busy: framePreview.running, onImageError: () => framePreview.markImageBroken(activeFrame.id) }}
               />
             </> : <>
-              {embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0"/> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play className="ml-1 size-5"/></span><p className="font-display text-lg text-foreground">{t.sourceStatement}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.pasteToPreview}</p></div></div>}
-              {(appliedWatermarkLayers.length > 0 || (captions && embed) || (showSafeZone && aspectRatio === "9:16") || (showHookPreview && hookBanner)) && (
+              {videoSrc ? <video className="absolute inset-0 size-full object-contain" src={videoSrc} controls playsInline/> : embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0"/> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play className="ml-1 size-5"/></span><p className="font-display text-lg text-foreground">{t.sourceStatement}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.pasteToPreview}</p></div></div>}
+              {(appliedWatermarkLayers.length > 0 || (captions && (embed||videoSrc)) || (showSafeZone && aspectRatio === "9:16") || (showHookPreview && hookBanner)) && (
                 <WatermarkOverlay
                   aspectRatio={aspectRatio}
                   layers={appliedWatermarkLayers}
@@ -707,7 +724,7 @@ function Dashboard() {
                   onSelectLayer={setSelectedLayerId}
                   onChangeLayer={(layerId, next) => updateWatermarkLayer(layerId, () => next)}
                   captions={captions}
-                  captionStyle={captionStyle}
+                  captionStyle={splitScreen.enabled && captionStyle.positionY==null?{...captionStyle,positionY:seam}:captionStyle}
                   twoSpeakers={twoSpeakers}
                   onCaptionStyleChange={setCaptionStyle}
                   showSafeZone={showSafeZone && aspectRatio === "9:16"}
@@ -716,11 +733,13 @@ function Dashboard() {
                 />
               )}
             </>}
+            {splitScreen.enabled&&aspectRatio==='9:16'&&<div className="pointer-events-none absolute inset-0 z-10 text-xs text-white"><div className="absolute inset-x-0 border-t border-white/80" style={{top:`${seam*100}%`}}/>{[false,true].map(bottom=><span key={String(bottom)} style={{top:bottom?`calc(${seam*100}% + 6px)`:6}} className="absolute left-2 rounded bg-black/75 px-2 py-1">{bottom?st.bottom:st.top}: {bottom!==splitScreen.swap?`${st.broll} · ${splitScreen.clips.length}`:st.pundit}</span>)}</div>}
           </div>
         </div>
-        <div className="shrink-0 border-t border-border bg-card p-4"><Field><FieldLabel htmlFor="source-url" className="text-sm font-medium text-foreground">{t.sourceUrl}</FieldLabel><div className="relative mt-2"><Play className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/><form.Field name="url" validators={{ onChange: ({ value }) => value.trim() ? undefined : t.urlRequired }}>{(field) => <><Input id="source-url" name="url" type="url" inputMode="url" autoComplete="url" placeholder={t.sourcePlaceholder} value={field.state.value} aria-invalid={field.state.meta.isTouched && !field.state.meta.isValid} onBlur={field.handleBlur} onChange={(e) => field.handleChange(e.target.value)} required className="h-14 rounded-md pl-10 text-base" />{field.state.meta.isTouched && field.state.meta.errors.length > 0 && <FieldDescription className="text-destructive">{field.state.meta.errors[0]}</FieldDescription>}</>}</form.Field></div><FieldDescription className="mt-2 text-muted-foreground">{t.sourceHint}</FieldDescription></Field></div>
+        <div className="max-h-64 shrink-0 space-y-2 overflow-y-auto border-t p-4"><h3 className="text-sm font-medium">{st.source}</h3><MediaSourcePicker value={primarySource.kind==='url'?{kind:'url',url:formValues.url}:primarySource} onChange={src=>{setPrimary(src);form.setFieldValue('url',src.kind==='url'?src.url??'':src.mediaId?'media://'+src.mediaId:src.clipId?'clip://'+src.clipId:'')}}/></div>
       </section>
       <aside className="relative min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-start-2 lg:row-start-1 lg:flex lg:h-full lg:max-h-full lg:flex-col"><div className="shrink-0 border-b border-border px-4 py-3"><h3 className="font-display text-lg font-medium">{t.settings}</h3></div><div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4"><div className="relative space-y-4">
+          {aspectRatio==='9:16'&&<SplitScreenPanel value={splitScreen} summaries={preview.data?.brollSummaries} onChange={next=>{if(next.enabled){setFacecam(false);setTwoSpeakers(false)}setSplit(next)}}/>}
           <Field><FieldLabel>{t.creationMode}</FieldLabel><div className="grid grid-cols-2 gap-1 rounded-md bg-secondary p-1" role="group" aria-label={t.creationMode}><button type="button" className={`inline-flex h-10 items-center justify-center rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${mode === "auto" ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-background/60"}`} aria-pressed={mode === "auto"} onClick={() => setMode("auto")}>{t.autoMode}</button><button type="button" className={`inline-flex h-10 items-center justify-center rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${mode === "manual" ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-background/60"}`} aria-pressed={mode === "manual"} onClick={() => setMode("manual")}>{t.manualMode}</button></div></Field>
           {mode === "auto" && <Field><FieldLabel htmlFor="source-duration-select">{t.videoDurationScan}</FieldLabel><Select value={maxSourceChoice} onValueChange={setMaxSourceChoice}><SelectTrigger id="source-duration-select" className="h-11 w-full rounded-md"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="full">{t.fullVideo}</SelectItem><SelectItem value="600">{t.tenMinutes}</SelectItem><SelectItem value="1200">{t.twentyMinutes}</SelectItem><SelectItem value="1800">{t.thirtyMinutes}</SelectItem><SelectItem value="3600">{t.sixtyMinutes}</SelectItem><SelectItem value="5400">{t.ninetyMinutes}</SelectItem><SelectItem value="custom">{t.customDuration}</SelectItem></SelectContent></Select><FieldDescription>{t.scanDurationHint}</FieldDescription>{maxSourceChoice === "custom" && <Field className="mt-3"><FieldLabel htmlFor="custom-source-minutes">{t.customMinutesLabel}</FieldLabel><Input id="custom-source-minutes" type="number" min={1} max={600} step={1} inputMode="numeric" value={formValues.customMinutes} aria-invalid={!validCustomMinutes} onChange={(event) => form.setFieldValue("customMinutes", event.target.value)} required className="h-11 rounded-md tabular-nums" />{!validCustomMinutes && <FieldDescription className="text-destructive">{t.customMinutesInvalid}</FieldDescription>}</Field>}</Field>}
           <Field>
@@ -770,8 +789,8 @@ function Dashboard() {
             </FieldDescription>
           </Field>
            <Field><FieldLabel id="aspect-ratio-label">{t.outputFormat}</FieldLabel><RadioGroup aria-labelledby="aspect-ratio-label" value={aspectRatio} onValueChange={changeAspectRatio} className="grid grid-cols-3 gap-1.5 rounded-lg bg-secondary p-1">{([{ value: "9:16", shape: "h-5 w-3" }, { value: "1:1", shape: "size-4" }, { value: "16:9", shape: "w-6 h-3.5" }] as const).map(({ value, shape }) => <label key={value} htmlFor={`aspect-${value}`} className="group relative flex min-w-0 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-transparent px-1 py-2.5 !transition-none has-[:checked]:border-accent/50 has-[:checked]:bg-accent/15 has-[:checked]:shadow-sm hover:bg-card/60"><RadioGroupItem id={`aspect-${value}`} value={value} className="sr-only"/><span aria-hidden="true" className={`block ${shape} rounded-[3px] border-2 border-muted-foreground group-has-[:checked]:border-accent`}/><span className="font-mono text-xs font-semibold tabular-nums text-foreground">{value}</span></label>)}</RadioGroup><p className="mt-2 truncate text-xs text-muted-foreground">{{ "9:16": t.aspectPortrait, "1:1": t.aspectSquare, "16:9": t.aspectLandscape }[aspectRatio]}</p></Field>
-           <Field className={twoSpeakers || facecam || aspectRatio === "16:9" ? "opacity-50" : undefined}>
-               <FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup disabled={twoSpeakers || facecam || aspectRatio === "16:9"} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers && !facecam && aspectRatio !== "16:9") setReframe(value as Job["reframe"]) }} className="mt-2 grid min-w-0 gap-1.5">{([{ value: "center_crop", label: t.centerCrop, hint: t.centerCropHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }, { value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-2 transition-colors has-[:checked]:bg-accent/15 has-[:checked]:ring-1 has-[:checked]:ring-accent/40 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5 shrink-0"/><span className="min-w-0"><span className="block text-sm font-medium leading-5 text-foreground">{option.label}</span><span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers || facecam ? <FieldDescription>{t.reframeIgnored}</FieldDescription> : aspectRatio === "16:9" ? <FieldDescription>{t.reframeUnavailable}</FieldDescription> : null}</Field>
+           <Field className={twoSpeakers || facecam || splitScreen.enabled || aspectRatio === "16:9" ? "opacity-50" : undefined}>
+               <FieldLabel id="reframe-label">{t.portraitReframe}</FieldLabel><RadioGroup disabled={twoSpeakers || facecam || splitScreen.enabled || aspectRatio === "16:9"} aria-labelledby="reframe-label" value={reframe} onValueChange={(value) => { if (!twoSpeakers && !facecam && !splitScreen.enabled && aspectRatio !== "16:9") setReframe(value as Job["reframe"]) }} className="mt-2 grid min-w-0 gap-1.5">{([{ value: "center_crop", label: t.centerCrop, hint: t.centerCropHint }, { value: "blurred_fill", label: t.blurredFill, hint: t.blurredFillHint }, { value: "black_bars", label: t.blackBars, hint: t.blackBarsHint }, { value: "face_tracking", label: t.faceTracking, hint: t.faceTrackingHint }] as const).map((option) => <label key={option.value} htmlFor={`reframe-${option.value}`} className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-2 transition-colors has-[:checked]:bg-accent/15 has-[:checked]:ring-1 has-[:checked]:ring-accent/40 hover:bg-secondary/50"><RadioGroupItem id={`reframe-${option.value}`} value={option.value} className="mt-0.5 shrink-0"/><span className="min-w-0"><span className="block text-sm font-medium leading-5 text-foreground">{option.label}</span><span className="block whitespace-normal text-xs leading-4 text-muted-foreground">{option.hint}</span></span></label>)}</RadioGroup>{twoSpeakers || facecam ? <FieldDescription>{t.reframeIgnored}</FieldDescription> : aspectRatio === "16:9" ? <FieldDescription>{t.reframeUnavailable}</FieldDescription> : null}</Field>
             <Field>
               <FieldLabel>{t.processingOptions}</FieldLabel>
               <div className="divide-y divide-border border-y border-border">
@@ -785,7 +804,7 @@ function Dashboard() {
                     unavailable: aspectRatio !== "9:16",
                     onChange: (checked: boolean) => {
                       setTwoSpeakers(checked)
-                      if (checked) setFacecam(false)
+                      if (checked) {setSplit(v=>({...v,enabled:false}));setFacecam(false)}
                     },
                   },
                   {
@@ -796,7 +815,7 @@ function Dashboard() {
                     checked: facecam,
                     unavailable: aspectRatio !== "9:16",
                     onChange: (checked: boolean) => {
-                      setFacecam(checked)
+                      if(checked)setSplit(v=>({...v,enabled:false}));setFacecam(checked)
                       if (checked) setTwoSpeakers(false)
                     },
                   },
@@ -1238,13 +1257,13 @@ function Dashboard() {
 
           {mode === "manual" && <Field><FieldLabel htmlFor="target-duration-manual">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration-manual" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field>}
       </div></div>
-        <div className="shrink-0 border-t border-border bg-card/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur lg:sticky lg:bottom-0 lg:pb-3 supports-[backdrop-filter]:bg-card/80">{error && <Alert variant="destructive" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}<div className="flex flex-col items-stretch gap-3"><div className="min-w-0"><p className="text-xs leading-5 text-muted-foreground">{mode === "auto" ? (reviewFirst ? t.reviewSummary.replace("{duration}", Number.isFinite(formValues.duration) ? String(formValues.duration) : "—").replace("{max}", String(REVIEW_MAX_SELECTABLE)) : t.autoSummary.replace("{count}", String(formValues.clipCount)).replace("{duration}", String(formValues.duration))) : t.manualSummary.replace("{count}", String(formValues.ranges.length))}</p>{mode === "auto" && <LlmStatus compact prominent jobStatus={jobs.data?.find((job) => ["done", "failed", "cancelled"].includes(job.status))?.status}/>}</div>{blockingJob && <div role="status" className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-xs leading-5 text-foreground"><LoaderCircle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent motion-reduce:animate-none"/><span className="min-w-0">{blockingHint}{blockingJob.id !== selectedJobId && <> <Link to="/" search={(previous) => ({ ...previous, job: blockingJob.id })} className="font-medium text-accent underline-offset-2 hover:underline">{t.viewProgress}</Link></>}</span></div>}<Button type="submit" className="h-11 w-full shrink-0 rounded-md px-4" aria-busy={locked} disabled={locked}>{locked ? <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin motion-reduce:animate-none"/> : <ArrowUpRight className="mr-2 size-4"/>}{create.isPending || blockingJob ? t.generatingClips : reviewFirst && mode === "auto" ? t.startReview : mode === "auto" ? t.generateClips.replace("{count}", String(formValues.clipCount)) : t.generateManualClips.replace("{count}", String(formValues.ranges.length))}</Button></div></div>
+        <div className="shrink-0 border-t border-border bg-card/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur lg:sticky lg:bottom-0 lg:pb-3 supports-[backdrop-filter]:bg-card/80">{error && <Alert variant="destructive" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}<div className="flex flex-col items-stretch gap-3"><div className="min-w-0"><p className="text-xs leading-5 text-muted-foreground">{mode === "auto" ? (reviewFirst ? t.reviewSummary.replace("{duration}", Number.isFinite(formValues.duration) ? String(formValues.duration) : "—").replace("{max}", String(REVIEW_MAX_SELECTABLE)) : t.autoSummary.replace("{count}", String(formValues.clipCount)).replace("{duration}", String(formValues.duration))) : t.manualSummary.replace("{count}", String(formValues.ranges.length))}</p>{mode === "auto" && <LlmStatus compact prominent jobStatus={jobs.data?.find((job) => ["done", "failed", "cancelled"].includes(job.status))?.status}/>}</div>{blockingJob && <div role="status" className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-xs leading-5 text-foreground"><LoaderCircle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent motion-reduce:animate-none"/><span className="min-w-0">{blockingHint}{blockingJob.id !== selectedJobId && <> <Link to="/" search={(previous) => ({ ...previous, job: blockingJob.id })} className="font-medium text-accent underline-offset-2 hover:underline">{t.viewProgress}</Link></>}</span></div>}{splitScreen.enabled && !splitScreen.clips.length && <p role="status" className="text-xs text-muted-foreground">{st.need}</p>}<Button type="submit" className="h-11 w-full shrink-0 rounded-md px-4" aria-busy={submitting} disabled={locked}>{submitting || blockingJob ? <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin motion-reduce:animate-none"/> : <ArrowUpRight className="mr-2 size-4"/>}{create.isPending || blockingJob ? t.generatingClips : reviewFirst && mode === "auto" ? t.startReview : mode === "auto" ? t.generateClips.replace("{count}", String(formValues.clipCount)) : t.generateManualClips.replace("{count}", String(formValues.ranges.length))}</Button></div></div>
       </aside>
     </form>
     <section aria-labelledby="results-heading" className="mt-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-span-2 lg:row-start-2"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3"><div><h3 id="results-heading" className="font-display text-lg font-medium">{t.results}</h3></div>{resultJob && <div className="flex flex-wrap items-center gap-2">{resultActiveClips.length > 0 && <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => setBatchScheduleOpen(true)}><CalendarClock aria-hidden="true" className="size-3.5" />{t.scheduleBatch}</Button>}<Link to="/jobs/$jobId" params={{ jobId: resultJob.id }} className="inline-flex min-h-10 items-center gap-2 text-xs text-muted-foreground hover:text-foreground">{t.openFullJob}<ArrowUpRight className="size-4"/></Link></div>}</div><div className="space-y-4 p-4">
-      {reviewFirst && mode === "auto" && <ReviewPanel preview={preview.data} loading={createPreview.isPending || (!!previewId && preview.isPending) || preview.data?.status === "queued" || preview.data?.status === "running"} error={previewExpired ? t.previewExpired : createPreview.isError || preview.isError || preview.data?.status === "failed" ? preview.data?.error || t.previewFailed : ""} t={t} maxSelectable={maxSelectable} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} selectedCueStart={selectedCueStart} setSelectedCueStart={setSelectedCueStart} selectedCueEnd={selectedCueEnd} setSelectedCueEnd={setSelectedCueEnd} cueRanges={cueRanges} setCueRanges={setCueRanges} createPending={locked} renderSelected={renderSelected} retry={() => { setError(""); if (!formValues.url.trim()) { setError(t.urlRequired); return } if (!/^https?:\/\//i.test(formValues.url.trim())) { setError(t.urlInvalid); return } if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return } if (!validCustomMinutes) { setError(t.customMinutesInvalid); return } createPreview.mutate({ url: formValues.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: formValues.duration, maxSourceSec: selectedMaxSourceSec(), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) }) }} reviewRef={reviewRef} />}
+      {reviewFirst && mode === "auto" && <ReviewPanel key={previewId} splitScreen={splitScreen} preview={preview.data} loading={createPreview.isPending || (!!previewId && preview.isPending) || preview.data?.status === "queued" || preview.data?.status === "running"} error={previewExpired ? t.previewExpired : createPreview.isError || preview.isError || preview.data?.status === "failed" ? preview.data?.error || t.previewFailed : ""} t={t} maxSelectable={maxSelectable} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} selectedCueStart={selectedCueStart} setSelectedCueStart={setSelectedCueStart} selectedCueEnd={selectedCueEnd} setSelectedCueEnd={setSelectedCueEnd} cueRanges={cueRanges} setCueRanges={setCueRanges} createPending={locked} renderSelected={renderSelected} retry={() => { setError(""); const invalidSource = sourceError(formValues.url); if (invalidSource) { setError(invalidSource); return } if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return } if (!validCustomMinutes) { setError(t.customMinutesInvalid); return } createPreview.mutate({ ...sourceSettings, url: formValues.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: formValues.duration, maxSourceSec: selectedMaxSourceSec(), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) }) }} reviewRef={reviewRef} />}
       {selectedJobId && selectedJob.isPending ? <div role="status" className="flex items-center gap-3 py-5 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin text-primary"/>{t.loading}</div> : selectedJob.isError ? <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{t.apiError}</span><Button variant="outline" onClick={() => selectedJob.refetch()}>{t.retry}</Button></AlertDescription></Alert> : resultJob ? resultJob.status === "failed" || resultJob.status === "cancelled" ? <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-destructive/25 bg-destructive/5 p-4"><div className="flex min-w-0 gap-3"><CircleAlert className="mt-0.5 size-5 shrink-0 text-destructive"/><div><p className="font-medium">{t.status[resultJob.status]}</p><p className="mt-1 break-words text-sm text-muted-foreground">{resultJob.error || t.jobFailedFallback}</p></div></div><Button className="min-h-11" disabled={retryJob.isPending} onClick={() => retryJob.mutate()}>{retryJob.isPending && <LoaderCircle className="mr-2 size-4 animate-spin"/>}{t.retryJobInline}</Button></div> : <JobAssembly job={resultJob} t={t} layout="carousel"/>
-      : activeJobs.length || failedJobs.length ? <div className="grid gap-3 md:grid-cols-2">{[...activeJobs, ...failedJobs].map((job) => <Link key={job.id} to="/" search={(previous) => ({ ...previous, job: job.id })} className="min-w-0 rounded-lg border border-border p-3 transition-colors hover:bg-secondary/40"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{sourceLabel(job.url)}</span><span className="text-xs text-muted-foreground">{job.status === "running" && job.stage ? t.stages[job.stage] : t.status[job.status]}</span></div><div className="mt-3 h-1 overflow-hidden rounded-full bg-secondary"><span className="block h-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }}/></div></Link>)}</div> : <div className="grid min-h-28 place-items-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">{t.generatedAppear}</div>}
+      : activeJobs.length || failedJobs.length ? <div className="grid gap-3 md:grid-cols-2">{[...activeJobs, ...failedJobs].map((job) => <Link key={job.id} to="/" search={(previous) => ({ ...previous, job: job.id })} className="min-w-0 rounded-lg border border-border p-3 transition-colors hover:bg-secondary/40"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{job.primarySource?.label || sourceLabel(job.url)}</span><span className="text-xs text-muted-foreground">{job.status === "running" && job.stage ? t.stages[job.stage] : t.status[job.status]}</span></div><div className="mt-3 h-1 overflow-hidden rounded-full bg-secondary"><span className="block h-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }}/></div></Link>)}</div> : <div className="grid min-h-28 place-items-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">{t.generatedAppear}</div>}
       </div></section>
     </div>
     {resultJob && resultActiveClips.length > 0 && (

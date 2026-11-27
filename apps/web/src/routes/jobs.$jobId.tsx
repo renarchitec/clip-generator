@@ -1,3 +1,5 @@
+import { sourceVideo } from '@/lib/split-screen'
+import { useSplitText } from '@/components/media-source-picker'
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, AudioLines, CalendarClock, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Radio, Sparkles, Subtitles, Trash2, Users, Video } from "lucide-react"
@@ -131,6 +133,10 @@ function JobDetail() {
   }, [jobId, terminal, client, queryKey])
 
   const snapshot = job.data
+  const st=useSplitText()
+  const mediaSrc=sourceVideo(snapshot?.primarySource)
+  const sourceName=snapshot?.primarySource?.label || (snapshot?.primarySource && snapshot.primarySource.kind!=="url" ?st[snapshot.primarySource.kind]:undefined)
+  const split=snapshot?.splitScreen
   const embed = snapshot ? getVideoEmbed(snapshot.url) : null
   const activeClips = useMemo(() => snapshot?.clips.filter((clip) => !clip.deletedAt) ?? [], [snapshot])
   const batchClips = useMemo(
@@ -174,10 +180,10 @@ function JobDetail() {
       ) : snapshot ? (
         <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,400px)] lg:grid-rows-[minmax(560px,calc(100vh-120px))_auto]">
           <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:col-start-1 lg:row-start-1 lg:h-full" aria-label={t.sourceMonitor}>
-            <div className="flex min-h-11 items-center border-b border-border px-4 text-sm text-muted-foreground"><span className="min-w-0 truncate">{sourceLabel(snapshot.url)}</span></div>
+            <div className="flex min-h-11 items-center border-b border-border px-4 text-sm text-muted-foreground"><span className="min-w-0 truncate">{sourceName??sourceLabel(snapshot.url)}</span></div>
             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted p-4">
               <div className={`relative aspect-video w-full max-w-full overflow-hidden shadow-xl ${embed ? "bg-black" : "border border-border bg-[radial-gradient(ellipse_at_center,var(--monitor-empty-center),var(--monitor-empty-edge))]"}`}>
-                {embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0" /> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play aria-hidden="true" className="ml-1 size-5" /></span><p className="font-display text-lg text-foreground">{sourceLabel(snapshot.url)}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.sourceUrl}</p></div></div>}
+                {mediaSrc?<video src={mediaSrc} controls playsInline className="absolute inset-0 size-full object-contain"/>:embed ? <iframe key={embed.src} src={embed.src} title={embed.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" className="absolute inset-0 size-full border-0" /> : <div className="absolute inset-0 grid place-items-center"><div className="max-w-xs px-5 text-center"><span className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl border border-border bg-card text-primary shadow-sm"><Play aria-hidden="true" className="ml-1 size-5" /></span><p className="font-display text-lg text-foreground">{sourceName??sourceLabel(snapshot.url)}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t.sourceUrl}</p></div></div>}
               </div>
             </div>
             <div className="shrink-0 border-t border-border bg-card p-4">
@@ -185,9 +191,10 @@ function JobDetail() {
                 <FieldTitle className="text-sm font-medium text-foreground">{t.sourceUrl}</FieldTitle>
                 <div className="mt-2 flex min-h-14 items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
                   <Play aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-                  <span className="min-w-0 break-all">{snapshot.url}</span>
+                  <span className="min-w-0 break-all">{sourceName??snapshot.url}</span>
                 </div>
               </Field>
+              {split?.enabled&&<section className="mt-3 space-y-1 text-sm"><h3 className="font-medium">{st.split} · {split.ratio}</h3><p>{st.top}: {split.swap?st.broll:st.pundit} · {st.bottom}: {split.swap?st.pundit:st.broll}</p><p>{st[split.matchMode]} · {st.volume}: {Math.round(split.secondaryVolume*100)}%</p><ol className="list-decimal pl-5">{split.clips.map(c=><li key={c.id}>{c.label||t.sourceUrl} · {st[c.kind]}</li>)}</ol></section>}
             </div>
           </section>
 

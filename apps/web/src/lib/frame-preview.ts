@@ -8,7 +8,7 @@ export const FRAME_MAX_SEC = 36000
 const FRAME_POLL_MS = 1500
 
 /** Settings that affect the clip frame itself, excluding intro and outro cards. */
-export type FrameParams = { url: string; aspectRatio: AspectRatio; reframe: Reframe; twoSpeakers: boolean; facecam: boolean }
+export type FrameParams = import("./api").SourceSettings & { url: string; aspectRatio: AspectRatio; reframe: Reframe; twoSpeakers: boolean; facecam: boolean }
 export type FrameResponse = { id: string; status: "queued" | "running" | "done" | "failed"; error?: string; width?: number; height?: number; atSec?: number; imageUrl?: string }
 export type RenderedFrame = { id: string; imageUrl: string; width: number; height: number; atSec: number }
 export type FrameErrorKind = "busy" | "invalid" | "failed" | "network" | "expired"
@@ -31,7 +31,7 @@ export function formatFrameTime(seconds: number): string {
   return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${String(minutes).padStart(2, "0")}:${rest}`
 }
 
-const frameKey = (params: FrameParams) => JSON.stringify([params.url.trim(), params.aspectRatio, params.reframe, params.twoSpeakers, params.facecam])
+const frameKey = (params: FrameParams) => JSON.stringify([params.url.trim(), params.aspectRatio, params.reframe, params.twoSpeakers, params.facecam,params.primarySource,params.splitScreen])
 const statusOf = (error: unknown) => (error as { status?: number } | null)?.status
 
 /**
@@ -48,7 +48,7 @@ export function useFramePreview(params: FrameParams, suggestedSec: number) {
   const create = useMutation({
     mutationFn: (variables: { atSec: number; params: FrameParams; key: string }) => api<{ id: string }>("/frames", {
       method: "POST",
-      body: JSON.stringify({ url: variables.params.url.trim(), atSec: variables.atSec, aspectRatio: variables.params.aspectRatio, reframe: variables.params.reframe, twoSpeakers: variables.params.twoSpeakers, facecam: variables.params.facecam, captions: false, captionStyle: null }),
+      body: JSON.stringify({ primarySource:variables.params.primarySource,splitScreen:variables.params.splitScreen,url: variables.params.url.trim(), atSec: variables.atSec, aspectRatio: variables.params.aspectRatio, reframe: variables.params.reframe, twoSpeakers: variables.params.twoSpeakers, facecam: variables.params.facecam, captions: false, captionStyle: null }),
     }),
     onSuccess: ({ id }, variables) => setRequest({ id, atSec: variables.atSec, key: variables.key }),
   })
@@ -83,7 +83,7 @@ export function useFramePreview(params: FrameParams, suggestedSec: number) {
 
   const timeText = timeInput ?? formatFrameTime(suggestedSec)
   const parsedSec = parseFrameTime(timeText)
-  const hasUrl = /^https?:\/\//i.test(params.url.trim())
+  const hasUrl = !!(params.primarySource?.mediaId || params.primarySource?.clipId) || /^https?:\/\//i.test(params.url.trim())
 
   const start = (atSec: number) => {
     create.reset()

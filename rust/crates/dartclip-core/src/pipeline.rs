@@ -2,12 +2,14 @@ use crate::{
     hook_thumbnail, live_chat,
     llm::{self, LlmClient},
     models::*,
+    split_screen::{self, PreparedBrollClip},
     stt::{self, SttConfig, Transcriber},
     subtitles,
     tools::{self, ToolPaths},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
+    collections::HashMap,
     fs,
     future::Future,
     path::{Component, Path, PathBuf},
@@ -141,6 +143,15 @@ pub struct RenderOptions {
     pub watermarks: Vec<(Watermark, PathBuf)>,
     pub normalize_audio: bool,
     pub timeline_offset: f64,
+    pub split_screen: Option<Arc<PreparedSplitScreen>>,
+    pub split_timeline: Option<Vec<SplitScreenSegment>>,
+}
+
+#[derive(Debug)]
+pub struct PreparedSplitScreen {
+    config: SplitScreenConfig,
+    catalog: Vec<llm::BrollCatalogItem>,
+    clips: HashMap<String, PreparedBrollClip>,
 }
 impl Default for RenderOptions {
     fn default() -> Self {
@@ -154,6 +165,8 @@ impl Default for RenderOptions {
             watermarks: vec![],
             normalize_audio: false,
             timeline_offset: 0.,
+            split_screen: None,
+            split_timeline: None,
         }
     }
 }
@@ -310,11 +323,12 @@ pub fn with_watermarks(
     label: &str,
     width: u32,
     watermarks: &[Watermark],
+    first_wm_input_idx: usize,
 ) -> (Vec<String>, String) {
     let count = watermarks.len().min(WATERMARK_MAX_PER_JOB);
     let mut current = label.to_owned();
     for (i, wm) in watermarks.iter().take(count).enumerate() {
-        let input = format!("[{}:v]", i + 1);
+        let input = format!("[{}:v]", i + first_wm_input_idx);
         let wm_label = if count == 1 {
             "[wm]".into()
         } else {
@@ -479,11 +493,22 @@ impl Pipeline {
         let video = video.canonicalize()?;
         let out = canonical_destination(out)?;
         let work = self.workdir("render-")?;
-        let duration = (moment.end - moment.start).max(0.5);
         let (w, h) = options.aspect_ratio.output_size();
         let portrait = options.aspect_ratio == AspectRatio::Portrait;
         let landscape = options.aspect_ratio == AspectRatio::Landscape;
-        let two = portrait && options.two_speakers;
+        let split = options.split_screen.as_deref().filter(|_| portrait);
+        let duration = if split.is_some() {
+            moment.end - moment.start
+        } else {
+            (moment.end - moment.start).max(0.5)
+        };
+        let layout = split
+            .map(|split| split_screen::split_panel_dims(split.config.ratio, split.config.swap));
+        let style = subtitles::with_split_seam(
+            options.caption_style.as_ref(),
+            layout.map(|l| l.seam_y_frac),
+        );
+        let two = split.is_none() && portrait && options.two_speakers;
         let abs_start = moment.start + options.timeline_offset;
         let abs_end = moment.end + options.timeline_offset;
         let clip_cues = if options.captions {
@@ -494,7 +519,7 @@ impl Pipeline {
         let subtitle = if !clip_cues.is_empty() {
             fs::write(
                 work.path().join("caption.ass"),
-                subtitles::ass_text(&clip_cues, w, h, two, options.caption_style.as_ref()),
+                subtitles::ass_text(&clip_cues, w, h, two, style.as_ref()),
             )?;
             let fonts = self
                 .config
@@ -511,11 +536,65 @@ impl Pipeline {
         } else {
             None
         };
-        let require_facecam = portrait && options.facecam && !two;
+        let mut broll = None;
+        if let (Some(split), Some(layout)) = (split, layout) {
+            let segments = self
+                .split_timeline(
+                    split,
+                    (abs_start, abs_start + duration),
+                    cues,
+                    options.split_timeline.as_deref(),
+                    cancel,
+                )
+                .await?;
+            let path = work.path().join("broll_track.mp4");
+            let vol = split.config.secondary_volume.clamp(0., 1.);
+            split_screen::render_broll_track(
+                &segments,
+                &split.clips,
+                layout.secondary_w,
+                layout.secondary_h,
+                split.config.secondary_fit,
+                duration,
+                vol > 0.001,
+                &path,
+                &self.config.tools,
+                &self.config.video_encoder,
+                self.config.render_timeout,
+                cancel,
+            )
+            .await?;
+            if let Some(dest) = hook_cover {
+                if let Some(first) = segments
+                    .first()
+                    .and_then(|s| split.clips.get(&s.clip_id).map(|clip| (s, clip)))
+                {
+                    let (segment, clip) = first;
+                    if split_screen::extract_split_cover_frame(
+                        &self.config.tools.ffmpeg,
+                        (&video, moment.start),
+                        (&clip.path, segment.source_start_sec.unwrap_or(0.)),
+                        &split.config,
+                        None,
+                        dest,
+                        cancel,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        let _ = fs::remove_file(dest);
+                    }
+                    check_cancel(cancel)?;
+                }
+            }
+            broll = Some((path, vol));
+        }
+        let require_facecam = split.is_none() && portrait && options.facecam && !two;
         let faces = self.faces.clone();
         let src = video.clone();
         let (start, end) = (moment.start, moment.end);
         let reframe = options.reframe;
+        let split_inactive = split.is_none();
         let (facebox, centers, segments) = tokio::task::spawn_blocking(move || {
             let facebox = if require_facecam {
                 faces
@@ -534,6 +613,7 @@ impl Pipeline {
             let segments = if !two
                 && facebox.is_none()
                 && !landscape
+                && split_inactive
                 && reframe == ReframeMode::FaceTracking
             {
                 faces
@@ -546,7 +626,22 @@ impl Pipeline {
         })
         .await?;
         let reframe_graph = |subtitle| {
-            if two {
+            if let (Some(split), Some(layout)) = (split, layout) {
+                let graph = vec![
+                    "[0:v:0]setpts=PTS-STARTPTS,fps=30[src]".into(),
+                    split_screen::fit_panel_filter(
+                        "[src]",
+                        layout.primary_w,
+                        layout.primary_h,
+                        split.config.primary_fit,
+                        "[primary]",
+                    ),
+                    "[1:v:0]setpts=PTS-STARTPTS[secondary]".into(),
+                    split_screen::stack_panels(layout),
+                ];
+                let (graph, base) = add_subtitles(graph, "[stacked]", subtitle);
+                (graph, base, None)
+            } else if two {
                 let (left, right) = centers.unwrap_or((0.25, 0.75));
                 let (graph, base) = two_speaker_graph(left, right, subtitle);
                 (graph, base, None)
@@ -567,7 +662,7 @@ impl Pipeline {
                 (vec![format!("[0:v]{vf}[base]")], "[base]".into(), Some(vf))
             }
         };
-        if let Some(dest) = hook_cover {
+        if let Some(dest) = hook_cover.filter(|_| split.is_none()) {
             let (graph, base, simple) = reframe_graph(None);
             let complex = graph.join(";");
             let filter_args = match simple.as_deref() {
@@ -593,29 +688,35 @@ impl Pipeline {
             check_cancel(cancel)?;
         }
         let (graph, base, simple) = reframe_graph(subtitle.as_deref());
-        let loudnorm = if options.normalize_audio {
-            !tools::run(
-                Command::new(&self.config.tools.ffprobe)
-                    .args([
-                        "-v",
-                        "error",
-                        "-select_streams",
-                        "a:0",
-                        "-show_entries",
-                        "stream=index",
-                        "-of",
-                        "csv=p=0",
-                    ])
-                    .arg(&video),
-                Duration::from_secs(20),
-                cancel,
-            )
-            .await?
-            .stdout
-            .is_empty()
-        } else {
-            false
-        };
+        let has_audio =
+            if options.normalize_audio || broll.as_ref().is_some_and(|(_, vol)| *vol > 0.001) {
+                !tools::run(
+                    Command::new(&self.config.tools.ffprobe)
+                        .args([
+                            "-v",
+                            "error",
+                            "-select_streams",
+                            "a:0",
+                            "-show_entries",
+                            "stream=index",
+                            "-of",
+                            "csv=p=0",
+                        ])
+                        .arg(&video),
+                    Duration::from_secs(20),
+                    cancel,
+                )
+                .await?
+                .stdout
+                .is_empty()
+            } else {
+                false
+            };
+        let loudnorm = options.normalize_audio && has_audio;
+        let mix_vol = broll
+            .as_ref()
+            .map(|(_, vol)| *vol)
+            .filter(|vol| has_audio && *vol > 0.001);
         let mut layers = Vec::new();
         let mut wm_args = Vec::new();
         for (wm, path) in options.watermarks.iter().take(WATERMARK_MAX_PER_JOB) {
@@ -638,17 +739,42 @@ impl Pipeline {
                     "-i",
                 ])
                 .arg(&video);
-            if with_marks {
-                cmd.arg("-xerror");
-                let (chain, label) = with_watermarks(graph.clone(), &base, w, &layers);
-                cmd.args(&wm_args)
-                    .args(["-filter_complex", &chain.join(";"), "-map", &label]);
-            } else if let Some(vf) = &simple {
+            if let Some((path, _)) = &broll {
+                cmd.arg("-i").arg(path);
+            }
+            let (mut chain, label) = if with_marks {
+                cmd.arg("-xerror").args(&wm_args);
+                with_watermarks(
+                    graph.clone(),
+                    &base,
+                    w,
+                    &layers,
+                    if broll.is_some() { 2 } else { 1 },
+                )
+            } else {
+                (graph.clone(), base.clone())
+            };
+            if let Some(vol) = mix_vol {
+                let norm = if loudnorm {
+                    ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100,aformat=channel_layouts=stereo"
+                } else {
+                    ""
+                };
+                chain.push(format!("[0:a:0]aformat=sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=1.0[a0];[1:a:0]aformat=sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume={vol:.6}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0:normalize=0{norm}[mixed]"));
+            }
+            if let Some(vf) = simple.as_ref().filter(|_| !with_marks) {
                 cmd.args(["-vf", vf, "-map", "0:v:0"]);
             } else {
-                cmd.args(["-filter_complex", &graph.join(";"), "-map", &base]);
+                cmd.args(["-filter_complex", &chain.join(";"), "-map", &label]);
             }
-            cmd.args(["-map", "0:a:0?"]);
+            cmd.args([
+                "-map",
+                if mix_vol.is_some() {
+                    "[mixed]"
+                } else {
+                    "0:a:0?"
+                },
+            ]);
             tools::video_encoder(&mut cmd, &self.config.video_encoder, "23");
             cmd.args([
                 "-c:a",
@@ -656,7 +782,7 @@ impl Pipeline {
                 "-b:a",
                 if loudnorm { "160k" } else { "128k" },
             ]);
-            if loudnorm {
+            if loudnorm && mix_vol.is_none() {
                 cmd.args(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "44100"]);
             }
             // Also bound the output: some image demuxers loop forever on a corrupt
@@ -821,6 +947,154 @@ fn validate_url(url: &str) -> Result<()> {
 }
 
 impl Pipeline {
+    fn local_primary(
+        &self,
+        source: Option<&PrimaryMediaSource>,
+        url: &str,
+    ) -> Result<Option<PathBuf>> {
+        match source.filter(|s| s.kind != MediaSourceKind::Url) {
+            Some(source) => split_screen::resolve_local_media_path(
+                &self.config.clips_dir,
+                source
+                    .file_path
+                    .as_deref()
+                    .context("missing local primary file path")?,
+            )
+            .map(Some),
+            None => {
+                validate_url(url)?;
+                Ok(None)
+            }
+        }
+    }
+
+    async fn local_cues(
+        &self,
+        path: &Path,
+        info: tools::MediaInfo,
+        bounds: Option<(f64, f64)>,
+        language: &str,
+        dir: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<TranscriptCue>> {
+        if !info.has_audio {
+            return Ok(vec![]);
+        }
+        let (start, end) = bounds.unwrap_or((0., info.duration));
+        let end = end.min(info.duration);
+        if end <= start {
+            return Ok(vec![]);
+        }
+        self.transcriber()?
+            .media(path, Some((start, end)), start, language, dir, cancel)
+            .await
+    }
+
+    async fn prepare_split(
+        &self,
+        config: Option<&SplitScreenConfig>,
+        dir: &Path,
+        vision: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Arc<PreparedSplitScreen>>> {
+        let Some(config) = config.filter(|c| c.is_active()) else {
+            return Ok(None);
+        };
+        let sources = split_screen::prepare_broll_sources(
+            self,
+            config,
+            dir,
+            vision && config.auto_match(),
+            self.llm.as_ref(),
+            cancel,
+        )
+        .await?;
+        let catalog = sources.iter().map(llm::BrollCatalogItem::from).collect();
+        let clips = sources
+            .into_iter()
+            .map(|clip| (clip.id.clone(), clip))
+            .collect();
+        Ok(Some(Arc::new(PreparedSplitScreen {
+            config: config.clone(),
+            catalog,
+            clips,
+        })))
+    }
+
+    async fn split_timeline(
+        &self,
+        split: &PreparedSplitScreen,
+        (start, end): (f64, f64),
+        cues: &[TranscriptCue],
+        manual: Option<&[SplitScreenSegment]>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<SplitScreenSegment>> {
+        if let Some(segments) = manual.filter(|s| !s.is_empty()) {
+            return Ok(llm::normalize_split_timeline(
+                segments.to_vec(),
+                end - start,
+                &split.catalog,
+            ));
+        }
+        if let Some(llm) = self
+            .llm
+            .as_ref()
+            .filter(|_| split.config.auto_match() && !cues.is_empty())
+        {
+            let result = tokio::select! { biased; _ = cancel.cancelled() => bail!("job cancelled"), result = llm.plan_split_screen_timeline(start, end, cues, &split.catalog) => result };
+            if let Some(timeline) = result.filter(|s| !s.is_empty()) {
+                return Ok(timeline);
+            }
+        }
+        Ok(llm::build_sequential_timeline(end - start, &split.catalog))
+    }
+
+    pub(crate) async fn download_broll(
+        &self,
+        url: &str,
+        dir: &Path,
+        prefix: &str,
+        start: Option<f64>,
+        end: Option<f64>,
+        cancel: &CancellationToken,
+    ) -> Result<(PathBuf, bool)> {
+        validate_url(url)?;
+        if start.is_some() || end.is_some() {
+            let start = start.unwrap_or(0.);
+            let end = match end {
+                Some(end) => end,
+                None => self
+                    .video_metadata(url, cancel)
+                    .await
+                    .ok()
+                    .and_then(|meta| number(&meta["duration"]))
+                    .unwrap_or(f64::INFINITY),
+            };
+            if end <= start {
+                bail!("invalid B-roll download range");
+            }
+            if end.is_finite() {
+                if let Ok(path) = self
+                    .section(
+                        url,
+                        dir,
+                        prefix,
+                        (start, end),
+                        Duration::from_secs(600),
+                        cancel,
+                    )
+                    .await
+                {
+                    return Ok((path, true));
+                }
+            }
+        }
+        check_cancel(cancel)?;
+        self.download_source(url, dir, prefix, None, Duration::from_secs(900), cancel)
+            .await
+            .map(|path| (path, false))
+    }
+
     fn ytdlp(&self) -> Command {
         let mut cmd = Command::new(&self.config.tools.ytdlp);
         cmd.arg("--ffmpeg-location").arg(&self.config.tools.ffmpeg);
@@ -1107,7 +1381,13 @@ impl Pipeline {
         let mut cmd = self.ytdlp();
         cmd.args([
             "-f",
-            if section.is_some() {
+            if prefix.starts_with("broll_") {
+                if section.is_some() {
+                    "bv*[height<=1080][ext=mp4][protocol^=http]+ba[ext=m4a][protocol^=http]/b[height<=1080][ext=mp4][protocol^=http]"
+                } else {
+                    "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b[height<=1080]"
+                }
+            } else if section.is_some() {
                 SECTION_FORMAT
             } else {
                 FULL_FORMAT
@@ -1209,11 +1489,26 @@ impl Pipeline {
         F: FnMut(JobProgress) -> Fut,
         Fut: Future<Output = ()>,
     {
-        validate_url(&request.url)?;
+        let local = self.local_primary(request.primary_source.as_ref(), &request.url)?;
         let dir = self.workdir("preview-")?;
-        let mut cues = self
-            .optional_cues(request.transcript_source, &request.url, dir.path(), cancel)
-            .await?;
+        let mut cues = if let Some(path) = &local {
+            let info = tools::probe_media_cancel(&self.config.tools.ffprobe, path, cancel).await?;
+            self.local_cues(
+                path,
+                info,
+                request.max_source_sec.map(|limit| (0., f64::from(limit))),
+                &request.caption_language,
+                dir.path(),
+                cancel,
+            )
+            .await?
+        } else {
+            self.optional_cues(request.transcript_source, &request.url, dir.path(), cancel)
+                .await?
+        };
+        if local.is_some() && cues.is_empty() {
+            bail!(NO_STT_CUES_ERROR);
+        }
         if cues.is_empty() {
             cues = self
                 .auto_stt(
@@ -1232,7 +1527,11 @@ impl Pipeline {
             progress(JobProgress {
                 stage: "transcribe".into(),
                 percent: 100.,
-                message: format!("{} cue dari subtitle", cues.len()),
+                message: format!(
+                    "{} cue dari {}",
+                    cues.len(),
+                    if local.is_some() { "audio" } else { "subtitle" }
+                ),
                 clip: None,
             })
             .await;
@@ -1247,6 +1546,31 @@ impl Pipeline {
                 cancel,
             )
             .await?;
+        let split = self
+            .prepare_split(request.split_screen.as_ref(), dir.path(), true, cancel)
+            .await?;
+        let broll_summaries = split.as_ref().map(|split| {
+            split
+                .catalog
+                .iter()
+                .filter_map(|clip| Some((clip.id.clone(), clip.description.clone()?)))
+                .collect()
+        });
+        let mut planned = Vec::with_capacity(candidates.len());
+        for moment in candidates {
+            let split_timeline = if let Some(split) = &split {
+                Some(
+                    self.split_timeline(split, (moment.start, moment.end), &cues, None, cancel)
+                        .await?,
+                )
+            } else {
+                None
+            };
+            planned.push(PreviewCandidate {
+                moment,
+                split_timeline,
+            });
+        }
         let cues = cues
             .into_iter()
             .map(|c| TranscriptCue {
@@ -1256,14 +1580,18 @@ impl Pipeline {
                 ..c
             })
             .collect();
-        Ok(PreviewResult { candidates, cues })
+        Ok(PreviewResult {
+            candidates: planned,
+            cues,
+            broll_summaries,
+        })
     }
     pub async fn run_frame(
         &self,
         request: &FrameRequest,
         cancel: &CancellationToken,
     ) -> Result<FrameResult> {
-        validate_url(&request.url)?;
+        let local = self.local_primary(request.primary_source.as_ref(), &request.url)?;
         if !request.at_sec.is_finite() || request.at_sec < 0. {
             bail!("invalid_frame_payload");
         }
@@ -1274,9 +1602,16 @@ impl Pipeline {
         let dest = destination_in(&root, &relative)?;
         clean_frames(&root.join(".frames"));
         let dir = self.workdir("frame-")?;
-        let offset = (request.at_sec - 1.).max(0.);
-        let source = self
-            .section(
+        let (width, height) = request.aspect_ratio.output_size();
+        let offset = if local.is_some() {
+            0.
+        } else {
+            (request.at_sec - 1.).max(0.)
+        };
+        let source = if let Some(path) = local {
+            path
+        } else {
+            self.section(
                 &request.url,
                 dir.path(),
                 "frame-source",
@@ -1284,7 +1619,75 @@ impl Pipeline {
                 Duration::from_secs(100),
                 cancel,
             )
-            .await?;
+            .await?
+        };
+        let tmp = tempfile::Builder::new()
+            .suffix(".jpg")
+            .tempfile_in(dest.parent().unwrap())?;
+        let info = tools::probe_media_cancel(&self.config.tools.ffprobe, &source, cancel).await?;
+        let seek = (request.at_sec - offset).min((info.duration - 1. / info.fps).max(0.));
+        if request.aspect_ratio == AspectRatio::Portrait {
+            // A frame payload has no storyboard; only the first B-roll source is needed.
+            let mut frame_split = request.split_screen.clone();
+            if let Some(config) = &mut frame_split {
+                config.clips.truncate(1);
+            }
+            if let Some(split) = self
+                .prepare_split(frame_split.as_ref(), dir.path(), false, cancel)
+                .await?
+            {
+                let first = split
+                    .clips
+                    .get(&split.catalog[0].id)
+                    .context("missing B-roll source")?;
+                let layout = split_screen::split_panel_dims(split.config.ratio, split.config.swap);
+                let subtitle = if request.captions {
+                    let style = subtitles::with_split_seam(
+                        request.caption_style.as_ref(),
+                        Some(layout.seam_y_frac),
+                    );
+                    let path = dir.path().join("caption.ass");
+                    let cues = [TranscriptCue {
+                        start: 0.,
+                        end: 2.,
+                        text: request.caption_sample.clone(),
+                        words: vec![],
+                    }];
+                    fs::write(
+                        &path,
+                        subtitles::ass_text(&cues, width, height, false, style.as_ref()),
+                    )?;
+                    let mut filter = format!("subtitles={}", escape_filter_option(&path));
+                    if let Some(fonts) = &self.config.font_dir {
+                        filter.push_str(&format!(":fontsdir={}", escape_filter_option(fonts)));
+                    }
+                    Some(filter)
+                } else {
+                    None
+                };
+                split_screen::extract_split_cover_frame(
+                    &self.config.tools.ffmpeg,
+                    (&source, seek),
+                    (&first.path, 0.),
+                    &split.config,
+                    subtitle.as_deref(),
+                    tmp.path(),
+                    cancel,
+                )
+                .await?;
+                if fs::metadata(tmp.path())?.len() == 0 {
+                    bail!("frame_render_failed");
+                }
+                tmp.persist(dest)?;
+                return Ok(FrameResult {
+                    file: relative.to_string_lossy().replace('\\', "/"),
+                    width,
+                    height,
+                    at_sec: request.at_sec,
+                });
+            }
+        }
+        let start = (seek - 1.).max(0.);
         let opts = RenderOptions {
             reframe: request.reframe,
             two_speakers: request.two_speakers,
@@ -1297,8 +1700,8 @@ impl Pipeline {
         };
         let cues = if request.captions {
             vec![TranscriptCue {
-                start: offset,
-                end: offset + 2.,
+                start: offset + start,
+                end: offset + start + 2.,
                 text: request.caption_sample.clone(),
                 words: vec![],
             }]
@@ -1306,20 +1709,17 @@ impl Pipeline {
             vec![]
         };
         let moment = Moment {
-            start: 0.,
-            end: 2.,
+            start,
+            end: (start + 2.).min(info.duration),
             title: "frame".into(),
             ..Default::default()
         };
         let rendered = dir.path().join("render.mp4");
         self.render_one(&source, &moment, &cues, &rendered, &opts, cancel)
             .await?;
-        let tmp = tempfile::Builder::new()
-            .suffix(".jpg")
-            .tempfile_in(dest.parent().unwrap())?;
         tools::run(
             tools::ffmpeg(&self.config.tools.ffmpeg)
-                .args(["-ss", "1.000", "-i"])
+                .args(["-ss", &format!("{:.6}", seek - start), "-i"])
                 .arg(&rendered)
                 .args(["-frames:v", "1", "-q:v", "3"])
                 .arg(tmp.path()),
@@ -1331,7 +1731,6 @@ impl Pipeline {
             bail!("frame_render_failed");
         }
         tmp.persist(dest)?;
-        let (width, height) = request.aspect_ratio.output_size();
         Ok(FrameResult {
             file: relative.to_string_lossy().replace('\\', "/"),
             width,
@@ -1428,7 +1827,16 @@ impl Pipeline {
         Fut: Future<Output = ()>,
     {
         check_cancel(cancel)?;
-        validate_url(&job.url)?;
+        let local = self.local_primary(job.primary_source.as_ref(), &job.url)?;
+        let local_info = if let Some(path) = &local {
+            Some(tools::probe_media_cancel(&self.config.tools.ffprobe, path, cancel).await?)
+        } else {
+            None
+        };
+        let split_config = job
+            .split_screen
+            .as_ref()
+            .filter(|config| job.aspect_ratio == AspectRatio::Portrait && config.is_active());
         if job.job_id.is_empty()
             || job.job_id.len() > 64
             || !job
@@ -1451,7 +1859,11 @@ impl Pipeline {
         let mut valid_ranges: Vec<_> = job
             .ranges
             .iter()
-            .filter(|r| r.start >= 0. && usable_duration(r.end - r.start))
+            .filter(|r| {
+                r.start >= 0.
+                    && usable_duration(r.end - r.start)
+                    && local_info.is_none_or(|info| r.start < info.duration)
+            })
             .collect();
         valid_ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
         if manual && valid_ranges.is_empty() {
@@ -1466,11 +1878,14 @@ impl Pipeline {
         let dir = self.workdir("clip-")?;
         let limit = (!manual).then_some(job.max_source_sec).flatten();
         let timeout = Duration::from_secs(1800);
-        let mut full = None;
-        if job.transcript_source == TranscriptSource::LiveChatStt {
+        let local_job = local.is_some();
+        let mut full = local;
+        if !local_job && job.transcript_source == TranscriptSource::LiveChatStt {
             self.transcriber()?;
         }
-        let message = if manual {
+        let message = if local_job {
+            "menyiapkan file video lokal".into()
+        } else if manual {
             format!("mengunduh subtitle untuk {} rentang", valid_ranges.len())
         } else if let Some(n) = limit {
             format!("mengunduh 0-{n} detik")
@@ -1478,7 +1893,7 @@ impl Pipeline {
             "mengunduh video".into()
         };
         on_progress(stage("download", 0., message, None)).await;
-        if !manual {
+        if !manual && !local_job {
             if let Some(limit) = limit {
                 full = self
                     .section(
@@ -1499,9 +1914,19 @@ impl Pipeline {
                 );
             }
         }
-        let mut cues = self
-            .optional_cues(job.transcript_source, &job.url, dir.path(), cancel)
-            .await?;
+        let mut cues = if local_job {
+            vec![]
+        } else if manual && !job.captions && split_config.is_some() {
+            if split_config.is_some_and(SplitScreenConfig::auto_match) {
+                self.optional_cues(TranscriptSource::Auto, &job.url, dir.path(), cancel)
+                    .await?
+            } else {
+                vec![]
+            }
+        } else {
+            self.optional_cues(job.transcript_source, &job.url, dir.path(), cancel)
+                .await?
+        };
         on_progress(stage(
             "download",
             100.,
@@ -1515,12 +1940,52 @@ impl Pipeline {
         ))
         .await;
         check_cancel(cancel)?;
-        let manual_stt = if cues.is_empty() && manual {
-            Some(self.transcriber()?)
+        let needs_split_cues = split_config.is_some_and(SplitScreenConfig::auto_match)
+            && valid_ranges
+                .iter()
+                .any(|range| range.split_timeline.as_ref().is_none_or(Vec::is_empty));
+        let manual_stt = if cues.is_empty()
+            && manual
+            && !local_job
+            && (job.captions || split_config.is_none() || needs_split_cues)
+        {
+            if job.captions || split_config.is_none() {
+                Some(self.transcriber()?)
+            } else {
+                self.transcriber().ok()
+            }
         } else {
             None
         };
-        if cues.is_empty() && !manual {
+        if let Some(info) = local_info.filter(|_| !manual) {
+            on_progress(stage(
+                "transcribe",
+                0.,
+                "mentranskrip video lokal...".into(),
+                None,
+            ))
+            .await;
+            cues = self
+                .local_cues(
+                    full.as_ref().context("missing primary source")?,
+                    info,
+                    limit.map(|limit| (0., f64::from(limit))),
+                    &job.caption_language,
+                    dir.path(),
+                    cancel,
+                )
+                .await?;
+            if cues.is_empty() {
+                bail!(NO_STT_CUES_ERROR);
+            }
+            on_progress(stage(
+                "transcribe",
+                100.,
+                format!("{} cue dari audio", cues.len()),
+                None,
+            ))
+            .await;
+        } else if cues.is_empty() && !manual {
             cues = self
                 .auto_stt(
                     job.transcript_source,
@@ -1548,10 +2013,15 @@ impl Pipeline {
         on_progress(stage("select", 0., "memilih momen".into(), None)).await;
         let moments = if manual {
             valid_ranges
-                .into_iter()
+                .iter()
                 .map(|r| Moment {
-                    start: llm::round_time(r.start),
-                    end: llm::round_time(r.end),
+                    start: if local_job {
+                        r.start
+                    } else {
+                        llm::round_time(r.start)
+                    },
+                    end: local_info
+                        .map_or_else(|| llm::round_time(r.end), |info| r.end.min(info.duration)),
                     title: r
                         .title
                         .as_deref()
@@ -1616,6 +2086,15 @@ impl Pipeline {
                 .filter_map(|w| Some((w.clone(), resolve_asset(&root, &w.file_path)?)))
                 .collect(),
             timeline_offset: 0.,
+            split_screen: self
+                .prepare_split(
+                    split_config,
+                    dir.path(),
+                    !manual || needs_split_cues,
+                    cancel,
+                )
+                .await?,
+            split_timeline: None,
         };
         let outro = job
             .outro
@@ -1670,12 +2149,57 @@ impl Pipeline {
                 .ok_or_else(|| anyhow!("sumber video tidak tersedia untuk render"))?;
             let offset = if section.is_some() { moment.start } else { 0. };
             opts.timeline_offset = offset;
+            opts.split_timeline = if manual {
+                valid_ranges[i].split_timeline.clone()
+            } else {
+                None
+            };
+            let match_needs_cues =
+                needs_split_cues && opts.split_timeline.as_ref().is_none_or(Vec::is_empty);
             let window = Moment {
                 start: moment.start - offset,
                 end: moment.end - offset,
                 ..moment.clone()
             };
-            let range_cues = if let Some(stt) = &manual_stt {
+            let range_cues = if let Some(info) =
+                local_info.filter(|_| manual && (job.captions || match_needs_cues))
+            {
+                on_progress(stage(
+                    "transcribe",
+                    0.,
+                    format!("mentranskrip clip {n}/{total}..."),
+                    None,
+                ))
+                .await;
+                let speech = self
+                    .local_cues(
+                        video,
+                        info,
+                        Some((moment.start, moment.end)),
+                        &job.caption_language,
+                        dir.path(),
+                        cancel,
+                    )
+                    .await;
+                check_cancel(cancel)?;
+                let speech = if job.captions {
+                    speech?
+                } else {
+                    speech.unwrap_or_default()
+                };
+                cues.extend(speech.iter().cloned());
+                on_progress(stage(
+                    "transcribe",
+                    100.,
+                    format!("{} cue dari audio", speech.len()),
+                    None,
+                ))
+                .await;
+                Some(speech)
+            } else if let Some(stt) = manual_stt
+                .as_ref()
+                .filter(|_| job.captions || split_config.is_none() || match_needs_cues)
+            {
                 on_progress(stage(
                     "transcribe",
                     0.,
@@ -1693,7 +2217,13 @@ impl Pipeline {
                         dir.path(),
                         cancel,
                     )
-                    .await?;
+                    .await;
+                check_cancel(cancel)?;
+                let speech = if job.captions || split_config.is_none() {
+                    speech?
+                } else {
+                    speech.unwrap_or_default()
+                };
                 cues.extend(speech.iter().cloned());
                 on_progress(stage(
                     "transcribe",
@@ -1858,6 +2388,44 @@ fn clean_frames(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn split_subtitles_default_to_the_seam_without_overriding_position() {
+        let cues = [TranscriptCue {
+            start: 0.,
+            end: 2.,
+            text: "example".into(),
+            words: vec![],
+        }];
+        let style = subtitles::with_split_seam(None, Some(0.4));
+        assert!(
+            subtitles::ass_text(&cues, 1080, 1920, false, style.as_ref())
+                .contains(r"\an5\pos(540,768)")
+        );
+        let explicit = CaptionStyle {
+            position_y: Some(0.7),
+            ..Default::default()
+        };
+        let style = subtitles::with_split_seam(Some(&explicit), Some(0.4));
+        assert!(
+            subtitles::ass_text(&cues, 1080, 1920, false, style.as_ref())
+                .contains(r"\an5\pos(540,1344)")
+        );
+    }
+
+    #[test]
+    fn split_watermarks_start_after_both_video_inputs() {
+        let (chain, output) = with_watermarks(
+            vec![],
+            "[stacked]",
+            1080,
+            &[Watermark::default(), Watermark::default()],
+            2,
+        );
+        assert!(chain[0].starts_with("[2:v]"));
+        assert!(chain[2].starts_with("[3:v]"));
+        assert_eq!(output, "[wmout]");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn preview_routes_sources_and_rejects_missing_stt_config() {
@@ -1978,8 +2546,13 @@ esac
             y: 0.8,
             ..Default::default()
         };
-        let (graph, label) =
-            with_watermarks(vec!["[0:v]null[base]".into()], "[base]", 1080, &vec![wm; 6]);
+        let (graph, label) = with_watermarks(
+            vec!["[0:v]null[base]".into()],
+            "[base]",
+            1080,
+            &vec![wm; 6],
+            1,
+        );
         assert_eq!(label, "[wmout]");
         assert_eq!(graph.len(), 11);
         assert!(graph[1].contains("[1:v]setpts=PTS-STARTPTS,chromakey=color=0x00FF00"));

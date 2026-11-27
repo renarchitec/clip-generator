@@ -352,6 +352,8 @@ export class QueueListener implements OnModuleInit, OnApplicationShutdown {
     this.jobEvents.publish({
       id: job.id,
       url: job.url,
+      primarySource: job.primarySource ?? null,
+      splitScreen: job.splitScreen ?? null,
       description: job.description ?? null,
       mode: job.mode,
       reframe: job.reframe,

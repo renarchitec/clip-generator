@@ -21,7 +21,7 @@ test('kontrak data job frame', async () => {
     assert.match(shared, new RegExp(`${field}:`));
   }
   const service = await read('apps/api/src/frames/frames.service.ts');
-  assert.match(service, /assertAllowedUrl\(dto\.url\)/);
+  assert.match(service, /resolvePrimarySource\(userId, dto\.url, dto\.primarySource\)/);
   assert.match(service, /aspectRatio === '9:16' \? \(dto\.twoSpeakers \?\? false\) : false/);
   assert.match(service, /aspectRatio === '9:16' && !twoSpeakers \? \(dto\.facecam \?\? false\) : false/);
   assert.match(service, /captionSample: 'Sample caption'/);

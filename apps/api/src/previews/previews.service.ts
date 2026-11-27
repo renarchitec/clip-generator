@@ -6,11 +6,14 @@ import type {
   PreviewCandidate,
   PreviewCue,
   PreviewJobData,
+  PreviewJobResult,
+  PreviewResponse,
   PreviewStatus,
 } from '@clipper/shared';
-import { DEFAULT_TRANSCRIPT_SOURCE } from '@clipper/shared';
+import { DEFAULT_ASPECT, DEFAULT_TRANSCRIPT_SOURCE } from '@clipper/shared';
 import { PREVIEW_QUEUE_NAME } from '../queue/queue.constants';
-import { assertAllowedUrl, normalizeDescription } from '../jobs/validation';
+import { normalizeDescription } from '../jobs/validation';
+import { MediaResolverService } from '../media/media-resolver.service';
 import { CreatePreviewDto } from './dto/create-preview.dto';
 
 /** Hasil preview tidak disimpan di DB: job BullMQ dibuang otomatis setelah 1 jam. */
@@ -21,12 +24,20 @@ export class PreviewsService {
   constructor(
     @InjectQueue(PREVIEW_QUEUE_NAME)
     private readonly queue: Queue<PreviewJobData>,
+    private readonly mediaResolver: MediaResolverService,
   ) {}
 
   async create(dto: CreatePreviewDto, userId: string) {
     const id = randomUUID();
+    const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
+    const { url, primarySource } = await this.mediaResolver.resolvePrimarySource(userId, dto.url, dto.primarySource);
+    const splitScreen = await this.mediaResolver.resolveSplitScreen(userId, dto.splitScreen, {
+      aspectRatio, twoSpeakers: dto.twoSpeakers, facecam: dto.facecam,
+    });
     const data: PreviewJobData = {
-      url: assertAllowedUrl(dto.url),
+      url,
+      primarySource,
+      splitScreen,
       transcriptSource: dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE,
       userId,
       description: normalizeDescription(dto.description),
@@ -45,7 +56,7 @@ export class PreviewsService {
     return { id };
   }
 
-  async findOne(id: string, userId: string) {
+  async findOne(id: string, userId: string): Promise<PreviewResponse & { description: string | null }> {
     const job = await this.queue.getJob(id);
     const data = job?.data as PreviewJobData | undefined;
 
@@ -59,6 +70,8 @@ export class PreviewsService {
     return {
       id,
       url: data.url,
+      primarySource: data.primarySource ?? null,
+      splitScreen: data.splitScreen ?? null,
       transcriptSource: data.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE,
       description: data.description ?? null,
       status: toStatus(state),
@@ -68,6 +81,7 @@ export class PreviewsService {
           : null,
       candidates: result?.candidates ?? null,
       cues: result?.cues ?? null,
+      brollSummaries: result?.brollSummaries ?? null,
     };
   }
 }
@@ -88,15 +102,14 @@ function parseJson(value: unknown): unknown {
   }
 }
 
-function parseResult(
-  value: unknown,
-): { candidates: PreviewCandidate[]; cues: PreviewCue[] } | null {
+function parseResult(value: unknown): PreviewJobResult | null {
   const parsed = parseJson(value);
   if (!parsed || typeof parsed !== 'object') return null;
 
-  const { candidates, cues } = parsed as {
+  const { candidates, cues, brollSummaries } = parsed as {
     candidates?: unknown;
     cues?: unknown;
+    brollSummaries?: unknown;
   };
   if (!Array.isArray(candidates) || !Array.isArray(cues)) return null;
 
@@ -118,5 +131,8 @@ function parseResult(
       typeof item.text === 'string',
   );
 
-  return { candidates: validCandidates, cues: validCues };
+  const summaries = brollSummaries && typeof brollSummaries === 'object' && !Array.isArray(brollSummaries)
+    ? Object.fromEntries(Object.entries(brollSummaries).filter(([, summary]) => typeof summary === 'string'))
+    : undefined;
+  return { candidates: validCandidates, cues: validCues, brollSummaries: summaries };
 }

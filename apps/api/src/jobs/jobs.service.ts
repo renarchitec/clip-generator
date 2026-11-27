@@ -16,6 +16,8 @@ import type {
   CaptionStyle,
   JobData,
   ManualRange,
+  PrimaryMediaSource,
+  SplitScreenConfig,
   ReframeMode,
   TranscriptSource,
 } from '@clipper/shared';
@@ -32,12 +34,13 @@ import { resolveClipPath } from '../clips/clip-path';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
 import { latestPerAccount } from '../publish/publish-helpers';
 import { AppConfig } from '../config/app-config.service';
+import { MediaResolverService } from '../media/media-resolver.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { sanitizePlatformCaptions } from '../queue/clip-social';
 import { JobEventsService, JobSnapshot } from '../queue/job-events.service';
 import { cancelKey, QUEUE_NAME } from '../queue/queue.constants';
 import { CreateJobDto } from './dto/create-job.dto';
-import { assertAllowedUrl, normalizeDescription } from './validation';
+import { normalizeDescription } from './validation';
 import { WatermarksService } from '../watermarks/watermarks.service';
 import { OutrosService } from '../outros/outros.service';
 import type { OutroJobPayload, StoredOutro } from '../outros/outro-helpers';
@@ -68,10 +71,10 @@ export class JobsService {
     private readonly outros: OutrosService,
     private readonly briefHistory: BriefHistoryService,
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
+    private readonly mediaResolver: MediaResolverService,
   ) {}
 
   async create(dto: CreateJobDto, userId: string) {
-    const url = assertAllowedUrl(dto.url);
     const ranges = normalizeRanges(dto);
     const description =
       dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
@@ -81,6 +84,10 @@ export class JobsService {
     const normalizeAudio = dto.normalizeAudio ?? true;
     const captionStyle = captions ? normalizeCaptionStyle(dto.captionStyle) : null;
     const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
+    const { url, primarySource } = await this.mediaResolver.resolvePrimarySource(userId, dto.url, dto.primarySource);
+    const splitScreen = await this.mediaResolver.resolveSplitScreen(userId, dto.splitScreen, {
+      aspectRatio, twoSpeakers: dto.twoSpeakers, facecam: dto.facecam,
+    });
     const captionLanguage = dto.captionLanguage ?? DEFAULT_CAPTION_LANGUAGE;
     const transcriptSource = dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE;
     const customHashtags = normalizeCustomHashtags(dto.customHashtags);
@@ -100,6 +107,8 @@ export class JobsService {
     const job = await this.prisma.job.create({
       data: {
         url,
+        primarySource: primarySource ? (primarySource as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+        splitScreen: splitScreen ? (splitScreen as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
         description,
         mode: dto.mode,
         reframe,
@@ -160,6 +169,8 @@ export class JobsService {
     const data: QueuedJobData = {
       jobId: job.id,
       url,
+      primarySource,
+      splitScreen,
       mode: dto.mode,
       reframe,
       captions,
@@ -309,6 +320,8 @@ export class JobsService {
 
     const dto = new CreateJobDto();
     dto.url = old.url;
+    dto.primarySource = (old.primarySource as unknown as PrimaryMediaSource | null) ?? null;
+    dto.splitScreen = (old.splitScreen as unknown as SplitScreenConfig | null) ?? null;
     dto.mode = old.mode;
     dto.clipCount = old.clipCount;
     dto.targetDurationSec = old.targetDurationSec;
@@ -424,6 +437,8 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
   return {
     id: job.id,
     url: job.url,
+    primarySource: job.primarySource ?? null,
+    splitScreen: job.splitScreen ?? null,
     description: job.description ?? null,
     mode: job.mode,
     reframe: job.reframe,
@@ -498,6 +513,16 @@ function normalizeRanges(dto: CreateJobDto): ManualRange[] {
     if (title) normalized.title = title;
     if (reason) normalized.reason = reason;
     if (hookText) normalized.hookText = hookText;
+    if (range.splitTimeline) {
+      if (range.splitTimeline.some((segment) => segment.atEnd <= segment.atStart)) {
+        throw new BadRequestException('atEnd pada timeline split screen harus lebih besar dari atStart.');
+      }
+      normalized.splitTimeline = range.splitTimeline.map(({ atStart, atEnd, clipId, sourceStartSec, reason }) => ({
+        atStart, atEnd, clipId,
+        ...(sourceStartSec != null ? { sourceStartSec } : {}),
+        ...(reason != null ? { reason } : {}),
+      }));
+    }
     return normalized;
   });
 }

@@ -1,14 +1,10 @@
+import { loadSource } from '../testing/load-source.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
-import { runInThisContext } from 'node:vm';
-import 'reflect-metadata';
 import { validateSync } from 'class-validator';
-import ts from 'typescript';
 import * as shared from '@clipper/shared';
-import * as watermarkHelpers from '../watermarks/watermark-helpers.ts';
 
 const { CAPTION_PRESET_STYLES, normalizeCaptionStyle } = shared;
 
@@ -48,16 +44,7 @@ test('custom positionY is clamped, rounded, and never matches a named preset', (
 
 test('CreateJobDto accepts absent, null, and in-range positionY and rejects invalid values', async () => {
   const file = join(root, 'apps/api/src/jobs/dto/create-job.dto.ts');
-  // Node's strip-types runner cannot load decorators, so transpile the DTO alone.
-  const { outputText } = ts.transpileModule(await readFile(file, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, experimentalDecorators: true },
-  });
-  const exports: Record<string, unknown> = {};
-  const require = createRequire(file);
-  const load = runInThisContext(`(function (exports, require) { ${outputText}\n})`, { filename: file });
-  load(exports, (id: string) => id === '@clipper/shared' ? shared :
-    id === '../../watermarks/watermark-helpers' ? watermarkHelpers : require(id));
-  const CreateJobDto = exports.CreateJobDto as new () => object;
+  const { CreateJobDto } = loadSource<typeof import('./dto/create-job.dto')>(file);
 
   for (const [positionY, valid] of [
     [undefined, true], [null, true], [0.05, true], [0.5, true], [0.95, true],

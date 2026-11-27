@@ -3,6 +3,7 @@ pub mod llm;
 pub mod models;
 pub mod pipeline;
 pub mod snap;
+pub mod split_screen;
 pub mod subtitles;
 pub mod tools;
 

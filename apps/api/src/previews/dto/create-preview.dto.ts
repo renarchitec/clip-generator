@@ -1,10 +1,20 @@
-import { IsIn, IsInt, IsOptional, IsString, IsUrl, Max, Min } from 'class-validator';
-import type { TranscriptSource } from '@clipper/shared';
-import { MAX_SOURCE_SEC, MIN_SOURCE_SEC, TRANSCRIPT_SOURCES } from '@clipper/shared';
+import { MediaSourcesDto } from '../../media/media.dto';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import type { AspectRatio, TranscriptSource } from '@clipper/shared';
+import { ASPECT_RATIOS, DEFAULT_ASPECT, MAX_SOURCE_SEC, MIN_SOURCE_SEC, TRANSCRIPT_SOURCES } from '@clipper/shared';
 
-export class CreatePreviewDto {
-  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
-  url: string;
+export class CreatePreviewDto extends MediaSourcesDto {
+  @IsOptional()
+  @IsIn(ASPECT_RATIOS)
+  aspectRatio: AspectRatio = DEFAULT_ASPECT;
+
+  @IsOptional()
+  @IsBoolean()
+  twoSpeakers?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  facecam?: boolean;
 
   @IsOptional()
   @IsIn(TRANSCRIPT_SOURCES)

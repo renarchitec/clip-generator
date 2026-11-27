@@ -7,6 +7,8 @@ import type { CaptionStyle, ClipPublicationSummary, PlatformCaptions, Transcript
 export interface JobSnapshot {
   id: string;
   url: string;
+  primarySource?: unknown;
+  splitScreen?: unknown;
   description: string | null;
   mode: string;
   reframe: string;

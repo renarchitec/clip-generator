@@ -1,3 +1,4 @@
+import { loadSource } from '../testing/load-source.ts';
 /**
  * Kontrak watermark pada job: DTO, kepemilikan, snapshot di DB, payload worker,
  * retry, dan field watermark pada respons/SSE.
@@ -7,13 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
-import { runInThisContext } from 'node:vm';
-import 'reflect-metadata';
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
-import ts from 'typescript';
-import * as shared from '@clipper/shared';
-import * as watermarkHelpers from '../watermarks/watermark-helpers.ts';
 
 const root = join(process.cwd(), '../..');
 const read = (path: string) => readFile(join(root, path), 'utf8');
@@ -21,16 +16,7 @@ const read = (path: string) => readFile(join(root, path), 'utf8');
 test('ValidationPipe accepts legacy settings, layered settings with chroma key, [] and null', async () => {
   const path = 'apps/api/src/jobs/dto/create-job.dto.ts';
   const file = join(root, path);
-  // Node's strip-types runner cannot load decorators; transpile the actual DTO.
-  const { outputText } = ts.transpileModule(await read(path), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, experimentalDecorators: true, emitDecoratorMetadata: true },
-  });
-  const exports: Record<string, unknown> = {};
-  const require = createRequire(file);
-  const load = runInThisContext(`(function (exports, require) { ${outputText}\n})`, { filename: file });
-  load(exports, (id: string) => id === '@clipper/shared' ? shared :
-    id === '../../watermarks/watermark-helpers' ? watermarkHelpers : require(id));
-  const CreateJobDto = exports.CreateJobDto as new () => object;
+  const { CreateJobDto } = loadSource<typeof import('./dto/create-job.dto')>(file);
 
   const pipe = new ValidationPipe({ whitelist: true, transform: true });
   const transform = (watermark: unknown) => pipe.transform({

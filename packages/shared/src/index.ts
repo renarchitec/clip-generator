@@ -162,6 +162,90 @@ export function normalizeCaptionStyle(raw: unknown): CaptionStyle | null {
   return result;
 }
 
+export const MEDIA_SOURCE_KINDS = ['url', 'upload', 'clip'] as const;
+export type MediaSourceKind = (typeof MEDIA_SOURCE_KINDS)[number];
+
+export const MEDIA_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+export const MEDIA_UPLOAD_MAX_DURATION_SEC = 60 * 60;
+export const MEDIA_MAX_PER_USER = 50;
+
+export interface MediaAssetResponse {
+  id: string;
+  name: string;
+  mimeType: string;
+  durationSec: number;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface PrimaryMediaSource {
+  kind: MediaSourceKind;
+  url?: string;
+  mediaId?: string;
+  clipId?: string;
+  /** Path relatif terhadap CLIPS_DIR (diisi API sebelum masuk worker). */
+  filePath?: string;
+  label?: string;
+  durationSec?: number | null;
+}
+
+export const SPLIT_SCREEN_RATIOS = ['50:50', '40:60', '60:40'] as const;
+export type SplitScreenRatio = (typeof SPLIT_SCREEN_RATIOS)[number];
+export const DEFAULT_SPLIT_SCREEN_RATIO: SplitScreenRatio = '50:50';
+
+export const SPLIT_PANEL_FITS = ['cover', 'contain_blur'] as const;
+export type SplitPanelFit = (typeof SPLIT_PANEL_FITS)[number];
+
+export const SPLIT_MATCH_MODES = ['auto', 'sequential'] as const;
+export type SplitMatchMode = (typeof SPLIT_MATCH_MODES)[number];
+export const DEFAULT_SPLIT_MATCH_MODE: SplitMatchMode = 'auto';
+
+export const SPLIT_SCREEN_MAX_CLIPS = 10;
+
+export interface SplitScreenClipSource {
+  id: string;
+  kind: MediaSourceKind;
+  url?: string;
+  mediaId?: string;
+  clipId?: string;
+  filePath?: string;
+  label: string;
+  description?: string | null;
+  startSec?: number | null;
+  endSec?: number | null;
+  durationSec?: number | null;
+}
+
+export interface SplitScreenSegment {
+  atStart: number;
+  atEnd: number;
+  clipId: string;
+  sourceStartSec?: number;
+  reason?: string;
+}
+
+export interface SplitScreenConfig {
+  enabled: boolean;
+  ratio: SplitScreenRatio;
+  swap: boolean;
+  primaryFit: SplitPanelFit;
+  secondaryFit: SplitPanelFit;
+  /** 0..1 (0 = mute default) */
+  secondaryVolume: number;
+  matchMode: SplitMatchMode;
+  clips: SplitScreenClipSource[];
+}
+
+export function splitScreenRatioTopFraction(ratio: SplitScreenRatio): number {
+  switch (ratio) {
+    case '50:50': return 0.5;
+    case '40:60': return 0.4;
+    case '60:40': return 0.6;
+  }
+}
+
 export interface ManualRange {
   /** detik */
   start: number;
@@ -172,6 +256,7 @@ export interface ManualRange {
   /** alasan momen hasil tinjauan LLM; opsional */
   reason?: string;
   hookText?: string;
+  splitTimeline?: SplitScreenSegment[];
 }
 
 export interface JobParams {
@@ -182,6 +267,8 @@ export interface JobParams {
 export interface JobData {
   jobId: string;
   url: string;
+  primarySource?: PrimaryMediaSource | null;
+  splitScreen?: SplitScreenConfig | null;
   mode: JobMode;
   reframe: ReframeMode;
   /** apakah subtitle dibakar ke clip; default true */
@@ -288,6 +375,7 @@ export interface PreviewCandidate {
   end: number;
   title: string;
   reason: string;
+  splitTimeline?: SplitScreenSegment[];
 }
 
 export interface PreviewCue {
@@ -300,6 +388,8 @@ export type PreviewStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface PreviewJobData {
   url: string;
+  primarySource?: PrimaryMediaSource | null;
+  splitScreen?: SplitScreenConfig | null;
   transcriptSource?: TranscriptSource;
   userId: string;
   description?: string | null;
@@ -312,10 +402,13 @@ export interface PreviewJobData {
 export interface PreviewJobResult {
   candidates: PreviewCandidate[];
   cues: PreviewCue[];
+  brollSummaries?: Record<string, string>;
 }
 
 export interface FrameJobData {
   url: string;
+  primarySource?: PrimaryMediaSource | null;
+  splitScreen?: SplitScreenConfig | null;
   atSec: number;
   aspectRatio: AspectRatio;
   reframe: ReframeMode;
@@ -335,11 +428,14 @@ export type FrameStatus = 'queued' | 'running' | 'done' | 'failed';
 export interface PreviewResponse {
   id: string;
   url: string;
+  primarySource?: PrimaryMediaSource | null;
+  splitScreen?: SplitScreenConfig | null;
   transcriptSource?: TranscriptSource;
   status: PreviewStatus;
   error: string | null;
   candidates: PreviewCandidate[] | null;
   cues: PreviewCue[] | null;
+  brollSummaries?: Record<string, string> | null;
 }
 
 export const SOCIAL_PLATFORMS = ['youtube', 'instagram', 'tiktok'] as const;

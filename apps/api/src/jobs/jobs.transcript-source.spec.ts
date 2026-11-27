@@ -1,29 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import test from 'node:test';
-import { runInThisContext } from 'node:vm';
-import 'reflect-metadata';
 import { validateSync } from 'class-validator';
-import ts from 'typescript';
 
-// Node's strip-types runner cannot load legacy Nest decorators.
-const modules = new Map<string, object>();
-function loadSource<T>(filename: string): T {
-  const cached = modules.get(filename);
-  if (cached) return cached as T;
-  const exports = {};
-  modules.set(filename, exports);
-  const require = createRequire(filename);
-  const { outputText } = ts.transpileModule(readFileSync(filename, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, experimentalDecorators: true },
-  });
-  const load = runInThisContext(`(function (exports, require) { ${outputText}\n})`, { filename });
-  load(exports, (id: string) => id.startsWith('.')
-    ? loadSource(require.resolve(`${id}.ts`))
-    : require(id));
-  return exports as T;
-}
+import { loadSource } from '../testing/load-source.ts';
 
 const resolve = createRequire(import.meta.url).resolve;
 const { CreateJobDto } = loadSource<typeof import('./dto/create-job.dto')>(resolve('./dto/create-job.dto.ts'));
@@ -32,6 +12,9 @@ const { JobsService } = loadSource<typeof import('./jobs.service')>(resolve('./j
 const { PreviewsService } = loadSource<typeof import('../previews/previews.service')>(resolve('../previews/previews.service.ts'));
 const { QueueListener } = loadSource<typeof import('../queue/queue.listener')>(resolve('../queue/queue.listener.ts'));
 const { LlmStatusService } = loadSource<typeof import('../system/llm-status.service')>(resolve('../system/llm-status.service.ts'));
+
+const { MediaResolverService } = loadSource<typeof import('../media/media-resolver.service')>(resolve('../media/media-resolver.service.ts'));
+const mediaResolver = new MediaResolverService(...[{}, {}] as unknown as ConstructorParameters<typeof MediaResolverService>);
 
 const url = 'https://www.youtube.com/watch?v=example';
 const userId = 'user-1';
@@ -76,7 +59,7 @@ for (const [source, expected] of cases) {
       queued.push(data.transcriptSource);
     } };
     const deps = [prisma, {}, {}, { resolveSettings: async () => [] },
-      { resolveSettings: async () => null }, {}, queue];
+      { resolveSettings: async () => null }, {}, queue, mediaResolver];
     const service = new JobsService(...deps as unknown as ConstructorParameters<typeof JobsService>);
     const dto = Object.assign(new CreateJobDto(), { url, mode: 'auto' as const },
       source === undefined ? {} : { transcriptSource: source });
@@ -94,7 +77,7 @@ for (const [source, expected] of cases) {
       add: async (_name: string, payload: typeof data) => { data = payload; },
       getJob: async () => ({ data, getState: async () => 'waiting' }),
     };
-    const service = new PreviewsService(queue as unknown as ConstructorParameters<typeof PreviewsService>[0]);
+    const service = new PreviewsService(queue as unknown as ConstructorParameters<typeof PreviewsService>[0], mediaResolver);
     const dto = Object.assign(new CreatePreviewDto(), { url },
       source === undefined ? {} : { transcriptSource: source });
 

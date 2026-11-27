@@ -1,3 +1,4 @@
+import { MediaSourcesDto, SplitScreenSegmentDto } from '../../media/media.dto';
 import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiExtraModels, ApiPropertyOptional } from '@nestjs/swagger';
@@ -7,9 +8,9 @@ import {
   IsIn,
   IsInt,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
-  IsUrl,
   Max,
   MaxLength,
   Min,
@@ -57,6 +58,13 @@ export class ManualRangeDto {
   @IsString()
   @MaxLength(80)
   hookText?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  @ValidateNested({ each: true })
+  @Type(() => SplitScreenSegmentDto)
+  splitTimeline?: SplitScreenSegmentDto[];
 }
 
 /** Pengaturan chroma key (greenscreen) untuk video watermark. */
@@ -96,9 +104,7 @@ export class WatermarkSettingsDto {
 }
 
 @ApiExtraModels(WatermarkSettingsDto, WatermarkChromaKeyDto)
-export class CreateJobDto {
-  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
-  url: string;
+export class CreateJobDto extends MediaSourcesDto {
 
   @IsIn(['auto', 'manual'])
   mode: JobMode;

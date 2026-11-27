@@ -9,7 +9,7 @@ import type { FrameJobData, FrameStatus } from '@clipper/shared';
 import { normalizeCaptionStyle } from '@clipper/shared';
 import { AppConfig } from '../config/app-config.service';
 import { resolveClipPath } from '../clips/clip-path';
-import { assertAllowedUrl } from '../jobs/validation';
+import { MediaResolverService } from '../media/media-resolver.service';
 import { FRAME_QUEUE_NAME } from '../queue/queue.constants';
 import { CreateFrameDto } from './dto/create-frame.dto';
 
@@ -20,6 +20,7 @@ export class FramesService {
   constructor(
     private readonly config: AppConfig,
     @InjectQueue(FRAME_QUEUE_NAME) private readonly queue: Queue<FrameJobData>,
+    private readonly mediaResolver: MediaResolverService,
   ) {}
 
   async create(dto: CreateFrameDto, userId: string) {
@@ -31,8 +32,12 @@ export class FramesService {
     const aspectRatio = dto.aspectRatio;
     const twoSpeakers = aspectRatio === '9:16' ? (dto.twoSpeakers ?? false) : false;
     const facecam = aspectRatio === '9:16' && !twoSpeakers ? (dto.facecam ?? false) : false;
+    const { url, primarySource } = await this.mediaResolver.resolvePrimarySource(userId, dto.url, dto.primarySource);
+    const splitScreen = await this.mediaResolver.resolveSplitScreen(userId, dto.splitScreen, {
+      aspectRatio, twoSpeakers: dto.twoSpeakers, facecam: dto.facecam,
+    });
     const data: FrameJobData = {
-      url: assertAllowedUrl(dto.url), atSec: dto.atSec, aspectRatio,
+      url, primarySource, splitScreen, atSec: dto.atSec, aspectRatio,
       reframe: dto.reframe, twoSpeakers, facecam, captions: dto.captions ?? true,
       hookBanner: dto.hookBanner ?? false,
       captionSample: 'Sample caption', captionStyle: normalizeCaptionStyle(dto.captionStyle), outPath: `.frames/${id}.jpg`, userId,

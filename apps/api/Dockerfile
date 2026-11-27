@@ -32,6 +32,9 @@ RUN pnpm --filter api build
 # Prisma client hasil generate dan engine-nya ikut. Tradeoff: image ~200 MB
 # lebih besar. Ganti dengan `pnpm deploy --prod` bila ukuran mulai menyusahkan.
 FROM base AS runner
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder /app/ .

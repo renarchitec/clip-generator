@@ -1,7 +1,7 @@
 import type { AspectRatio, CaptionLanguage, MaxSourceSec, Reframe, TranscriptSource } from "@/lib/api"
 import type { CaptionStyle } from "@/lib/caption-style"
 
-export type ReviewDraft = {
+export type ReviewDraft = import("./api").SourceSettings & {
   url: string
   mode: "auto" | "manual"
   reframe: Reframe

@@ -489,6 +489,18 @@ fn render_parts(
     result
 }
 
+pub(crate) fn with_split_seam(
+    style: Option<&CaptionStyle>,
+    seam: Option<f64>,
+) -> Option<CaptionStyle> {
+    let Some(seam) = seam else {
+        return style.cloned();
+    };
+    let mut style = style.cloned().unwrap_or_default();
+    style.position_y.get_or_insert(seam);
+    Some(style)
+}
+
 pub fn ass_text(
     cues: &[Cue],
     width: u32,

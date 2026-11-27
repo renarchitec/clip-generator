@@ -39,7 +39,7 @@ test('preview menyimpan userId di data job dan kedaluwarsa setelah 1 jam', async
   assert.match(service, /data\?\.userId !== userId/);
   // Validasi URL allowlist dipakai ulang dari job.
   assert.match(service, /from '\.\.\/jobs\/validation'/);
-  assert.match(service, /assertAllowedUrl\(dto\.url\)/);
+  assert.match(service, /resolvePrimarySource\(userId, dto\.url, dto\.primarySource\)/);
 });
 
 test('endpoint preview ada di controller berautentikasi', async () => {

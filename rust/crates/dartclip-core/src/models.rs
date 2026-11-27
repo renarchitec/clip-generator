@@ -1,7 +1,122 @@
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaSourceKind {
+    #[default]
+    Url,
+    Upload,
+    Clip,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PrimaryMediaSource {
+    pub kind: MediaSourceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SplitScreenRatio {
+    #[default]
+    #[serde(rename = "50:50")]
+    FiftyFifty,
+    #[serde(rename = "40:60")]
+    FortySixty,
+    #[serde(rename = "60:40")]
+    SixtyForty,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SplitPanelFit {
+    #[default]
+    Cover,
+    #[serde(rename = "contain_blur")]
+    ContainBlur,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SplitMatchMode {
+    #[default]
+    Auto,
+    Sequential,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SplitScreenClipSource {
+    pub id: String,
+    pub kind: MediaSourceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_sec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_sec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SplitScreenSegment {
+    pub at_start: f64,
+    pub at_end: f64,
+    pub clip_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_start_sec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SplitScreenConfig {
+    pub enabled: bool,
+    pub ratio: SplitScreenRatio,
+    pub swap: bool,
+    pub primary_fit: SplitPanelFit,
+    pub secondary_fit: SplitPanelFit,
+    pub secondary_volume: f64,
+    pub match_mode: SplitMatchMode,
+    pub clips: Vec<SplitScreenClipSource>,
+}
+
+impl SplitScreenConfig {
+    pub fn is_active(&self) -> bool {
+        self.enabled && !self.clips.is_empty()
+    }
+
+    pub fn auto_match(&self) -> bool {
+        self.is_active() && self.match_mode == SplitMatchMode::Auto && self.clips.len() >= 2
+    }
+}
 
 pub const WATERMARK_MAX_PER_JOB: usize = 5;
 pub const CUSTOM_HASHTAGS_MAX: usize = 15;
@@ -57,6 +172,30 @@ pub(crate) fn first<'a>(v: &'a Value, keys: &[&str]) -> &'a Value {
         .find(|v| !v.is_null())
         .unwrap_or(&Value::Null)
 }
+fn primary_source(v: &Value) -> Option<PrimaryMediaSource> {
+    serde_json::from_value(first(v, &["primarySource", "primary_source"]).clone()).ok()
+}
+
+fn payload_url(v: &Value, http_only: bool) -> Option<String> {
+    let primary = primary_source(v);
+    if primary
+        .as_ref()
+        .is_some_and(|s| s.kind != MediaSourceKind::Url)
+    {
+        return Some(v["url"].as_str().unwrap_or_default().to_owned());
+    }
+    primary
+        .as_ref()
+        .and_then(|s| s.url.as_deref())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| v["url"].as_str())
+        .filter(|s| {
+            !s.trim().is_empty()
+                && (!http_only || s.starts_with("http://") || s.starts_with("https://"))
+        })
+        .map(str::to_owned)
+}
+
 pub(crate) fn number(v: &Value) -> Option<f64> {
     match v {
         Value::Bool(b) => Some(u8::from(*b).into()),
@@ -441,6 +580,8 @@ pub struct ManualRange {
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_timeline: Option<Vec<SplitScreenSegment>>,
 }
 impl ManualRange {
     fn from_value(v: &Value) -> Option<Self> {
@@ -451,6 +592,10 @@ impl ManualRange {
             title: text(&v["title"], 70),
             reason: text(&v["reason"], 200),
             hook_text: text(first(v, &["hookText", "hook_text"]), 80).map(|s| s.trim_end().into()),
+            split_timeline: serde_json::from_value(
+                first(v, &["splitTimeline", "split_timeline"]).clone(),
+            )
+            .ok(),
         })
     }
 }
@@ -512,6 +657,10 @@ impl TranscriptSource {
 pub struct JobData {
     pub job_id: String,
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<PrimaryMediaSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_screen: Option<SplitScreenConfig>,
     pub mode: JobMode,
     pub reframe: ReframeMode,
     pub captions: bool,
@@ -537,6 +686,8 @@ impl Default for JobData {
         Self {
             job_id: String::new(),
             url: String::new(),
+            primary_source: None,
+            split_screen: None,
             mode: JobMode::Auto,
             reframe: ReframeMode::default(),
             captions: true,
@@ -613,7 +764,9 @@ impl JobData {
         }
         Ok(Self {
             job_id: required(&["jobId", "job_id"])?,
-            url: required(&["url"])?,
+            url: payload_url(&v, false).ok_or_else(|| anyhow!("url wajib diisi"))?,
+            primary_source: primary_source(&v),
+            split_screen: serde_json::from_value(get(&["splitScreen", "split_screen"]).clone())?,
             mode,
             reframe,
             captions: boolean(&v["captions"], true),
@@ -747,6 +900,10 @@ pub struct JobResult {
 #[serde(rename_all = "camelCase")]
 pub struct FrameRequest {
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<PrimaryMediaSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_screen: Option<SplitScreenConfig>,
     pub at_sec: f64,
     pub out_path: String,
     pub aspect_ratio: AspectRatio,
@@ -767,10 +924,7 @@ fn truthy(v: &Value) -> bool {
 tolerant!(FrameRequest, |v: &Value| {
     let get = |keys: &[&str]| first(v, keys);
     let at_sec = number(get(&["atSec", "at_sec"])).filter(|n| *n >= 0.)?;
-    let url = v["url"]
-        .as_str()
-        .filter(|s| s.starts_with("http://") || s.starts_with("https://"))?
-        .into();
+    let url = payload_url(v, true)?;
     let out_path = get(&["outPath", "out_path"])
         .as_str()
         .filter(|s| !s.is_empty())?
@@ -779,6 +933,8 @@ tolerant!(FrameRequest, |v: &Value| {
         serde_json::from_value(get(&["aspectRatio", "aspect_ratio"]).clone()).ok()?;
     Some(Self {
         url,
+        primary_source: primary_source(v),
+        split_screen: serde_json::from_value(get(&["splitScreen", "split_screen"]).clone()).ok()?,
         at_sec,
         out_path,
         aspect_ratio,
@@ -808,6 +964,10 @@ pub struct FrameResult {
 #[serde(rename_all = "camelCase")]
 pub struct PreviewRequest {
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<PrimaryMediaSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_screen: Option<SplitScreenConfig>,
     #[serde(flatten)]
     pub params: JobParams,
     pub description: Option<String>,
@@ -816,7 +976,10 @@ pub struct PreviewRequest {
     pub caption_language: String,
 }
 tolerant!(PreviewRequest, |v: &Value| Some(Self {
-    url: v["url"].as_str().filter(|s| !s.trim().is_empty())?.into(),
+    url: payload_url(v, false)?,
+    primary_source: primary_source(v),
+    split_screen: serde_json::from_value(first(v, &["splitScreen", "split_screen"]).clone())
+        .ok()?,
     params: JobParams::from_value(v),
     description: text(&v["description"], 500),
     max_source_sec: max_source(first(v, &["maxSourceSec", "max_source_sec"])),
@@ -827,10 +990,26 @@ tolerant!(PreviewRequest, |v: &Value| Some(Self {
     caption_language: to_caption_language(first(v, &["captionLanguage", "caption_language"])),
 }));
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreviewResult {
-    pub candidates: Vec<Moment>,
+    pub candidates: Vec<PreviewCandidate>,
     pub cues: Vec<TranscriptCue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broll_summaries: Option<HashMap<String, String>>,
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PreviewCandidate {
+    #[serde(flatten)]
+    pub moment: Moment,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_timeline: Option<Vec<SplitScreenSegment>>,
+}
+
+pub type PreviewJobData = PreviewRequest;
+pub type FrameJobData = FrameRequest;
+pub type PreviewJobResult = PreviewResult;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptionRequest {
@@ -874,6 +1053,28 @@ pub struct CaptionResult {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn split_screen_payloads_match_shared_wire_contract() {
+        let raw = json!({"jobId":"j","primarySource":{"kind":"upload","mediaId":"m","filePath":"media/example.mp4","durationSec":null},"splitScreen":{"enabled":true,"ratio":"40:60","swap":true,"primaryFit":"contain_blur","clips":[{"id":"b1","kind":"clip","clipId":"c1","label":"Crowd","description":null}]},"atSec":1,"outPath":".frames/test.jpg","aspectRatio":"9:16","ranges":[{"start":0,"end":4,"splitTimeline":[{"atStart":0,"atEnd":4,"clipId":"b1"}]}]});
+        let job = JobData::from_json(raw.clone()).unwrap();
+        let preview: PreviewJobData = serde_json::from_value(raw.clone()).unwrap();
+        let frame: FrameJobData = serde_json::from_value(raw).unwrap();
+        assert_eq!(preview.primary_source, job.primary_source);
+        assert_eq!(frame.split_screen, job.split_screen);
+        let wire = serde_json::to_value(job).unwrap();
+        assert_eq!(wire["primarySource"]["filePath"], "media/example.mp4");
+        assert_eq!(wire["splitScreen"]["ratio"], "40:60");
+        assert_eq!(wire["splitScreen"]["primaryFit"], "contain_blur");
+        assert_eq!(wire["splitScreen"]["matchMode"], "auto");
+        assert_eq!(wire["ranges"][0]["splitTimeline"][0]["clipId"], "b1");
+        let result = json!({"candidates":[{"start":0.,"end":4.,"title":"example","reason":"example","splitTimeline":[{"atStart":0.,"atEnd":4.,"clipId":"b1"}]}],"cues":[],"brollSummaries":{"b1":"The crowd cheers."}});
+        let decoded: PreviewJobResult = serde_json::from_value(result.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), result);
+        let old: PreviewJobResult =
+            serde_json::from_value(json!({"candidates":[],"cues":[]})).unwrap();
+        assert!(old.broll_summaries.is_none());
+    }
+
     #[test]
     fn job_tolerates_aliases_and_canonicalizes_watermarks() {
         let j:JobData=serde_json::from_value(json!({"job_id":"test","url":"local","mode":" MANUAL ","reframe":"black_bars","aspectRatio":"unknown","normalize_audio":"off","twoSpeakers":"no","params":{"clip_count":"0","targetDurationSec":0},"max_source_sec":"60.9","watermark":[null,{"file_path":" Test.MOV ","x":2,"opacity":"nan","chroma_key":{"similarity":0,"blend":4}}],"customHashtags":" #Bola, BOla #a-b café"})).unwrap();

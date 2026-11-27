@@ -7,10 +7,11 @@ import { OutrosModule } from '../outros/outros.module';
 import { WatermarksModule } from '../watermarks/watermarks.module';
 import { JobsController } from './jobs.controller';
 import { JobsService } from './jobs.service';
+import { MediaModule } from '../media/media.module';
 
 @Module({
   // registerQueue lokal supaya @InjectQueue tersedia di modul ini; konfigurasi koneksi dari QueueModule.
-  imports: [QueueModule, WatermarksModule, OutrosModule, BriefsModule, BullModule.registerQueue({ name: QUEUE_NAME })],
+  imports: [MediaModule,QueueModule, WatermarksModule, OutrosModule, BriefsModule, BullModule.registerQueue({ name: QUEUE_NAME })],
   controllers: [JobsController],
   providers: [JobsService],
   exports: [JobsService],
