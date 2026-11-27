@@ -13,8 +13,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "resources": { "resources/fonts/": "fonts/" }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE4NkMyNEYwREJDNTAzRjAKUldUd0E4WGI4Q1JzcUFMS2ZIa1lDRlJvcmV5R2xNWk83R2dXcW95dWtVOXZaWHRzcS9qYUNJSFQK",
+      "endpoints": [
+        "https://github.com/renarchitec/clip-generator/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

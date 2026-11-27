@@ -1,5 +1,5 @@
 import { useForm } from "@tanstack/react-form"
-import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertCircle,
   CheckCircle2,
@@ -29,8 +29,12 @@ import {
   desktopToolDownloadKey,
   desktopTools,
   desktopToolsQuery,
+  desktopUpdateInstallKey,
+  desktopUpdateQuery,
+  getDesktopAppVersion,
   getDesktopSettings,
   hasDesktopToolDownload,
+  installDesktopUpdate,
   openDesktopFolder,
   saveDesktopSettings,
   testDesktopLlm,
@@ -639,7 +643,70 @@ export function DesktopSettings() {
         </form>
       )}
       <DesktopTools />
+      <DesktopUpdates />
     </section>
+  )
+}
+
+function DesktopUpdates() {
+  const t = useT()
+  const updateQuery = useQuery(desktopUpdateQuery)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const install = useMutation({ mutationKey: desktopUpdateInstallKey, mutationFn: installDesktopUpdate })
+  const installing = useIsMutating({ mutationKey: desktopUpdateInstallKey }) > 0
+  const checking = updateQuery.isFetching
+  const update = updateQuery.data
+  const currentVersion = update?.currentVersion ?? getDesktopAppVersion() ?? "0.1.0"
+  const available = update?.available === true && !update.error && !updateQuery.isError
+  const notes = available ? update.body?.trim() : null
+  const busy = checking || installing
+
+  async function checkForUpdates() {
+    setCheckError(null)
+    install.reset()
+    const result = await updateQuery.refetch()
+    setCheckError(result.error?.message || result.data?.error?.trim() || (result.isError ? t.desktop.updateFailed : null))
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold">{t.desktop.updatesHeading}</h4>
+          <p className="mt-1 text-xs text-muted-foreground">{t.desktop.updatesDescription}</p>
+          <p className="mt-2 font-mono text-xs text-muted-foreground">{t.desktop.currentVersion(currentVersion)}</p>
+        </div>
+        <div role="status">
+          {available && update.version ? (
+            <Badge variant="secondary"><Download aria-hidden="true" />{t.desktop.updateAvailable(update.version)}</Badge>
+          ) : update && !update.available && !update.error && !updateQuery.isError ? (
+            <Badge variant="outline"><CheckCircle2 aria-hidden="true" />{t.desktop.upToDate}</Badge>
+          ) : null}
+        </div>
+      </div>
+      {notes && (
+        <p className="mt-3 whitespace-pre-line break-words text-xs text-muted-foreground">
+          {notes.length > 400 ? `${notes.slice(0, 400).trimEnd()}…` : notes}
+        </p>
+      )}
+      {(checkError || install.isError) && (
+        <p role="alert" className="mt-3 break-words text-xs text-destructive">
+          {install.isError ? `${t.desktop.updateFailed}${install.error.message ? ` ${install.error.message}` : ""}` : checkError}
+        </p>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void checkForUpdates()}>
+          {checking ? <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <RefreshCw aria-hidden="true" />}
+          {checking ? t.desktop.checkingUpdates : t.desktop.checkForUpdates}
+        </Button>
+        {available && (
+          <Button type="button" size="sm" disabled={busy} onClick={() => install.mutate()}>
+            {installing ? <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download aria-hidden="true" />}
+            {installing ? t.desktop.installingUpdate : t.desktop.installUpdate}
+          </Button>
+        )}
+      </div>
+    </div>
   )
 }
 

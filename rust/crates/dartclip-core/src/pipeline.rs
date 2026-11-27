@@ -344,7 +344,8 @@ fn canonical_destination(path: &Path) -> Result<PathBuf> {
 }
 fn escape_filter_option(path: &Path) -> String {
     // FFmpeg parses both the filter graph and then the filter's option list.
-    let value = path.to_string_lossy().replace('\\', "/");
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let value = normalized.strip_prefix("//?/").unwrap_or(&normalized);
     let mut inner = String::new();
     for c in value.chars() {
         if matches!(c, ':' | '\'' | '\\' | ' ') {
@@ -1858,6 +1859,15 @@ fn clean_frames(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_filter_option_strips_windows_extended_length_prefix() {
+        assert_eq!(
+            escape_filter_option(Path::new(r"\\?\C:\Users\me\fonts")),
+            r"C\\:/Users/me/fonts"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn preview_routes_sources_and_rejects_missing_stt_config() {

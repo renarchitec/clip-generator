@@ -1,6 +1,7 @@
-import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Download, LoaderCircle, TriangleAlert } from "lucide-react"
+import { Download, LoaderCircle, TriangleAlert, X } from "lucide-react"
+import { useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -8,6 +9,9 @@ import {
   desktopToolDownloadKey,
   desktopTools,
   desktopToolsQuery,
+  desktopUpdateInstallKey,
+  desktopUpdateQuery,
+  installDesktopUpdate,
   isDesktopBuild,
   trackDesktopToolDownload,
   type DesktopTool,
@@ -17,7 +21,45 @@ import { useT } from "@/lib/i18n"
 
 export function DesktopToolsBanner() {
   if (!isDesktopBuild()) return null
-  return <DesktopToolsBannerContent />
+  return (
+    <>
+      <DesktopToolsBannerContent />
+      <DesktopUpdateBanner />
+    </>
+  )
+}
+
+function DesktopUpdateBanner() {
+  const t = useT()
+  const updateQuery = useQuery(desktopUpdateQuery)
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null)
+  const install = useMutation({
+    mutationKey: desktopUpdateInstallKey,
+    mutationFn: installDesktopUpdate,
+    onError: () => toast.error(t.desktop.updateFailed),
+  })
+  const installing = useIsMutating({ mutationKey: desktopUpdateInstallKey }) > 0
+  const update = updateQuery.data
+  if (updateQuery.isError || update?.error || !update?.available || !update.version || update.version === dismissedVersion) return null
+  const version = update.version
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-accent/25 bg-accent/5 px-3 py-2 text-xs">
+      <p role="status" className="flex min-w-0 flex-1 items-center gap-2 font-medium">
+        <Download aria-hidden="true" className="size-4 shrink-0 text-accent" />
+        {t.desktop.updateBannerTitle(version)}
+      </p>
+      <div className="flex items-center gap-1">
+        <Button type="button" size="sm" variant="outline" disabled={installing || updateQuery.isFetching} onClick={() => install.mutate()}>
+          {installing && <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" />}
+          {installing ? t.desktop.installingUpdate : t.desktop.installUpdate}
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" aria-label={t.desktop.dismissUpdateBanner} onClick={() => setDismissedVersion(version)}>
+          <X aria-hidden="true" />
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 function DesktopToolsBannerContent() {

@@ -34,7 +34,13 @@ fn parse_ratio(ratio: &str) -> Option<f64> {
 
 pub fn probe_video(path: impl AsRef<Path>) -> Result<VideoInfo> {
     let path = path.as_ref();
-    let result = Command::new("ffprobe")
+    let mut cmd = Command::new("ffprobe");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let result = cmd
         .args(["-v", "error", "-select_streams", "v:0", "-show_entries",
             "stream=width,height,avg_frame_rate,r_frame_rate,duration:stream_side_data=rotation:format=duration", "-of", "json", "-i"])
         .arg(path)
@@ -217,6 +223,11 @@ impl Drop for FrameSampler {
 
 fn ffmpeg(path: &Path, time: f64) -> Command {
     let mut cmd = Command::new("ffmpeg");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
     cmd.args([
         "-hide_banner",
         "-loglevel",

@@ -147,7 +147,10 @@ async fn thumbnail(State(state): State<AppState>, Param(id): Param<String>) -> A
         let ffmpeg = tools_api::find_tool(&state.0.config.data_dir, "ffmpeg")
             .ok_or_else(|| ApiError::unavailable("FFmpeg is not installed"))?;
         let tmp = tempfile::Builder::new().suffix(".jpg").tempfile_in(dir)?;
-        let output = tokio::process::Command::new(ffmpeg)
+        let mut cmd = tokio::process::Command::new(ffmpeg);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        let output = cmd
             .kill_on_drop(true)
             .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
             .arg(&source)

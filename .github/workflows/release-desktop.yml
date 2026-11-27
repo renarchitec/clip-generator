@@ -1,0 +1,133 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        type: string
+        required: false
+        description: "Release tag, e.g. desktop-v0.1.0 (defaults to desktop-v<tauri.conf.json version>)"
+      draft:
+        type: boolean
+        default: false
+        description: "Create as draft release"
+      prerelease:
+        type: boolean
+        default: false
+        description: "Mark as pre-release"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-tauri:
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            platform: macos-latest
+            rust_target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles app,dmg
+          - name: macos-x64
+            platform: macos-latest
+            rust_target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles app,dmg
+          - name: windows-x64
+            platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --bundles nsis
+    name: Publish ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          RELEASE_INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          node <<'EOF'
+          const fs = require('node:fs');
+          const env = process.env;
+          const path = 'apps/desktop-tauri/src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const releaseTag = env.RELEASE_REF_TYPE === 'tag'
+            ? env.RELEASE_REF_NAME
+            : (env.RELEASE_INPUT_TAG || 'desktop-v' + config.version);
+          if (/[\r\n]/.test(releaseTag)) {
+            throw new Error('Release tag must be a single line');
+          }
+          const match = /^desktop-v(\d+\.\d+\.\d+(?:[-+].+)?)$/.exec(releaseTag);
+          if (match && match[1] !== config.version) {
+            config.version = match[1];
+            fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
+          }
+          fs.appendFileSync(
+            env.GITHUB_OUTPUT,
+            `release_tag=${releaseTag}\napp_version=${config.version}\n`,
+          );
+          EOF
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/desktop-tauri/src-tauri -> target"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter web build:desktop
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+        with:
+          projectPath: apps/desktop-tauri
+          tauriScript: pnpm dlx @tauri-apps/cli@2
+          updaterJsonPreferNsis: true
+          tagName: ${{ steps.meta.outputs.release_tag }}
+          releaseName: DartClip v${{ steps.meta.outputs.app_version }}
+          releaseDraft: ${{ inputs.draft == true }}
+          prerelease: ${{ inputs.prerelease == true }}
+          args: ${{ matrix.args }}
+          releaseBody: |
+            ## Download DartClip
+
+            - **macOS (Apple Silicon):** Download the ARM64 `.dmg` and drag DartClip into Applications.
+            - **macOS (Intel):** Download the x64 `.dmg` and drag DartClip into Applications.
+            - **Windows (64-bit):** Download and run the `-setup.exe` installer.
+
+            No manual dependency setup is needed: DartClip automatically downloads FFmpeg and yt-dlp on first launch. An internet connection is required for those downloads.
+
+            ### Unsigned beta installs
+
+            Only override these warnings if you downloaded the installer from this official release.
+
+            - **macOS:** After trying to open DartClip, go to **System Settings → Privacy & Security → Open Anyway**. Alternatively, after moving the app to Applications, run `xattr -cr /Applications/DartClip.app` and open it again.
+            - **Windows:** If SmartScreen appears, select **More info → Run anyway**.

@@ -76,12 +76,31 @@ export function hasDesktopToolDownload(status?: DesktopToolsStatus): boolean {
   return desktopTools.some((tool) => status?.[tool]?.downloading === true)
 }
 
-type NativeResult = void | { ok: boolean; error?: string }
+export type DesktopUpdateInfo = {
+  available: boolean
+  currentVersion: string
+  version?: string | null
+  body?: string | null
+  date?: string | null
+  error?: string | null
+}
+
+export const desktopUpdateInstallKey = ["desktop", "update", "install"] as const
+
+export const desktopUpdateQuery = {
+  queryKey: ["desktop", "update"] as const,
+  queryFn: checkForDesktopUpdate,
+  staleTime: 60 * 60 * 1000,
+  retry: false as const,
+}
+
+type NativeResult = void | { ok: boolean; error?: string | null }
 type DesktopBridge = {
   isDesktop?: boolean
   apiBaseUrl?: string
   clipsDir?: string
   platform?: string
+  appVersion?: string
   openExternalUrl?: (url: string) => Promise<NativeResult>
   revealPath?: (path: string) => Promise<NativeResult>
   openFolder?: (path: string) => Promise<NativeResult>
@@ -98,6 +117,10 @@ declare global {
 }
 
 const bridge = () => typeof window === "undefined" ? undefined : window.__DARTCLIP_DESKTOP__ ?? window.dartclipDesktop
+
+export function getDesktopAppVersion(): string | null {
+  return bridge()?.appVersion ?? null
+}
 
 export function isDesktopBuild(): boolean {
   return import.meta.env?.VITE_DESKTOP === "1" || (typeof window !== "undefined" && Boolean(bridge() || window.__TAURI_INTERNALS__))
@@ -154,10 +177,32 @@ function assertNativeResult(result: NativeResult) {
   if (result?.ok === false) throw new Error(result.error || "Native action failed")
 }
 
-function invoke(command: string, args: Record<string, unknown>) {
+function tauriInvoke() {
   const runtime = typeof window === "undefined" ? undefined : window.__TAURI_INTERNALS__
-  if (!runtime?.invoke) throw new Error("Native action unavailable")
-  return runtime.invoke<NativeResult>(command, args)
+  return runtime?.invoke?.bind(runtime)
+}
+
+function invoke<T = NativeResult>(command: string, args?: Record<string, unknown>) {
+  const nativeInvoke = tauriInvoke()
+  if (!nativeInvoke) throw new Error("Native action unavailable")
+  return args === undefined ? nativeInvoke<T>(command) : nativeInvoke<T>(command, args)
+}
+
+export async function checkForDesktopUpdate(): Promise<DesktopUpdateInfo> {
+  const nativeInvoke = tauriInvoke()
+  if (nativeInvoke) return nativeInvoke<DesktopUpdateInfo>("check_for_update")
+  return {
+    available: false,
+    currentVersion: getDesktopAppVersion() ?? "0.1.0",
+    version: null,
+    body: null,
+    date: null,
+    error: null,
+  }
+}
+
+export async function installDesktopUpdate(): Promise<void> {
+  assertNativeResult(await invoke<{ ok: boolean; error?: string | null }>("install_update"))
 }
 
 export async function openExternalUrl(url: string) {

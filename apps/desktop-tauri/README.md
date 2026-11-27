@@ -4,6 +4,20 @@ DartClip Desktop uses Tauri v2 and embeds the Rust local API. No separate server
 
 Install Rust (stable), Node.js and pnpm, and install the repository’s JavaScript dependencies from the root. Build the SPA with `pnpm --filter web build:desktop` from the root before invoking Tauri directly. Rebuild the SPA after frontend changes.
 
+## Public Releases & Auto-Updates
+
+Download the latest public installers for macOS (Apple Silicon and Intel) and Windows (64-bit) at [GitHub Releases](https://github.com/renarchitec/clip-generator/releases/latest).
+
+To publish from the commit you want to release, push a desktop version tag:
+
+```sh
+git tag desktop-v0.1.0 && git push origin desktop-v0.1.0
+```
+
+You can also run **Release Desktop App** manually from the repository's **Actions** tab (`workflow_dispatch`). Leave the tag blank to use the version in `tauri.conf.json`, or supply a tag and optionally mark the release as a draft or pre-release. The updater checks [`latest.json`](https://github.com/renarchitec/clip-generator/releases/latest/download/latest.json) on the latest public stable release, not drafts or pre-releases.
+
+The workflow signs updater artifacts with the `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret. If that key has a password, set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as well. For optional Apple Developer signing and notarization, configure `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`.
+
 ## macOS
 
 Install the Xcode command-line tools (`xcode-select --install`). From the repository root:

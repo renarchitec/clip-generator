@@ -113,6 +113,8 @@ pub(crate) async fn run(
     cancel: &CancellationToken,
 ) -> Result<Output> {
     let name = cmd.as_std().get_program().to_string_lossy().into_owned();
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
     cmd.kill_on_drop(true);
     let output = tokio::select! {biased;
         _=cancel.cancelled()=>bail!("job cancelled"),

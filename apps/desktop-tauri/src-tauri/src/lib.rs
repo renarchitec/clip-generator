@@ -7,6 +7,7 @@ use std::{
     sync::Mutex,
 };
 use tauri::{Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::oneshot;
 
 struct LocalApiShutdown(Mutex<Option<oneshot::Sender<()>>>);
@@ -45,8 +46,12 @@ fn desktop_platform() -> &'static str {
     }
 }
 
-fn init_script(base_url: &str, platform: &str) -> String {
-    let config = serde_json::json!({ "apiBaseUrl": base_url, "platform": platform });
+fn init_script(base_url: &str, platform: &str, app_version: &str) -> String {
+    let config = serde_json::json!({
+        "apiBaseUrl": base_url,
+        "platform": platform,
+        "appVersion": app_version,
+    });
     format!("if (window.top === window) {{ window.__DARTCLIP_DESKTOP__ = {config}; }}")
 }
 
@@ -63,10 +68,13 @@ pub fn run() {
     configure_path(&bin_dir).expect("failed to configure PATH for DartClip's tools");
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             reveal_in_finder,
             open_folder,
-            open_external_url
+            open_external_url,
+            check_for_update,
+            install_update
         ])
         .setup(move |app| {
             config.bind_addr = ([127, 0, 0, 1], 0).into();
@@ -76,7 +84,8 @@ pub fn run() {
                 tauri::async_runtime::block_on(start_local_api(config)).map_err(|err| {
                     io::Error::other(format!("failed to start DartClip's API: {err:#}"))
                 })?;
-            let script = init_script(&running.base_url, desktop_platform());
+            let app_version = app.package_info().version.to_string();
+            let script = init_script(&running.base_url, desktop_platform(), &app_version);
             app.manage(LocalApiShutdown(Mutex::new(Some(running.shutdown))));
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -110,6 +119,63 @@ pub fn run() {
 struct NativeResult {
     ok: bool,
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCheckResult {
+    available: bool,
+    current_version: String,
+    version: Option<String>,
+    body: Option<String>,
+    date: Option<String>,
+    error: Option<String>,
+}
+
+async fn pending_update(
+    app: &tauri::AppHandle,
+) -> tauri_plugin_updater::Result<Option<tauri_plugin_updater::Update>> {
+    app.updater()?.check().await
+}
+
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> UpdateCheckResult {
+    let mut result = UpdateCheckResult {
+        available: false,
+        current_version: app.package_info().version.to_string(),
+        version: None,
+        body: None,
+        date: None,
+        error: None,
+    };
+    match pending_update(&app).await {
+        Ok(Some(update)) => {
+            result.available = true;
+            result.version = Some(update.version);
+            result.body = update.body;
+            result.date = update.date.map(|date| date.to_string());
+        }
+        Ok(None) => {}
+        Err(err) => result.error = Some(err.to_string()),
+    }
+    result
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> NativeResult {
+    let result = match pending_update(&app).await {
+        Ok(Some(update)) => match update.download_and_install(|_, _| {}, || {}).await {
+            Ok(()) => app.restart(),
+            Err(err) => Err(err),
+        },
+        Ok(None) => Ok(()),
+        Err(err) => Err(err),
+    };
+    let error = result.err().map(|err| err.to_string());
+    NativeResult {
+        ok: error.is_none(),
+        error,
+    }
 }
 
 impl From<io::Result<Child>> for NativeResult {
@@ -203,8 +269,13 @@ fn open_external_url(url: String) -> NativeResult {
         .and_then(|()| {
             #[cfg(target_os = "macos")]
             return Command::new("open").arg(&url).spawn();
-            #[cfg(target_os = "windows")]
-            return Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let mut cmd = Command::new("cmd");
+                cmd.creation_flags(0x08000000);
+                return cmd.args(["/C", "start", "", &url]).spawn();
+            }
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Command::new("xdg-open").arg(&url).spawn()
         })
@@ -262,7 +333,8 @@ mod tests {
     fn initialization_script_embeds_json_without_interpolating_code() {
         let base_url = "http://127.0.0.1:34567";
         let platform = "darwin\"; alert(1); //\\\n";
-        let script = init_script(base_url, platform);
+        let app_version = "0.1.0";
+        let script = init_script(base_url, platform, app_version);
         let payload = script
             .strip_prefix("if (window.top === window) { window.__DARTCLIP_DESKTOP__ = ")
             .and_then(|s| s.strip_suffix("; }"))
@@ -270,7 +342,9 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(payload).unwrap(),
             serde_json::json!({
-                "apiBaseUrl": base_url, "platform": platform
+                "apiBaseUrl": base_url,
+                "platform": platform,
+                "appVersion": app_version,
             })
         );
     }
