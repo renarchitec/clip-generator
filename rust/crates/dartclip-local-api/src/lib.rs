@@ -37,6 +37,7 @@ pub struct LocalApiConfig {
     pub clips_dir: PathBuf,
     pub bind_addr: SocketAddr,
     pub fonts_dir: Option<PathBuf>,
+    pub auto_install_tools: bool,
 }
 impl Default for LocalApiConfig {
     fn default() -> Self {
@@ -55,6 +56,7 @@ impl Default for LocalApiConfig {
             data_dir,
             bind_addr: ([127, 0, 0, 1], 0).into(),
             fonts_dir: None,
+            auto_install_tools: false,
         }
     }
 }
@@ -81,6 +83,7 @@ struct Inner {
     preview_slots: Arc<Semaphore>,
     frame_slots: Arc<Semaphore>,
     install_lock: tokio::sync::Mutex<()>,
+    pub(crate) tools_state: Mutex<tools_api::ToolsRuntimeState>,
 }
 impl AppState {
     /// Opens the database and starts the single job worker; requires a Tokio runtime.
@@ -105,6 +108,7 @@ impl AppState {
             preview_slots: Arc::new(Semaphore::new(2)),
             frame_slots: Arc::new(Semaphore::new(1)),
             install_lock: Default::default(),
+            tools_state: Default::default(),
         }));
         jobs::spawn_worker(&state, rx);
         Ok(state)
@@ -159,6 +163,9 @@ pub async fn start_local_api(config: LocalApiConfig) -> anyhow::Result<RunningLo
     let state = tokio::task::spawn_blocking(move || AppState::new(config)).await??;
     let stop = state.0.stop.clone();
     let (shutdown, rx) = oneshot::channel();
+    if state.0.config.auto_install_tools {
+        tokio::spawn(tools_api::auto_install_missing(state.clone()));
+    }
     let router = build_router(state);
     if let Some(v6) = v6_listener {
         let v6_router = router.clone();

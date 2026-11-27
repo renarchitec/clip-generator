@@ -1,12 +1,15 @@
 import { useForm } from "@tanstack/react-form"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  AlertCircle,
   CheckCircle2,
   Cpu,
+  Download,
   FolderOpen,
   KeyRound,
   LoaderCircle,
   Mic,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -23,14 +26,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   desktopPlatform,
-  downloadDesktopTool,
+  desktopToolDownloadKey,
+  desktopTools,
+  desktopToolsQuery,
   getDesktopSettings,
-  getDesktopTools,
+  hasDesktopToolDownload,
   openDesktopFolder,
   saveDesktopSettings,
   testDesktopLlm,
-  type DesktopTool,
+  trackDesktopToolDownload,
   type DesktopLlmTestResult,
+  type DesktopToolDownloadInput,
   type DesktopSettingsPatch,
   type DesktopSettingsView,
   type DesktopVideoEncoder,
@@ -637,23 +643,36 @@ export function DesktopSettings() {
   )
 }
 
-
-const toolsKey = ["desktop", "tools"] as const
-const desktopTools: DesktopTool[] = ["ffmpeg", "yt-dlp"]
-
 function DesktopTools() {
   const t = useT()
   const client = useQueryClient()
-  const tools = useQuery({ queryKey: toolsKey, queryFn: getDesktopTools })
+  const tools = useQuery(desktopToolsQuery)
+  const pending = useMutationState({
+    filters: { mutationKey: desktopToolDownloadKey, status: "pending" },
+    select: (mutation) => mutation.state.variables as DesktopToolDownloadInput,
+  })
   const download = useMutation({
-    mutationFn: downloadDesktopTool,
-    onSuccess: () => client.invalidateQueries({ queryKey: toolsKey }),
+    mutationKey: desktopToolDownloadKey,
+    mutationFn: (input: DesktopToolDownloadInput) => trackDesktopToolDownload(input, () =>
+      client.invalidateQueries({ queryKey: desktopToolsQuery.queryKey }),
+    ),
+    onSuccess: (_result, { tool, force }) => {
+      if (force) toast.success(`${tool}: ${t.desktop.toolUpdated}`)
+    },
     onError: () => toast.error(t.desktop.downloadFailed),
   })
+  const isBusy = download.isPending || pending.length > 0 || hasDesktopToolDownload(tools.data)
+  const sourceLabels = {
+    managed: t.desktop.toolSourceManaged,
+    system: t.desktop.toolSourceSystem,
+    env: t.desktop.toolSourceEnv,
+  }
+
   return (
     <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
       <h4 className="text-sm font-semibold">{t.desktop.toolsHeading}</h4>
-      {tools.isPending ? <p role="status" className="mt-3 text-sm text-muted-foreground">{t.loading}</p> : tools.isError ? (
+      <p className="mt-1 text-xs text-muted-foreground">{t.desktop.toolsDescription}</p>
+      {tools.isPending ? <p role="status" className="mt-3 text-sm text-muted-foreground">{t.loading}</p> : !tools.data ? (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <p role="status" className="text-sm text-muted-foreground">{t.desktop.toolsUnavailable}</p>
           <Button variant="outline" size="sm" onClick={() => void tools.refetch()}>{t.retry}</Button>
@@ -661,16 +680,34 @@ function DesktopTools() {
       ) : (
         <ul className="mt-2 divide-y divide-border">
           {desktopTools.map((tool) => {
-            const detected = tools.data[tool]?.detected === true
+            const info = tools.data?.[tool]
+            const detected = info?.detected === true
+            const active = pending.find((input) => input.tool === tool)
+            const downloading = info?.downloading === true || Boolean(active)
+            const caption = [info?.version, info?.source && sourceLabels[info.source]].filter(Boolean).join(" · ")
             return (
               <li key={tool} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-sm">{tool}</span>
-                  <Badge variant="outline">{detected ? t.desktop.toolDetected : t.desktop.toolMissing}</Badge>
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-sm">{tool}</span>
+                    {downloading ? (
+                      <Badge variant="secondary">
+                        <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+                        {t.desktop.downloading}{typeof info?.progress === "number" ? ` ${info.progress}%` : ""}
+                      </Badge>
+                    ) : detected ? (
+                      <Badge variant="outline"><CheckCircle2 aria-hidden="true" />{t.desktop.toolDetected}</Badge>
+                    ) : (
+                      <Badge variant="outline"><AlertCircle aria-hidden="true" />{t.desktop.toolMissing}</Badge>
+                    )}
+                  </div>
+                  {detected && caption && <p className="text-xs text-muted-foreground">{caption}</p>}
+                  {!downloading && info?.error && <p className="break-words text-xs text-destructive">{info.error}</p>}
                 </div>
-                {!detected && (
-                  <Button size="sm" variant="outline" disabled={download.isPending} onClick={() => download.mutate(tool)}>
-                    {download.isPending && download.variables === tool ? t.desktop.downloading : t.download}
+                {(!detected || info?.source !== "env") && (
+                  <Button size="sm" variant="outline" disabled={isBusy} onClick={() => download.mutate({ tool, force: detected })}>
+                    {detected ? <RefreshCw aria-hidden="true" /> : <Download aria-hidden="true" />}
+                    {detected ? (active?.force ? t.desktop.toolUpdating : t.desktop.toolUpdate) : t.download}
                     <span className="sr-only"> {tool}</span>
                   </Button>
                 )}

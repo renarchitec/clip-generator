@@ -94,8 +94,27 @@ async fn auth_runtime_tool_status_and_cors() {
         json!({"mode":"desktop","isDesktop":true,"publishEnabled":false,"clipsDir":dir.path().join("clips").canonicalize().unwrap(),"dataDir":dir.path().join("data").canonicalize().unwrap(),"platform":std::env::consts::OS})
     );
     let tools = ok(api.get("/system/tools")).await;
-    assert!(tools["ffmpeg"]["detected"].is_boolean());
-    assert!(tools["yt-dlp"]["detected"].is_boolean());
+    for tool in ["ffmpeg", "yt-dlp"] {
+        let fields = tools[tool].as_object().unwrap();
+        let detected = fields["detected"].as_bool().unwrap();
+        let source = &fields["source"];
+        let version = &fields["version"];
+        if detected {
+            assert!(matches!(source.as_str(), Some("managed" | "system" | "env")));
+            assert!(version.is_null() || version.as_str().is_some_and(|s| !s.is_empty()));
+            response(
+                api.post(&format!("/system/tools/{tool}/download")),
+                StatusCode::NO_CONTENT,
+            )
+            .await;
+        } else {
+            assert!(source.is_null());
+            assert!(version.is_null());
+        }
+        assert_eq!(fields["downloading"], false);
+        assert!(fields["progress"].is_null());
+        assert!(fields["error"].is_null());
+    }
     response(
         api.post("/system/tools/invalid/download"),
         StatusCode::NOT_FOUND,

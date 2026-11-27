@@ -21,6 +21,7 @@ import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
 import { getCurrentUser } from "@/lib/auth"
 import { clearReviewDraft, loadReviewDraft, saveReviewDraft } from "@/lib/review-draft"
+import { DesktopToolsBanner } from "@/components/desktop-tools-banner"
 import { LlmStatus } from "@/components/llm-status"
 import { sourceLabel } from "@/lib/format"
 import { getVideoEmbed } from "@/lib/embed"
@@ -566,6 +567,7 @@ function Dashboard() {
       : "aspect-square sm:aspect-video"
 
   return <WorkspaceShell user={user}>
+    <DesktopToolsBanner />
     <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,400px)] lg:grid-rows-[minmax(560px,calc(100vh-120px))_auto]">
     <form noValidate onSubmit={submit} className="contents">
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:col-start-1 lg:row-start-1 lg:h-full" aria-label={t.sourceMonitor}>

@@ -71,6 +71,7 @@ pub fn run() {
         .setup(move |app| {
             config.bind_addr = ([127, 0, 0, 1], 0).into();
             config.fonts_dir = fonts_dir(app);
+            config.auto_install_tools = true;
             let running =
                 tauri::async_runtime::block_on(start_local_api(config)).map_err(|err| {
                     io::Error::other(format!("failed to start DartClip's API: {err:#}"))

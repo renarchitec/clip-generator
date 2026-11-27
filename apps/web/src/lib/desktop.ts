@@ -57,7 +57,24 @@ export type DesktopRuntime = {
 }
 
 export type DesktopTool = "ffmpeg" | "yt-dlp"
-export type DesktopToolsStatus = Record<DesktopTool, { detected: boolean }>
+export type DesktopToolSource = "managed" | "system" | "env"
+export type DesktopToolState = {
+  detected: boolean
+  source?: DesktopToolSource | null
+  version?: string | null
+  downloading?: boolean
+  progress?: number | null
+  error?: string | null
+}
+export type DesktopToolsStatus = Record<DesktopTool, DesktopToolState>
+
+export const desktopTools = ["ffmpeg", "yt-dlp"] as const satisfies readonly DesktopTool[]
+export const desktopToolDownloadKey = ["desktop", "tools", "download"] as const
+export type DesktopToolDownloadInput = { tool: DesktopTool; force: boolean }
+
+export function hasDesktopToolDownload(status?: DesktopToolsStatus): boolean {
+  return desktopTools.some((tool) => status?.[tool]?.downloading === true)
+}
 
 type NativeResult = void | { ok: boolean; error?: string }
 type DesktopBridge = {
@@ -107,8 +124,31 @@ export const getDesktopRuntime = () => systemRequest<DesktopRuntime>("runtime")
 export const getDesktopSettings = () => systemRequest<DesktopSettingsView>("desktop-settings")
 export const saveDesktopSettings = (patch: DesktopSettingsPatch) => systemRequest<DesktopSettingsView>("desktop-settings", "PATCH", patch)
 export const testDesktopLlm = () => systemRequest<DesktopLlmTestResult>("llm-test", "POST")
-export const getDesktopTools = () => systemRequest<DesktopToolsStatus>("tools")
-export const downloadDesktopTool = (tool: DesktopTool) => systemRequest<void>(`tools/${tool}/download`, "POST")
+export const getDesktopTools = (): Promise<DesktopToolsStatus> => systemRequest<DesktopToolsStatus>("tools")
+export const downloadDesktopTool = (tool: DesktopTool, options?: { force?: boolean }) =>
+  systemRequest<void>(`tools/${tool}/download${options?.force ? "?force=1" : ""}`, "POST")
+
+export const desktopToolsQuery = {
+  queryKey: ["desktop", "tools"] as const,
+  queryFn: getDesktopTools,
+  refetchInterval: (query: { state: { data?: DesktopToolsStatus } }): number | false =>
+    hasDesktopToolDownload(query.state.data) ? 1500 : false,
+}
+
+export async function trackDesktopToolDownload(
+  { tool, force }: DesktopToolDownloadInput,
+  refreshStatus: () => Promise<unknown>,
+): Promise<void> {
+  // The POST waits for installation; check once after it starts to pick up server-side progress.
+  const request = downloadDesktopTool(tool, { force })
+  const check = setTimeout(() => void refreshStatus(), 400)
+  try {
+    await request
+  } finally {
+    clearTimeout(check)
+    await refreshStatus()
+  }
+}
 
 function assertNativeResult(result: NativeResult) {
   if (result?.ok === false) throw new Error(result.error || "Native action failed")
