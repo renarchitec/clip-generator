@@ -3,7 +3,10 @@ use crate::{
     live_chat::{number, Window},
     llm,
     models::{TranscriptCue as Cue, WordTiming as Word},
-    subtitles::{caption_tokens, cue_to_words, sanitize, MAX_TAIL_WORD_SEC},
+    subtitles::{
+        caption_tokens, cue_to_words, ends_sentence, sanitize, MAX_TAIL_WORD_SEC,
+        MAX_WORD_DISPLAY_SEC,
+    },
     tools::{self, ToolPaths},
 };
 use anyhow::{bail, Context, Result};
@@ -195,16 +198,15 @@ pub fn words_to_cues(raw: &[Value], offset: f64) -> Vec<Cue> {
         });
     }
     for word in words {
-        if let Some(prev) = group.last() {
-            let pause = word.start - prev.end.min(prev.start + MAX_TAIL_WORD_SEC);
+        let group_len = group.len();
+        let group_start = group.first().map(|w| w.start);
+        if let Some(prev) = group.last_mut() {
+            prev.end = prev.end.min(prev.start + MAX_WORD_DISPLAY_SEC);
+            let pause = word.start - prev.end;
             if pause >= 0.75
-                || group.len() >= 12
-                || word.end - group[0].start > 6.
-                || (group.len() >= 4
-                    && prev
-                        .text
-                        .trim_end_matches(['"', '\'', '”', '’', ')', ']'])
-                        .ends_with(['.', '?', '!']))
+                || group_len >= 12
+                || group_start.is_some_and(|start| word.end - start > 6.)
+                || (group_len >= 4 && ends_sentence(&prev.text))
             {
                 finish(&mut cues, &mut group);
             }
@@ -850,6 +852,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             [4, 12, 1]
         );
+    }
+
+    #[test]
+    fn timed_words_cap_stretched_word_before_splitting_at_pause_threshold() {
+        let input = [
+            json!({"word":"one","start":0.1,"end":1.75}),
+            json!({"word":"two","start":1.75,"end":4.0}),
+        ];
+        let cues = words_to_cues(&input, 0.);
+        assert_eq!(
+            cues.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        assert_eq!(cues[0].words[0].end, 1.0);
+        assert_eq!(cues[0].end, cues[0].start + MAX_WORD_DISPLAY_SEC);
+        assert_eq!(cues[1].start - cues[0].end, 0.75);
+        assert_eq!(cues[1].words[0].end, 2.95);
+        assert_eq!(cues[1].end, cues[1].start + MAX_TAIL_WORD_SEC);
     }
 
     #[test]

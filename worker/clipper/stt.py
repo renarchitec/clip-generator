@@ -15,7 +15,16 @@ from threading import Lock
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from .llm import parse_llm_json
-from .subtitles import MAX_TAIL_WORD_SEC, Cue, Word, _caption_tokens, cue_to_words, sanitize
+from .subtitles import (
+    MAX_TAIL_WORD_SEC,
+    MAX_WORD_DISPLAY_SEC,
+    Cue,
+    Word,
+    _caption_tokens,
+    cue_to_words,
+    ends_sentence,
+    sanitize,
+)
 
 log = logging.getLogger(__name__)
 MAX_STT_CHUNK_SEC = 180.0
@@ -143,9 +152,10 @@ def words_to_cues(raw_words: Sequence[Mapping[str, Any]], offset_sec: float = 0.
     for word in words:
         if group:
             prev = group[-1]
-            pause = word.start - min(prev.end, prev.start + MAX_TAIL_WORD_SEC)
+            prev.end = min(prev.end, prev.start + MAX_WORD_DISPLAY_SEC)
+            pause = word.start - prev.end
             if (pause >= 0.75 or len(group) >= 12 or word.end - group[0].start > 6.0
-                    or (len(group) >= 4 and prev.text.rstrip('\"\'”’)]').endswith((".", "?", "!")))):
+                    or (len(group) >= 4 and ends_sentence(prev.text))):
                 finish()
         group.append(word)
     if group:

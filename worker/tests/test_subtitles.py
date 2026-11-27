@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from clipper.models import CaptionStyle
@@ -164,6 +166,53 @@ def test_write_ass_word_events_never_overlap():
     assert len(spans) == 3
     for (_, end), (next_start, _) in zip(spans, spans[1:]):
         assert end <= next_start
+
+
+def _timed_ass_events(words, **options):
+    cue = Cue(words[0].start, words[-1].end, " ".join(word.text for word in words), words)
+    events = []
+    for line in write_ass([cue], **options).splitlines():
+        if line.startswith("Dialogue:"):
+            fields = line.split(",", 9)
+            events.append((fields[1], fields[2], re.sub(r"\{[^}]*\}", "", fields[9])))
+    return events
+
+
+@pytest.mark.parametrize(("start", "lines"), [(0.49, ["ONE TWO"] * 2), (0.5, ["ONE", "TWO"])])
+def test_write_ass_splits_timed_cues_at_quarter_second_pause(start, lines):
+    words = [Word(0, 0.25, "one"), Word(start, 0.75, "two")]
+    assert [text for _, _, text in _timed_ass_events(words)] == lines
+
+
+@pytest.mark.parametrize("first", ["go.", "go?", "go!", 'go."', "go?’]", "go!)"])
+def test_write_ass_splits_timed_cues_after_sentence_end(first):
+    words = [Word(0, 0.25, first), Word(0.25, 0.5, "next")]
+    assert [text for _, _, text in _timed_ass_events(words)] == [first.upper(), "NEXT"]
+
+
+@pytest.mark.parametrize(("start", "wide", "split"), [
+    (0.9, False, False), (0.91, False, True), (0.91, True, False),
+    (1.4, True, False), (1.41, True, True),
+])
+def test_write_ass_applies_default_and_wide_timed_lead_caps(start, wide, split):
+    words = [Word(0, 0.5, "one"), Word(0.5, start, "two"), Word(start, 1.6, "go")]
+    options = {"max_words": 6, "max_chars": 32} if wide else {}
+    expected = ["ONE TWO", "ONE TWO", "GO"] if split else ["ONE TWO GO"] * 3
+    assert [text for _, _, text in _timed_ass_events(words, **options)] == expected
+
+
+def test_write_ass_keeps_fast_fluent_timed_words_together():
+    words = [Word(0, 0.2, "we"), Word(0.2, 0.4, "can"), Word(0.4, 0.6, "do"), Word(0.6, 0.8, "it")]
+    assert [text for _, _, text in _timed_ass_events(words)] == ["WE CAN DO IT"] * 4
+
+
+def test_write_ass_caps_stretched_mid_cue_word_and_splits_at_resulting_gap():
+    words = [Word(0, 0.2, "one"), Word(0.2, 1.375, "two"), Word(1.375, 2.5, "next")]
+    assert _timed_ass_events(words, max_words=6, max_chars=32) == [
+        ("0:00:00.00", "0:00:00.20", "ONE TWO"),
+        ("0:00:00.20", "0:00:01.10", "ONE TWO"),
+        ("0:00:01.38", "0:00:02.50", "NEXT"),
+    ]
 
 
 def test_write_ass_skips_invalid_cues():

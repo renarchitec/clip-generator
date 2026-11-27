@@ -73,6 +73,20 @@ def test_words_filter_annotations_preserve_timings_and_split_on_pause():
     assert cues[1].end == pytest.approx(43 + stt.MAX_TAIL_WORD_SEC)
 
 
+def test_words_cap_stretched_words_before_splitting_on_pause():
+    cues = stt.words_to_cues([
+        {"word": "first", "start": 0, "end": 1},
+        {"word": "stretched", "start": 1, "end": 2.65},
+        {"word": "tail", "start": 2.65, "end": 5},
+    ])
+
+    assert [cue.text for cue in cues] == ["first stretched", "tail"]
+    assert [word.end for word in cues[0].words] == pytest.approx([0.9, 1.9])
+    assert cues[0].end == pytest.approx(1.9)
+    assert cues[1].start - cues[0].end == pytest.approx(0.75)
+    assert cues[1].words[-1].end - cues[1].start == pytest.approx(1.2)
+
+
 def test_words_group_by_sentence_word_count_and_duration():
     texts = "I have four words. one two three four five six seven eight nine ten eleven twelve last".split()
     raw = [{"word": text, "start": i / 4, "end": i / 4 + 0.1} for i, text in enumerate(texts)]
