@@ -1,3 +1,7 @@
+import json
+import re
+from threading import Barrier
+
 import pytest
 
 from clipper import llm
@@ -124,6 +128,149 @@ def test_build_prompt_only_caps_auto_mode():
     assert "sistem memilih 2 terbaik" in auto
 
 
+def _continuous_cues(count=1200):
+    return [Cue(i * 3.0, (i + 1) * 3.0, f"cue {i}: " + "kata " * 15) for i in range(count)]
+
+
+def _window_cues(count, text="kalimat."):
+    return [Cue(i * 90.0, i * 90.0 + 45.0, text) for i in range(count)]
+
+
+def test_build_scan_chunks_continuous_preserves_transcript_with_overlap():
+    cues = _continuous_cues()
+    chunks = llm._build_scan_chunks(cues)
+
+    assert 1 < len(chunks) <= llm.MAX_SCAN_CHUNKS
+    assert chunks[0].start == cues[0].start
+    assert chunks[-1].end == cues[-1].end
+    for left, right in zip(chunks, chunks[1:]):
+        assert left.start < right.start < left.end < right.end
+        assert left.end - right.start == llm.CHUNK_OVERLAP_SEC
+    seen = dict.fromkeys(line for chunk in chunks for line in chunk.text.splitlines())
+    assert list(seen) == llm._transcript_text(cues, max_chars=200_000).splitlines()
+
+
+def test_build_scan_chunks_caps_long_continuous_scan():
+    cues = _continuous_cues(10_000)
+    chunks = llm._build_scan_chunks(cues)
+
+    assert len(chunks) == llm.MAX_SCAN_CHUNKS
+    assert all(len(chunk.text) <= llm.MAX_SINGLE_CHUNK_CHARS for chunk in chunks)
+    assert chunks[-1].end == cues[-1].end
+    assert chunks[-1].text.endswith(llm._transcript_text(cues[-1:]))
+
+
+def test_build_scan_chunks_batches_twelve_short_windows():
+    cues = _window_cues(12)
+    chunks = llm._build_scan_chunks(cues)
+
+    assert [len(chunk.segment_ranges) for chunk in chunks] == [4, 4, 4]
+    assert [window for chunk in chunks for window in chunk.segment_ranges] == [
+        (cue.start, cue.end) for cue in cues
+    ]
+    assert chunks[0].text.startswith("=== Segmen 1 (00:00–00:45 / 0.0–45.0s) ===\n")
+    assert "=== Segmen 12 (16:30–17:15 / 990.0–1035.0s) ===" in chunks[-1].text
+    prompt = llm._build_prompt(cues, JobParams(), chunk=chunks[-1], chunk_index=3, total_chunks=3)
+    assert "Batch 3/3" in prompt
+    assert "evaluasi SETIAP segmen satu per satu" in prompt
+    assert "720.0 sampai 1035.0" in prompt
+    example, = re.findall(r"^\[\{.*\}\]$", prompt, re.MULTILINE)
+    assert len(json.loads(example)) == 2
+
+
+def test_build_scan_chunks_splits_batches_at_character_target():
+    chunks = llm._build_scan_chunks(_window_cues(5, text="x" * 10_000))
+    assert [len(chunk.segment_ranges) for chunk in chunks] == [3, 2]
+    assert all(len(chunk.text) <= llm.CHUNK_TARGET_CHARS for chunk in chunks)
+
+
+def test_select_moments_rejects_candidates_outside_segments_and_retries_single_batch(monkeypatch):
+    attempts = []
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        attempts.append(temperature)
+        candidates = [
+            {"start": 35, "end": 95, "title": "Across segments", "viralScore": 100},
+            {"start": 50, "end": 80, "title": "In the gap", "viralScore": 99},
+            {"start": 84, "end": 114, "title": "Outside tolerance", "viralScore": 98},
+        ]
+        if temperature == 0.0:
+            candidates.append({"start": 85, "end": 115, "title": "Inside tolerance"})
+        return json.dumps(candidates)
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    moments = select_moments(
+        _window_cues(2), JobParams(clip_count=1, target_duration_sec=30),
+        {**ENV_LLM, "LLM_REFINE": "0"}, all_moments=True,
+    )
+
+    assert attempts == [0.2, 0.0]
+    assert [moment.title for moment in moments] == ["Inside tolerance"]
+
+
+@pytest.mark.parametrize(
+    "all_moments, expected",
+    [(True, ["Best overlap", "Early", "Late"]), (False, ["Best overlap", "Early"])],
+)
+def test_select_moments_merges_parallel_chunks_and_deduplicates(monkeypatch, all_moments, expected):
+    cues = _continuous_cues(500)
+    first, second = llm._build_scan_chunks(cues)
+    shared_start = second.start + 12
+    barrier = Barrier(2, timeout=5)
+    attempts = {1: [], 2: []}
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        index = 1 if "Bagian 1/2" in prompt else 2
+        attempts[index].append(temperature)
+        if temperature == 0.2:
+            barrier.wait()
+            if index == 2:
+                return "invalid JSON"
+        if index == 1:
+            items = [
+                {"start": shared_start, "end": shared_start + 30, "title": "Duplicate", "viralScore": 70},
+                {"start": 12, "end": 42, "title": "Early", "viralScore": 85},
+                {"start": second.end - 42, "end": second.end - 12, "title": "Wrong chunk", "viralScore": 100},
+            ]
+        else:
+            items = [
+                {"start": shared_start, "end": shared_start + 30, "title": "Best overlap", "viralScore": 95},
+                {"start": first.end + 12, "end": first.end + 42, "title": "Late", "viralScore": 80},
+            ]
+        return json.dumps(items)
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    moments = select_moments(
+        cues, JobParams(clip_count=2, target_duration_sec=30),
+        {**ENV_LLM, "LLM_REFINE": "0"}, all_moments=all_moments,
+    )
+
+    assert attempts == {1: [0.2], 2: [0.2, 0.0]}
+    assert [moment.title for moment in moments] == expected
+
+
+def test_select_moments_keeps_success_when_other_batches_are_empty_or_fail(monkeypatch):
+    attempts = {1: [], 2: [], 3: []}
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        index = int(re.search(r"Batch (\d+)/3", prompt)[1])
+        attempts[index].append(temperature)
+        if index == 1:
+            return "[]"
+        if index == 2:
+            raise RuntimeError("timeout")
+        return '[{"start": 730, "end": 760, "title": "Last batch"}]'
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    moments = select_moments(
+        _window_cues(12), JobParams(clip_count=1, target_duration_sec=30),
+        {**ENV_LLM, "LLM_REFINE": "0"}, all_moments=True,
+    )
+
+    assert attempts == {1: [0.2], 2: [0.2, 0.0], 3: [0.2]}
+    assert [moment.title for moment in moments] == ["Last batch"]
+
+
 # --- Pass refinement LLM + snap deterministik ---
 
 ENV_LLM = {"LLM_BASE_URL": "http://x", "LLM_API_KEY": "k", "LLM_MODEL": "m"}
@@ -190,6 +337,34 @@ def test_select_all_moments_keeps_candidates_through_refine_and_snap(monkeypatch
     assert [moment.title for moment in moments] == ["A", "B"]
     assert [moment.start for moment in moments] == pytest.approx([12 - START_PAD, 72 - START_PAD], abs=0.01)
     assert [moment.end for moment in moments] == pytest.approx([42 + END_PAD, 102 + END_PAD], abs=0.01)
+
+
+def test_select_moments_refines_in_batches_with_local_indices(monkeypatch):
+    cues = _cues(count=240)
+    starts = [i * 60 + 10 for i in range(12)]
+    candidates = [
+        {"start": start, "end": start + 30, "title": f"Clip {i}"}
+        for i, start in enumerate(starts)
+    ]
+    batches = []
+
+    def fake_complete(base_url, api_key, model, prompt, temperature, has_brief=False):
+        if temperature == 0.2:
+            return json.dumps(candidates)
+        indices = [int(i) for i in re.findall(r"^Kandidat (\d+):", prompt, re.MULTILINE)]
+        offset = sum(len(batch) for batch in batches)
+        batches.append(indices)
+        return json.dumps([
+            {"index": index, "start": starts[offset + index] + 5, "end": starts[offset + index] + 35}
+            for index in indices
+        ])
+
+    monkeypatch.setattr(llm, "_complete", fake_complete)
+    moments = select_moments(cues, JobParams(target_duration_sec=30), ENV_LLM, all_moments=True)
+
+    assert batches == [list(range(10)), [0, 1]]
+    assert [moment.title for moment in moments] == [f"Clip {i}" for i in range(12)]
+    assert [moment.start for moment in moments] == pytest.approx([s + 5 - START_PAD for s in starts])
 
 
 def test_select_moments_refine_disabled_keeps_pass1(monkeypatch):
