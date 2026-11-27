@@ -18,27 +18,27 @@ export function BrandMark({ className }: { className?: string }) {
   const maskId = useId()
   return <svg viewBox="0 0 64 64" fill="none" aria-hidden="true" className={className}>
     <defs>
-      <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
-        <rect width="64" height="64" fill="#fff" />
-        <g transform="translate(26 38) rotate(42)"><path d="M0 0L-3.2 -10.5L-8.4 -16.5V-39.5L0 -33.2L8.4 -39.5V-16.5L3.2 -10.5Z" fill="#000" stroke="#000" strokeWidth="6.5" strokeLinejoin="round" /></g>
+      <mask id={maskId} maskUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80">
+        <rect x="-8" y="-8" width="80" height="80" fill="#fff" />
+        <path d="M 5.5,17.5 L 38.5,32 L 5.5,46.5 Z" fill="#000" stroke="#000" strokeWidth="6.4" strokeLinejoin="round" />
       </mask>
     </defs>
     <g mask={`url(#${maskId})`}>
-      <circle cx="26" cy="38" r="22.5" stroke="currentColor" strokeWidth="5" />
-      <circle cx="26" cy="38" r="11.5" stroke="currentColor" strokeWidth="5" />
+      <circle cx="33.75" cy="32" r="22.5" stroke="currentColor" strokeWidth="5" />
+      <circle cx="33.75" cy="32" r="11.5" stroke="currentColor" strokeWidth="5" />
     </g>
-    <g transform="translate(26 38) rotate(42)"><path d="M0 0L-3.2 -10.5L-8.4 -16.5V-39.5L0 -33.2L8.4 -39.5V-16.5L3.2 -10.5Z" className="fill-[#5ce1c4] stroke-[#5ce1c4] dark:fill-[#087f68] dark:stroke-[#087f68]" strokeWidth="1.2" strokeLinejoin="round" /></g>
+    <path d="M 5.5,17.5 L 38.5,32 L 5.5,46.5 Z" fill="currentColor" />
   </svg>
 }
 
 export function Brand({ compact = false }: { compact?: boolean }) {
-  return <Link to="/" className="group inline-flex min-h-11 items-center gap-2 font-display md:min-h-10 text-lg font-semibold tracking-[-0.06em]" aria-label="DartClip home"><span className="grid size-8 place-items-center rounded-md bg-[#18181b] text-white dark:bg-primary dark:text-primary-foreground"><BrandMark className="size-5" /></span>{!compact && <span>DartClip</span>}</Link>
+  return <Link to="/" className="group inline-flex min-h-11 items-center gap-2 font-display md:min-h-10 text-lg font-semibold tracking-[-0.06em]" aria-label="DartClip home"><span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground"><BrandMark className="size-5" /></span>{!compact && <span>DartClip</span>}</Link>
 }
 
 export function Preferences() {
   const t = useT()
   const { language, setLanguage } = useLanguage()
-  return <div className="flex items-center gap-1"><DropdownMenu><DropdownMenuTrigger aria-label={t.language} title={t.language} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md px-2 md:min-h-10 md:px-2.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Globe className="size-[18px]" aria-hidden="true"/><span aria-hidden="true" className="font-mono text-xs font-semibold leading-none tracking-wide">{language.toUpperCase()}</span><span className="sr-only">{t.language}: {language.toUpperCase()}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="min-w-40"><DropdownMenuLabel>{t.language}</DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => setLanguage("en")}><span className="w-6 font-mono text-[10px]">EN</span>English{language === "en" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem><DropdownMenuItem onSelect={() => setLanguage("id")}><span className="w-6 font-mono text-[10px]">ID</span>Bahasa Indonesia{language === "id" && <span className="ml-auto text-primary">✓</span>}</DropdownMenuItem></DropdownMenuContent></DropdownMenu><ThemeSelect /></div>
+  return <div className="flex items-center gap-1"><DropdownMenu><DropdownMenuTrigger aria-label={t.language} title={t.language} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md px-2 md:min-h-10 md:px-2.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Globe className="size-[18px]" aria-hidden="true"/><span aria-hidden="true" className="font-mono text-xs font-semibold leading-none tracking-wide">{language.toUpperCase()}</span><span className="sr-only">{t.language}: {language.toUpperCase()}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="min-w-40"><DropdownMenuLabel>{t.language}</DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem onSelect={() => setLanguage("en")}><span className="w-6 font-mono text-[10px]">EN</span>English{language === "en" && <span className="ml-auto">✓</span>}</DropdownMenuItem><DropdownMenuItem onSelect={() => setLanguage("id")}><span className="w-6 font-mono text-[10px]">ID</span>Bahasa Indonesia{language === "id" && <span className="ml-auto">✓</span>}</DropdownMenuItem></DropdownMenuContent></DropdownMenu><ThemeSelect /></div>
 }
 
 function AccountMenu({ user }: { user: User }) {
@@ -48,7 +48,7 @@ function AccountMenu({ user }: { user: User }) {
   const name = user.name || user.email
   const initials = name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "U"
   const signOut = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); client.clear(); await navigate({ to: "/login" }) }
-  return <DropdownMenu><DropdownMenuTrigger aria-label={`${t.accountMenu}: ${name}`} title={name} className="inline-flex size-11 items-center justify-center rounded-full md:size-10 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="grid size-8 place-items-center rounded-full border border-accent/30 bg-accent/15 font-display text-xs font-semibold tracking-wide text-accent">{initials}</span><span className="sr-only">{t.accountMenu}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-[min(16rem,calc(100vw-1.5rem))]"><DropdownMenuLabel className="px-2 py-2"><span className="flex items-center gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-lg border border-accent/30 bg-accent/15 font-display text-sm font-semibold text-accent">{initials}</span><span className="min-w-0"><span className="block truncate text-sm font-medium text-foreground">{user.name || t.account}</span><span className="mt-0.5 block truncate text-xs font-normal text-muted-foreground">{user.email}</span></span></span></DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem asChild className="min-h-10"><Link to="/settings"><Settings className="size-4"/>{t.settings}</Link></DropdownMenuItem><DropdownMenuItem onSelect={() => void signOut()} className="min-h-10 text-destructive focus:bg-destructive/10 focus:text-destructive"><LogOut className="size-4"/>{t.signOut}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+  return <DropdownMenu><DropdownMenuTrigger aria-label={`${t.accountMenu}: ${name}`} title={name} className="inline-flex size-11 items-center justify-center rounded-full md:size-10 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="grid size-8 place-items-center rounded-full bg-accent/10 font-display text-xs font-semibold tracking-wide text-accent">{initials}</span><span className="sr-only">{t.accountMenu}</span></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-[min(16rem,calc(100vw-1.5rem))]"><DropdownMenuLabel className="px-2 py-2"><span className="flex items-center gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent/10 font-display text-sm font-semibold text-accent">{initials}</span><span className="min-w-0"><span className="block truncate text-sm font-medium text-foreground">{user.name || t.account}</span><span className="mt-0.5 block truncate text-xs font-normal text-muted-foreground">{user.email}</span></span></span></DropdownMenuLabel><DropdownMenuSeparator/><DropdownMenuItem asChild className="min-h-10"><Link to="/settings"><Settings className="size-4"/>{t.settings}</Link></DropdownMenuItem><DropdownMenuItem onSelect={() => void signOut()} className="min-h-10 text-destructive focus:bg-destructive/10 focus:text-destructive"><LogOut className="size-4"/>{t.signOut}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
 }
 
 export function Topbar({ user }: { user?: User }) {

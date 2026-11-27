@@ -214,7 +214,7 @@ export function WatermarkOverlay({
             {/* Bottom caption & navigation bar */}
             <div className="absolute inset-x-0 bottom-0 h-[22%] border-t border-dashed border-rose-400/50 bg-rose-500/18" />
             {/* Safe rectangle indicator badge */}
-            <span className="absolute left-1.5 top-[14.5%] rounded-sm border border-emerald-400/40 bg-black/60 px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wider text-emerald-200 backdrop-blur-[2px]">
+            <span className="absolute left-1.5 top-[14.5%] rounded-sm border border-zinc-300/35 bg-black/65 px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wider text-zinc-100 backdrop-blur-[2px]">
               {t.safeZoneBadge}
             </span>
           </div>

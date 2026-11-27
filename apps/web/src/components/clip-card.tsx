@@ -603,7 +603,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
                             aria-label={`${t.totalViews}: ${formatExactCount(viewsSummary.totalViews, language)}`}
                             className="inline-flex h-7 items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2.5 font-mono text-[10px] font-semibold tabular-nums text-white backdrop-blur-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:h-6 sm:px-2"
                           >
-                            <Eye aria-hidden="true" className="size-3 text-accent"/>
+                            <Eye aria-hidden="true" className="size-3"/>
                             {formatCompactCount(viewsSummary.totalViews)}
                           </button>
                         </TooltipTrigger>
@@ -692,7 +692,7 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.clipDetails}</span>
             </button>
             <button type="button" onClick={copyCaption} aria-label={t.tiktokCopyCaption} title={t.tiktokCopyCaption} className="hidden w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:flex">
-              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105">{copied ? <Check className="size-[18px] text-accent"/> : <Copy className="size-[18px]"/>}</span>
+              <span className="grid size-11 place-items-center rounded-full border border-white/15 bg-black/55 text-white shadow-lg backdrop-blur-md transition-transform hover:scale-105">{copied ? <Check className="size-[18px]"/> : <Copy className="size-[18px]"/>}</span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.tiktokCopyCaption}</span>
             </button>
             <Link to="/jobs/$jobId" params={{ jobId: activeClip.job.id }} onClick={() => onOpenChange(false)} aria-label={`${t.openJob}: ${title}`} title={t.openJob} className="hidden w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:flex">
@@ -1039,7 +1039,7 @@ function PublishBadge({ publications }: { publications?: ClipPublication[] }) {
           {livePlatforms.includes("youtube") && <YouTubeMark className="size-3.5" />}
           {livePlatforms.includes("tiktok") && <TikTokMark className="size-3.5 [&_.fill-foreground]:fill-white" />}
           {livePlatforms.includes("instagram") && <InstagramMark className="size-3.5" />}
-          {busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80" /> : <CircleCheck aria-hidden="true" className="size-3 text-accent" />}
+          {busy ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-white/80" /> : <CircleCheck aria-hidden="true" className="size-3" />}
           <span className="sr-only">{liveLabel}</span>
         </span>
       )}

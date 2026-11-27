@@ -1,10 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none"><rect width="1024" height="1024" fill="#18181b"/><g transform="translate(225.5 195.2) scale(9.6)">
-<defs><mask id="mi" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
-  <rect width="64" height="64" fill="#fff"/>
-  <g transform="translate(26 38) rotate(42)"><path d="M0 0L-3.2 -10.5L-8.4 -16.5V-39.5L0 -33.2L8.4 -39.5V-16.5L3.2 -10.5Z" fill="#000" stroke="#000" stroke-width="6.5" stroke-linejoin="round"/></g>
-</mask></defs>
-<g mask="url(#mi)">
-  <circle cx="26" cy="38" r="22.5" stroke="#fafafa" stroke-width="5"/>
-  <circle cx="26" cy="38" r="11.5" stroke="#fafafa" stroke-width="5"/>
-</g>
-<g transform="translate(26 38) rotate(42)"><path d="M0 0L-3.2 -10.5L-8.4 -16.5V-39.5L0 -33.2L8.4 -39.5V-16.5L3.2 -10.5Z" fill="#5ce1c4" stroke="#5ce1c4" stroke-width="1.2" stroke-linejoin="round"/></g></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" role="img" aria-label="DartClip">
+  <rect width="1024" height="1024" fill="#09090b"/>
+  <g transform="translate(160 160) scale(11)">
+    <defs>
+      <mask id="dartclip-play-app-icon-cut" maskUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80">
+        <rect x="-8" y="-8" width="80" height="80" fill="#ffffff"/>
+        <path d="M 5.5,17.5 L 38.5,32 L 5.5,46.5 Z" fill="#000000" stroke="#000000" stroke-width="6.4" stroke-linejoin="round"/>
+      </mask>
+    </defs>
+    <g fill="none" stroke="#fafafa" stroke-width="5" mask="url(#dartclip-play-app-icon-cut)">
+      <circle cx="33.75" cy="32" r="22.5"/>
+      <circle cx="33.75" cy="32" r="11.5"/>
+    </g>
+    <path d="M 5.5,17.5 L 38.5,32 L 5.5,46.5 Z" fill="#fafafa"/>
+  </g>
+</svg>

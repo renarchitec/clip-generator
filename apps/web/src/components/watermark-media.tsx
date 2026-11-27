@@ -202,7 +202,7 @@ export function WatermarkMedia({ watermark, chromaKey, className = "", compact =
         style={ratio ? { aspectRatio: ratio } : undefined}
       >
         <div className="flex items-center gap-1">
-          <Film aria-hidden="true" className={compact ? "size-3 text-accent" : "size-3.5 text-accent"} />
+          <Film aria-hidden="true" className={compact ? "size-3" : "size-3.5"} />
           <Badge variant="secondary" className="h-4 rounded-sm bg-black/60 px-1 font-mono text-[9px] text-white">
             {ext}
           </Badge>

@@ -191,7 +191,7 @@ export function SubtitleOverlay({ style, twoSpeakers = false, frameHeightPx, onC
               : "opacity-0 group-hover/sub:opacity-100 group-focus-visible/sub:opacity-100"
           }`}
         >
-          <GripHorizontal className="size-3 text-accent" />
+          <GripHorizontal className="size-3" />
           <span>Y {yPercent}%</span>
         </span>
         <span
