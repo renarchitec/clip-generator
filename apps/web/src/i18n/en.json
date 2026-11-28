@@ -60,5 +60,9 @@
   "momentPrompt": "Describe the moment",
   "seconds": "Time (seconds)",
   "image": "Image",
-  "working": "Working…"
+  "working": "Working…",
+  "clipImageGenerate": "Generate one image for this clip",
+  "clipImageAttached": "Clip image attached",
+  "clipImageNoCues": "No transcript for this clip.",
+  "clipImageFull": "Remove a B-roll item to make room."
 }

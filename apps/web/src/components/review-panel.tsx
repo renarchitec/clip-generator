@@ -1,4 +1,7 @@
-import {useState} from 'react'
+import {api} from "@/lib/api"
+import {useSplitText} from "./media-source-picker"
+import {discussionPrompt, reviewImageId, imageSegment} from "@/lib/review-image"
+import {useRef,useState} from 'react'
 import {SplitTimelineEditor} from './split-timeline-editor'
 import type {SplitScreenConfig,SplitScreenSegment} from '@/lib/split-screen'
 import { Flame, ListChecks, LoaderCircle } from "lucide-react"
@@ -16,6 +19,7 @@ function formatMomentTime(seconds: number) {
 
 type ReviewPanelProps = {
   splitScreen?:SplitScreenConfig
+  attachImage:(key:string, mediaId:string, label:string)=>void
   preview?: JobPreview
   loading: boolean
   error: string
@@ -35,10 +39,27 @@ type ReviewPanelProps = {
   reviewRef: React.RefObject<HTMLDivElement | null>
 }
 
-export function ReviewPanel({ splitScreen,preview, loading, error, t, maxSelectable, selectedCandidates, setSelectedCandidates, selectedCueStart, setSelectedCueStart, selectedCueEnd, setSelectedCueEnd, cueRanges, setCueRanges, createPending, renderSelected, retry, reviewRef }: ReviewPanelProps) {
+export function ReviewPanel({ attachImage,splitScreen,preview, loading, error, t, maxSelectable, selectedCandidates, setSelectedCandidates, selectedCueStart, setSelectedCueStart, selectedCueEnd, setSelectedCueEnd, cueRanges, setCueRanges, createPending, renderSelected, retry, reviewRef }: ReviewPanelProps) {
   const [edits,setEdits]=useState<Record<number,SplitScreenSegment[]>>({})
   const candidates = preview?.candidates ?? []
   const cues = preview?.cues ?? []
+  const st=useSplitText()
+  const lock=useRef(false)
+  const [pending,setPending]=useState<string|null>(null), [failed,setFailed]=useState<string|null>(null)
+  type Candidate=typeof candidates[number]
+  const keyFor=(c:Candidate)=>reviewImageId(preview!.id,c)
+  const attached=(c:Candidate)=>splitScreen?.clips.find(clip=>clip.id===keyFor(c))
+  const timeline=(c:Candidate,index:number)=>edits[index] ?? (attached(c)?imageSegment(keyFor(c),c):c.splitTimeline)
+  async function generate(c:Candidate,index:number,prompt:string){
+    if(lock.current || attached(c) || !splitScreen?.enabled || splitScreen.clips.length>=10) return
+    const key=keyFor(c)
+    lock.current=true; setPending(key); setFailed(null)
+    try {
+      const asset=await api<{id:string}>("/media/generate-image",{method:"POST",body:JSON.stringify({prompt,aspectRatio:"16:9"})})
+      attachImage(key,asset.id,c.title)
+      setEdits(prev=>{const next={...prev};delete next[index];return next})
+    } catch {setFailed(key)} finally {lock.current=false;setPending(null)}
+  }
   const selectedCount = selectedCandidates.length + cueRanges.length
   const addCueRange = () => {
     if (selectedCueStart === null || selectedCueEnd === null || selectedCount >= maxSelectable) return
@@ -56,7 +77,7 @@ export function ReviewPanel({ splitScreen,preview, loading, error, t, maxSelecta
     <div className="flex items-start gap-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg border border-accent/30 bg-accent/10 text-accent"><ListChecks className="size-4" /></span><div className="min-w-0 flex-1"><h2 id="review-heading" className="font-display text-lg font-medium leading-9">{t.reviewMoments}</h2>{!loading && !error && preview?.status !== "done" && <p className="-mt-1 text-sm leading-relaxed text-muted-foreground">{t.reviewMomentsHint}</p>}</div></div>
     {loading && <div role="status" className="flex items-center gap-3 rounded-lg bg-card p-4 text-sm"><LoaderCircle className="size-4 shrink-0 animate-spin text-primary" /><span>{t.scanningMoments}</span></div>}
     {error && <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 break-words">{error}</span><Button type="button" size="sm" variant="ghost" className="shrink-0" onClick={retry}>{t.retry}</Button></AlertDescription></Alert>}
-    {preview?.status === "done" && <><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{t.reviewReady}</p><Button type="button" size="sm" variant="outline" onClick={retry} disabled={loading}>{t.reviewAgain}</Button></div>
+    {preview?.status === "done" && <><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{t.reviewReady}</p><Button type="button" size="sm" variant="outline" onClick={retry} disabled={loading || !!pending}>{t.reviewAgain}</Button></div>
       <div><p className="mb-2 text-sm font-medium">{t.candidateMoments} ({candidates.length})</p><div className="space-y-2">{candidates.map((candidate, index) => {
         const checked = selectedCandidates.includes(index)
         const disabled = !checked && selectedCount >= maxSelectable
@@ -71,6 +92,8 @@ export function ReviewPanel({ splitScreen,preview, loading, error, t, maxSelecta
               ? "border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-300"
               : "border-zinc-500/30 bg-zinc-500/12 text-zinc-700 dark:text-zinc-300"
         const scoreTooltip = score !== null ? t.viralScoreTooltip.replace("{score}", String(score)) : undefined
+        const prompt=checked && splitScreen?.enabled ? discussionPrompt(candidate,cues):null
+        const image=attached(candidate)
         return <div className="rounded-lg border" key={`${candidate.start}-${candidate.end}-${index}`}><label className={`flex gap-3 rounded-lg border border-border/80 bg-card p-3 transition-colors has-[:checked]:border-accent has-[:checked]:bg-accent/10 ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-border"}`}>
           <input type="checkbox" className="mt-1 size-4 shrink-0 accent-primary" checked={checked} disabled={disabled} onChange={(event) => setSelectedCandidates((current) => event.target.checked ? [...current, index] : current.filter((item) => item !== index))} aria-label={`${candidate.title}, ${formatMomentTime(candidate.start)}–${formatMomentTime(candidate.end)}`} />
           <span className="min-w-0 flex-1">
@@ -92,7 +115,10 @@ export function ReviewPanel({ splitScreen,preview, loading, error, t, maxSelecta
             </span>
             <span className="mt-1 block break-words text-xs leading-relaxed text-muted-foreground">{candidate.reason}</span>
           </span>
-        </label>{splitScreen?.enabled&&<SplitTimelineEditor clips={splitScreen.clips} duration={candidate.end-candidate.start} value={edits[index]??candidate.splitTimeline??[]} original={candidate.splitTimeline} onChange={v=>setEdits(prev=>({...prev,[index]:v}))}/>}</div>
+        </label>{checked && splitScreen?.enabled && <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
+          {image ? <><img src={`/api/media/${encodeURIComponent(image.mediaId!)}/file`} alt="" className="h-9 w-16 rounded object-cover"/>{st.clipImageAttached}</> : <><Button type="button" size="sm" variant="outline" disabled={!prompt || !!pending || splitScreen.clips.length>=10} onClick={()=>prompt && void generate(candidate,index,prompt)}>{pending===keyFor(candidate)?st.working:st.clipImageGenerate}</Button>
+          {!prompt && <span>{st.clipImageNoCues}</span>}{splitScreen.clips.length>=10 && <span>{st.clipImageFull}</span>}{failed===keyFor(candidate)&&<span role="alert">{st.failed}</span>}</>}
+        </div>}{splitScreen?.enabled&&<SplitTimelineEditor clips={splitScreen.clips} duration={candidate.end-candidate.start} value={timeline(candidate,index)??[]} original={candidate.splitTimeline} onChange={v=>setEdits(prev=>({...prev,[index]:v}))}/>}</div>
       })}</div></div>
       <div><p className="mb-2 text-sm font-medium">{t.transcript}</p><p className="mb-2 text-xs text-muted-foreground">{t.selectCueRange}</p><div role="group" aria-label={t.transcript} className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border/80 bg-card p-2">{cues.map((cue, index) => {
         const isStart = selectedCueStart === index
@@ -102,7 +128,7 @@ export function ReviewPanel({ splitScreen,preview, loading, error, t, maxSelecta
       <div className="space-y-2"><p className="text-sm font-medium tabular-nums">{t.selectedMoments} ({selectedCount}/{maxSelectable})</p>
         {selectedCount > maxSelectable && <p role="alert" className="text-xs text-destructive">{t.selectedMomentsOverLimit.replace("{max}", String(maxSelectable))}</p>}
         {selectedCandidates.map((index) => { const candidate = candidates[index]; return candidate ? <div key={`candidate-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-3 py-2 text-sm"><span className="min-w-0 flex-1"><span className="line-clamp-2 break-words sm:line-clamp-1">{candidate.title}</span><span className="block text-xs tabular-nums text-muted-foreground">{formatMomentTime(candidate.start)}–{formatMomentTime(candidate.end)}</span></span><Button type="button" variant="ghost" size="sm" className="min-h-10 shrink-0 sm:min-h-8" onClick={() => setSelectedCandidates((current) => current.filter((item) => item !== index))}>{t.removeRange}</Button></div> : null })}{cueRanges.map((range, index) => <div key={`cue-range-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-3 py-2 text-sm"><span className="tabular-nums">{formatMomentTime(range.start)}–{formatMomentTime(range.end)}</span><Button type="button" variant="ghost" size="sm" className="min-h-10 shrink-0 sm:min-h-8" onClick={() => setCueRanges((current) => current.filter((_, item) => item !== index))}>{t.removeRange}</Button></div>)}</div>
-      <Button type="button" className="w-full rounded-md" disabled={selectedCount < 1 || selectedCount > maxSelectable || createPending} onClick={() => renderSelected([...selectedCandidates.flatMap((index) => candidates[index] ? [{ ...(splitScreen?.enabled?{splitTimeline:edits[index]??candidates[index].splitTimeline}:{}),start: candidates[index].start, end: candidates[index].end, title: candidates[index].title, reason: candidates[index].reason, ...(candidates[index].hookText ? { hookText: candidates[index].hookText } : {}) }] : []), ...cueRanges])}>{createPending && <LoaderCircle className="mr-2 size-4 animate-spin" />}{t.renderClips.replace("{count}", String(selectedCount))}</Button>
+      <Button type="button" className="w-full rounded-md" disabled={!!pending || (splitScreen?.enabled && !splitScreen.clips.length) || selectedCount < 1 || selectedCount > maxSelectable || createPending} onClick={() => renderSelected([...selectedCandidates.flatMap((index) => candidates[index] ? [{ ...(splitScreen?.enabled?{splitTimeline:timeline(candidates[index],index)}:{}),start: candidates[index].start, end: candidates[index].end, title: candidates[index].title, reason: candidates[index].reason, ...(candidates[index].hookText ? { hookText: candidates[index].hookText } : {}) }] : []), ...cueRanges])}>{createPending && <LoaderCircle className="mr-2 size-4 animate-spin" />}{t.renderClips.replace("{count}", String(selectedCount))}</Button>
     </>}
   </section>
 }

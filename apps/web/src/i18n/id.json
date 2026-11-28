@@ -60,5 +60,9 @@
   "momentPrompt": "Jelaskan momen",
   "seconds": "Waktu (detik)",
   "image": "Gambar",
-  "working": "Memproses…"
+  "working": "Memproses…",
+  "clipImageGenerate": "Buat satu gambar untuk klip ini",
+  "clipImageAttached": "Gambar klip terpasang",
+  "clipImageNoCues": "Tidak ada transkrip untuk klip ini.",
+  "clipImageFull": "Hapus satu B-roll untuk menambah gambar."
 }
