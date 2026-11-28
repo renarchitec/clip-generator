@@ -1,0 +1,998 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Authentic local DartClip render fonts (verbatim from apps/web/public/fonts/) */
+@font-face {
+  font-family: "Anton";
+  src: url("/fonts/Anton-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bebas Neue";
+  src: url("/fonts/BebasNeue-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Montserrat";
+  src: url("/fonts/Montserrat-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/fonts/PlusJakartaSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Oswald";
+  src: url("/fonts/Oswald-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bangers";
+  src: url("/fonts/Bangers-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Semantic color tokens matching DESIGN.md (all pairs >= 4.5:1 WCAG AA) */
+:root {
+  --bg: #F7F7F8;
+  --surface: #FFFFFF;
+  --surface-2: #EFEFF1;
+  --stage: #ECECEF;
+  --stage-bar: #F5F5F7;
+  --stage-subbar: #EFEFF2;
+  --stage-surface: #FFFFFF;
+  --stage-surface-2: #E4E4E7;
+  --stage-surface-hover: #F4F4F6;
+  --border: rgba(9, 9, 11, 0.08);
+  --border-strong: rgba(9, 9, 11, 0.14);
+  --ink: #09090B;
+  --ink-muted: #52525B;
+  --ink-subtle: #27272A;
+  --accent: #18181B;
+  --accent-solid: #18181B;
+  --accent-hover: #09090B;
+  --accent-ink: #FAFAFA;
+  --accent-soft: rgba(24, 24, 27, 0.10);
+  --danger: #27272A;
+  --danger-soft: rgba(24, 24, 27, 0.09);
+  --stage-accent: #18181B;
+  --stage-accent-solid: #18181B;
+  --stage-accent-ink: #FAFAFA;
+  --stage-accent-soft: rgba(24, 24, 27, 0.09);
+  --stage-accent-border: rgba(24, 24, 27, 0.28);
+  --stage-accent-glow: rgba(24, 24, 27, 0.36);
+  --stage-border: rgba(9, 9, 11, 0.08);
+  --stage-border-strong: rgba(9, 9, 11, 0.15);
+  --stage-ink: #09090B;
+  --stage-subtle: #27272A;
+  --stage-muted: #52525B;
+  --stage-hook-bg: #E4E4E7;
+  --stage-hook-border: rgba(24, 24, 27, 0.28);
+  --stage-hook-ink: #27272A;
+  --stage-shadow:
+    0 24px 52px -22px rgba(9, 9, 11, 0.14),
+    0 4px 16px -6px rgba(9, 9, 11, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --viewport-shadow:
+    0 18px 36px -18px rgba(9, 9, 11, 0.14),
+    0 4px 12px -6px rgba(9, 9, 11, 0.12);
+  --card-shadow:
+    0 1px 2px rgba(9, 9, 11, 0.04),
+    0 12px 32px -18px rgba(9, 9, 11, 0.12);
+  --modal-backdrop: rgba(9, 9, 11, 0.40);
+  --modal-shadow:
+    0 24px 60px -18px rgba(9, 9, 11, 0.14),
+    0 4px 16px -6px rgba(9, 9, 11, 0.08);
+  --marquee-card-shadow: 0 16px 32px -20px rgba(9, 9, 11, 0.14);
+  --cat-gaming: #18181B;
+  --cat-sport: #52525B;
+  --cat-comedy: #71717A;
+  --cat-podcast: #3F3F46;
+  --wf-moment-idle-border: transparent;
+  --wf-moment-idle-bg: rgba(24, 24, 27, 0.07);
+  --wf-moment-idle-ink: #52525B;
+  --wf-moment-active-border: rgba(24, 24, 27, 0.45);
+  --wf-moment-active-bg: rgba(24, 24, 27, 0.16);
+  --wf-moment-active-ink: #18181B;
+  --illus-bg: #F4F4F5;
+  --illus-panel-a: #E4E4E7;
+  --illus-panel-b: #F4F4F5;
+  --illus-glow-a: #A1A1AA;
+  --illus-glow-b: #D4D4D8;
+  --illus-slat: #D4D4D8;
+  --illus-desk: #D4D4D8;
+  --illus-body-a: #A1A1AA;
+  --illus-body-a-stroke: #71717A;
+  --illus-neck-a: #A1A1AA;
+  --illus-head-a: #A1A1AA;
+  --illus-head-a-stroke: #71717A;
+  --illus-body-b: #D4D4D8;
+  --illus-body-b-stroke: #71717A;
+  --illus-neck-b: #A1A1AA;
+  --illus-head-b: #A1A1AA;
+  --illus-head-b-stroke: #71717A;
+  --illus-headband: #27272A;
+  --illus-earcup: #3F3F46;
+  --illus-mic-arm: #71717A;
+  --illus-mic-body: #27272A;
+  --illus-mic-stroke: #141418;
+  --illus-badge-bg: rgba(255, 255, 255, 0.94);
+  --illus-badge-border: rgba(24, 24, 27, 0.28);
+  --illus-badge-muted-border: rgba(9, 9, 11, 0.14);
+  --illus-crop-dim: rgba(9, 9, 11, 0.14);
+  --illus-bars-bg: #D4D4D8;
+  --illus-blur-bg:
+    radial-gradient(65% 45% at 50% 18%, rgba(24, 24, 27, 0.24), transparent 70%),
+    radial-gradient(70% 45% at 50% 84%, rgba(228, 228, 231, 0.20), transparent 72%),
+    linear-gradient(180deg, #E4E4E7 0%, #E4E4E7 50%, #E4E4E7 100%);
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #09090B;
+  --surface: #111114;
+  --surface-2: #18181C;
+  --stage: #0E0E11;
+  --stage-bar: #141418;
+  --stage-subbar: #111115;
+  --stage-surface: #1B1B20;
+  --stage-surface-2: #24242A;
+  --stage-surface-hover: #232329;
+  --border: rgba(250, 250, 250, 0.07);
+  --border-strong: rgba(250, 250, 250, 0.14);
+  --ink: #FAFAFA;
+  --ink-muted: #A1A1AA;
+  --ink-subtle: #D4D4D8;
+  --accent: #E4E4E7;
+  --accent-solid: #E4E4E7;
+  --accent-hover: #FAFAFA;
+  --accent-ink: #09090B;
+  --accent-soft: rgba(228, 228, 231, 0.14);
+  --danger: #E4E4E7;
+  --danger-soft: rgba(228, 228, 231, 0.14);
+  --stage-accent: #E4E4E7;
+  --stage-accent-solid: #E4E4E7;
+  --stage-accent-ink: #09090B;
+  --stage-accent-soft: rgba(228, 228, 231, 0.12);
+  --stage-accent-border: rgba(228, 228, 231, 0.28);
+  --stage-accent-glow: rgba(228, 228, 231, 0.85);
+  --stage-border: rgba(250, 250, 250, 0.07);
+  --stage-border-strong: rgba(250, 250, 250, 0.14);
+  --stage-ink: #FAFAFA;
+  --stage-subtle: #D4D4D8;
+  --stage-muted: #A1A1AA;
+  --stage-hook-bg: rgba(228, 228, 231, 0.14);
+  --stage-hook-border: rgba(228, 228, 231, 0.36);
+  --stage-hook-ink: #E4E4E7;
+  --stage-shadow:
+    0 24px 56px -22px rgba(0, 0, 0, 0.82),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --viewport-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.86);
+  --card-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 14px 32px -20px rgba(0, 0, 0, 0.65);
+  --modal-backdrop: rgba(9, 9, 11, 0.76);
+  --modal-shadow:
+    0 24px 64px -16px rgba(0, 0, 0, 0.80),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --marquee-card-shadow: 0 14px 30px -20px rgba(0, 0, 0, 0.72);
+  --cat-gaming: #E4E4E7;
+  --cat-sport: #A1A1AA;
+  --cat-comedy: #71717A;
+  --cat-podcast: #D4D4D8;
+  --wf-moment-idle-border: transparent;
+  --wf-moment-idle-bg: rgba(228, 228, 231, 0.12);
+  --wf-moment-idle-ink: #A1A1AA;
+  --wf-moment-active-border: rgba(228, 228, 231, 0.52);
+  --wf-moment-active-bg: rgba(228, 228, 231, 0.20);
+  --wf-moment-active-ink: #E4E4E7;
+  --illus-bg: #09090B;
+  --illus-panel-a: #141418;
+  --illus-panel-b: #141418;
+  --illus-glow-a: #3F3F46;
+  --illus-glow-b: #27272A;
+  --illus-slat: #27272A;
+  --illus-desk: #27272A;
+  --illus-body-a: #27272A;
+  --illus-body-a-stroke: #52525B;
+  --illus-neck-a: #3F3F46;
+  --illus-head-a: #3F3F46;
+  --illus-head-a-stroke: #71717A;
+  --illus-body-b: #27272A;
+  --illus-body-b-stroke: #3F3F46;
+  --illus-neck-b: #3F3F46;
+  --illus-head-b: #3F3F46;
+  --illus-head-b-stroke: #71717A;
+  --illus-headband: #0B0B0D;
+  --illus-earcup: #27272A;
+  --illus-mic-arm: #71717A;
+  --illus-mic-body: #0B0B0D;
+  --illus-mic-stroke: #D4D4D8;
+  --illus-badge-bg: rgba(9, 9, 11, 0.88);
+  --illus-badge-border: rgba(228, 228, 231, 0.45);
+  --illus-badge-muted-border: rgba(250, 250, 250, 0.14);
+  --illus-crop-dim: rgba(9, 9, 11, 0.50);
+  --illus-bars-bg: #0B0B0D;
+  --illus-blur-bg:
+    radial-gradient(65% 45% at 50% 18%, rgba(228, 228, 231, 0.55), transparent 70%),
+    radial-gradient(70% 45% at 50% 84%, rgba(228, 228, 231, 0.58), transparent 72%),
+    linear-gradient(180deg, #1C1C21 0%, #0B0B0D 50%, #1C1C21 100%);
+  color-scheme: dark;
+}
+
+@layer base {
+  html {
+    background-color: var(--bg);
+    color: var(--ink);
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--bg);
+    color: var(--ink);
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overflow-x: clip;
+  }
+
+  :root:not(.dark) body {
+    background-image: linear-gradient(
+      180deg,
+      rgba(228, 228, 231, 0.36) 0%,
+      rgba(250, 250, 250, 0) 280px
+    );
+    background-repeat: no-repeat;
+  }
+
+  /* R-39: Pointer affordance for all enabled interactive controls */
+  a[href],
+  button:not(:disabled),
+  summary,
+  select,
+  label[for],
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  :disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* R-32: High-contrast visible focus ring */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--accent-solid);
+    color: var(--accent-ink);
+  }
+}
+
+/* Typography helpers */
+.font-display {
+  font-family: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif;
+  letter-spacing: -0.03em;
+}
+
+.font-editorial {
+  font-family: "Instrument Serif", Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 400;
+}
+
+.font-body {
+  font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.font-mono-spec {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Identity motif: broadcast crop reticle corner brackets (used on monitor frames only) */
+.reticle-corners {
+  position: relative;
+  --reticle-color: var(--stage-accent);
+}
+
+.reticle-corners-video {
+  --reticle-color: #E4E4E7;
+}
+
+.reticle-corners::before,
+.reticle-corners::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 25;
+}
+
+.reticle-corners::before {
+  background:
+    linear-gradient(to right, var(--reticle-color) 12px, transparent 12px) 0 0 / 16px 2px no-repeat,
+    linear-gradient(to bottom, var(--reticle-color) 12px, transparent 12px) 0 0 / 2px 16px no-repeat,
+    linear-gradient(to left, var(--reticle-color) 12px, transparent 12px) 100% 0 / 16px 2px no-repeat,
+    linear-gradient(to bottom, var(--reticle-color) 12px, transparent 12px) 100% 0 / 2px 16px no-repeat;
+}
+
+.reticle-corners::after {
+  background:
+    linear-gradient(to right, var(--reticle-color) 12px, transparent 12px) 0 100% / 16px 2px no-repeat,
+    linear-gradient(to top, var(--reticle-color) 12px, transparent 12px) 0 100% / 2px 16px no-repeat,
+    linear-gradient(to left, var(--reticle-color) 12px, transparent 12px) 100% 100% / 16px 2px no-repeat,
+    linear-gradient(to top, var(--reticle-color) 12px, transparent 12px) 100% 100% / 2px 16px no-repeat;
+}
+
+/* Recessed broadcast studio monitor frame — tonal elevation, no hard outline */
+.studio-frame {
+  border-radius: 16px;
+  background-color: var(--stage);
+  box-shadow: var(--stage-shadow);
+}
+
+/* Studio hardware iPhone bezel resting inside the broadcast monitor stage */
+.iphone-chassis {
+  position: relative;
+  border-radius: 38px;
+  padding: 8px;
+  background: linear-gradient(155deg, #E4E4E7 0%, #D4D4D8 48%, #A1A1AA 100%);
+  border: 1px solid #A1A1AA;
+  box-shadow:
+    0 22px 42px -18px rgba(9, 9, 11, 0.14),
+    0 6px 16px -8px rgba(9, 9, 11, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.90),
+    inset 0 -1px 0 rgba(9, 9, 11, 0.14);
+}
+
+.dark .iphone-chassis {
+  background: linear-gradient(155deg, #27272A 0%, #141418 44%, #0B0B0D 100%);
+  border: 1px solid #3F3F46;
+  box-shadow:
+    0 20px 44px -18px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.7);
+}
+
+.iphone-side-btn {
+  background-color: #A1A1AA;
+}
+
+.dark .iphone-side-btn {
+  background-color: #3F3F46;
+}
+
+.iphone-screen {
+  border-radius: 30px;
+  background-color: #09090B;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* Single permitted subtle radial accent tint behind Hero Monitor (R-13) */
+.hero-monitor-glow {
+  position: relative;
+}
+
+.hero-monitor-glow::before {
+  content: "";
+  position: absolute;
+  inset: -18px -12px;
+  z-index: -1;
+  border-radius: 28px;
+  pointer-events: none;
+  background: radial-gradient(
+    68% 60% at 54% 46%,
+    rgba(228, 228, 231, 0.05) 0%,
+    rgba(228, 228, 231, 0.04) 48%,
+    transparent 76%
+  );
+}
+
+:root:not(.dark) .hero-monitor-glow::before {
+  background:
+    radial-gradient(
+      68% 60% at 52% 44%,
+      rgba(24, 24, 27, 0.09) 0%,
+      rgba(228, 228, 231, 0.03) 46%,
+      transparent 76%
+    );
+}
+
+/* Authentic broadcast text outline for rendered captions & hook thumbnail */
+.caption-outline {
+  text-shadow:
+    -2px -2px 0 #000000,
+    2px -2px 0 #000000,
+    -2px 2px 0 #000000,
+    2px 2px 0 #000000,
+    0 3px 6px rgba(0, 0, 0, 0.75);
+}
+
+.caption-shadow {
+  text-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.92),
+    0 1px 3px rgba(0, 0, 0, 0.96);
+}
+
+.hook-headline-stroke {
+  text-shadow:
+    -2px -2px 0 #0B0B0D,
+    2px -2px 0 #0B0B0D,
+    -2px 2px 0 #0B0B0D,
+    2px 2px 0 #0B0B0D,
+    0 4px 14px rgba(9, 9, 11, 0.85);
+}
+
+/* Purposeful broadcast studio motion system */
+@keyframes hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-stagger-1 {
+  animation: hero-enter 560ms cubic-bezier(0.22, 1, 0.36, 1) 0ms both;
+}
+
+.hero-stagger-2 {
+  animation: hero-enter 560ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+}
+
+.hero-stagger-3 {
+  animation: hero-enter 560ms cubic-bezier(0.22, 1, 0.36, 1) 160ms both;
+}
+
+.hero-stagger-4 {
+  animation: hero-enter 560ms cubic-bezier(0.22, 1, 0.36, 1) 220ms both;
+}
+
+@keyframes clip-swap {
+  from {
+    opacity: 0.45;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-clip-swap {
+  animation: clip-swap 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes clip-swipe-in-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes clip-swipe-out-up {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-100%);
+  }
+}
+
+@keyframes clip-swipe-in-down {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes clip-swipe-out-down {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+.animate-clip-swipe-in-up {
+  animation: clip-swipe-in-up 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform;
+}
+
+.animate-clip-swipe-out-up {
+  animation: clip-swipe-out-up 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform;
+}
+
+.animate-clip-swipe-in-down {
+  animation: clip-swipe-in-down 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform;
+}
+
+.animate-clip-swipe-out-down {
+  animation: clip-swipe-out-down 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform;
+}
+
+@keyframes overlay-swap {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-overlay-swap {
+  animation: overlay-swap 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes word-pop {
+  0% {
+    transform: scale(0.94) translateY(2px);
+  }
+  55% {
+    transform: scale(1.06) translateY(-1px);
+  }
+  100% {
+    transform: scale(1.03) translateY(0);
+  }
+}
+
+.animate-word-pop {
+  animation: word-pop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes hook-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-hook-card-in {
+  animation: hook-card-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-dialog-in {
+  animation: dialog-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes face-track-shift {
+  0%,
+  100% {
+    transform: translateX(-8px);
+  }
+  50% {
+    transform: translateX(8px);
+  }
+}
+
+.animate-face-track {
+  animation: face-track-shift 5.2s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.animate-face-track[data-paused="true"] {
+  animation-play-state: paused;
+}
+
+/* Lightweight continuous generated-clips marquee */
+@keyframes marquee-scroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.marquee-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: marquee-scroll 42s linear infinite;
+}
+
+.marquee-viewport:hover .marquee-track,
+[data-motion-paused="true"] .marquee-track {
+  animation-play-state: paused;
+}
+
+.marquee-group {
+  display: flex;
+  flex-shrink: 0;
+  gap: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 640px) {
+  .marquee-group {
+    gap: 1.25rem;
+    padding-right: 1.25rem;
+  }
+}
+
+/* Workflow 01-04 broadcast schematic animations */
+@keyframes wf-progress {
+  0% {
+    transform: scaleX(0.14);
+    opacity: 0.85;
+  }
+  72% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  88% {
+    transform: scaleX(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scaleX(0.14);
+    opacity: 0.85;
+  }
+}
+
+.animate-wf-progress {
+  transform-origin: left center;
+  animation: wf-progress 4.6s cubic-bezier(0.35, 0.05, 0.25, 1) infinite;
+}
+
+@keyframes wf-extract {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.animate-wf-extract {
+  transform-origin: bottom center;
+  animation: wf-extract 1.2s ease-in-out infinite;
+}
+
+@keyframes wf-scan {
+  0% {
+    left: 4%;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    left: 96%;
+    opacity: 0;
+  }
+}
+
+.animate-wf-scan {
+  animation: wf-scan 4.8s linear infinite;
+}
+
+@keyframes wf-moment-pulse {
+  0%,
+  100% {
+    border-color: var(--wf-moment-idle-border);
+    background-color: var(--wf-moment-idle-bg);
+    color: var(--wf-moment-idle-ink);
+  }
+  35%,
+  55% {
+    border-color: var(--wf-moment-active-border);
+    background-color: var(--wf-moment-active-bg);
+    color: var(--wf-moment-active-ink);
+  }
+}
+
+.animate-wf-moment {
+  animation: wf-moment-pulse 4.8s ease-in-out infinite;
+}
+
+@keyframes wf-crop-pan {
+  0%,
+  100% {
+    transform: translateX(-16px);
+  }
+  50% {
+    transform: translateX(16px);
+  }
+}
+
+.animate-wf-crop {
+  animation: wf-crop-pan 4.6s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+@keyframes wf-caption-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+.animate-wf-caption {
+  animation: wf-caption-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes wf-meter-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.32);
+  }
+  35% {
+    transform: scaleY(0.92);
+  }
+  65% {
+    transform: scaleY(0.58);
+  }
+  85% {
+    transform: scaleY(0.78);
+  }
+}
+
+.animate-wf-meter {
+  transform-origin: bottom center;
+  animation: wf-meter-bounce 1.4s ease-in-out infinite;
+}
+
+/* Interactive coffee cup icon (animates on hover, focus-within, or dialog open) */
+@keyframes coffee-steam-rise {
+  0% {
+    opacity: 0.25;
+    transform: translateY(1.2px);
+  }
+  50% {
+    opacity: 0.95;
+    transform: translateY(-1.4px);
+  }
+  100% {
+    opacity: 0.25;
+    transform: translateY(-2.4px);
+  }
+}
+
+.coffee-icon {
+  overflow: visible;
+}
+
+.coffee-icon .coffee-mug {
+  transform-origin: 11px 17px;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.coffee-icon .coffee-fill {
+  opacity: 0.14;
+  transform-origin: 11px 18.2px;
+  transform: scaleY(0.5);
+  transition:
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 240ms ease;
+}
+
+.coffee-icon .coffee-steam {
+  opacity: 0.5;
+  transition: opacity 200ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.coffee-trigger:hover .coffee-icon .coffee-mug,
+.coffee-trigger:focus-within .coffee-icon .coffee-mug {
+  transform: translateY(-1px) rotate(-7deg);
+}
+
+.coffee-trigger:active .coffee-icon .coffee-mug {
+  transform: translateY(0.5px) rotate(-1deg) scale(0.96);
+}
+
+.coffee-trigger:hover .coffee-icon .coffee-fill,
+.coffee-trigger:focus-within .coffee-icon .coffee-fill {
+  opacity: 0.28;
+  transform: scaleY(1);
+}
+
+.coffee-icon[data-steaming="true"] .coffee-fill {
+  opacity: 0.24;
+  transform: scaleY(0.85);
+}
+
+.coffee-trigger:hover .coffee-icon .coffee-steam-1,
+.coffee-trigger:focus-within .coffee-icon .coffee-steam-1 {
+  animation: coffee-steam-rise 1.35s ease-in-out infinite 0ms;
+}
+
+.coffee-trigger:hover .coffee-icon .coffee-steam-2,
+.coffee-trigger:focus-within .coffee-icon .coffee-steam-2 {
+  animation: coffee-steam-rise 1.35s ease-in-out infinite 220ms;
+}
+
+.coffee-trigger:hover .coffee-icon .coffee-steam-3,
+.coffee-trigger:focus-within .coffee-icon .coffee-steam-3 {
+  animation: coffee-steam-rise 1.35s ease-in-out infinite 440ms;
+}
+
+.coffee-icon[data-steaming="true"] .coffee-steam-1 {
+  animation: coffee-steam-rise 1.2s ease-in-out 2 0ms;
+}
+
+.coffee-icon[data-steaming="true"] .coffee-steam-2 {
+  animation: coffee-steam-rise 1.2s ease-in-out 2 180ms;
+}
+
+.coffee-icon[data-steaming="true"] .coffee-steam-3 {
+  animation: coffee-steam-rise 1.2s ease-in-out 2 360ms;
+}
+
+/* Smooth CSS grid accordion for FAQ */
+.accordion-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.accordion-panel[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.accordion-panel > div {
+  overflow: hidden;
+}
+
+/* Scroll-triggered reveal */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.reveal[data-visible="true"] {
+  opacity: 1;
+  transform: translateY(0);
+  will-change: auto;
+}
+
+/* Respect reduced motion across the application */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .reveal,
+  .hero-stagger-1,
+  .hero-stagger-2,
+  .hero-stagger-3,
+  .hero-stagger-4,
+  .animate-clip-swap,
+  .animate-clip-swipe-in-up,
+  .animate-clip-swipe-out-up,
+  .animate-clip-swipe-in-down,
+  .animate-clip-swipe-out-down,
+  .animate-overlay-swap,
+  .animate-word-pop,
+  .animate-hook-card-in,
+  .animate-dialog-in,
+  .animate-face-track,
+  .animate-wf-progress,
+  .animate-wf-extract,
+  .animate-wf-scan,
+  .animate-wf-moment,
+  .animate-wf-crop,
+  .animate-wf-caption,
+  .animate-wf-meter,
+  .coffee-icon .coffee-mug,
+  .coffee-icon .coffee-fill,
+  .coffee-icon .coffee-steam {
+    opacity: 1 !important;
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .coffee-icon .coffee-fill {
+    opacity: 0.2 !important;
+  }
+
+  .animate-wf-scan {
+    left: 56% !important;
+  }
+
+  .animate-wf-progress {
+    transform: scaleX(0.74) !important;
+  }
+
+  .marquee-track {
+    animation: none !important;
+    transform: none !important;
+    width: 100%;
+    will-change: auto;
+  }
+
+  .marquee-group {
+    flex-wrap: wrap;
+    justify-content: center;
+    padding-right: 0;
+    padding-inline: 1rem;
+    max-width: 1200px;
+    margin-inline: auto;
+    width: 100%;
+  }
+
+  .marquee-group-duplicate,
+  .marquee-edge-fade,
+  .marquee-motion-control,
+  .marquee-preview {
+    display: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
