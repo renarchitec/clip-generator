@@ -1,3 +1,5 @@
+import {hookTemplates, parseHookTemplate} from "@/lib/hook-template"
+import {SplitChoice} from "@/components/split-choice"
 import {defaultSplit,sourceVideo,splitScreenRatioTopFraction,type PrimaryMediaSource} from '@/lib/split-screen'
 import {SplitScreenPanel} from '@/components/split-screen-panel'
 import {MediaSourcePicker,useSplitText} from '@/components/media-source-picker'
@@ -108,12 +110,13 @@ function Dashboard() {
   const [mode, setMode] = useState<"auto" | "manual">(draft?.mode ?? "auto")
   const [reframe, setReframe] = useState<Job["reframe"]>(draft?.reframe ?? "center_crop")
   const [captions, setCaptions] = useState(draft?.captions ?? true)
+  const [hookTemplate,setHookTemplate] = useState(parseHookTemplate(draft?.hookTemplate))
   const [hookBanner, setHookBanner] = useState(draft?.hookBanner ?? true)
   const [normalizeAudio, setNormalizeAudio] = useState(draft?.normalizeAudio ?? true)
   const st=useSplitText()
   const [primarySource,setPrimary]=useState<PrimaryMediaSource>(draft?.primarySource??{kind:'url',url:draft?.url??''})
   const [splitScreen,setSplit]=useState(draft?.splitScreen??defaultSplit)
-  const sourceSettings = {
+  const sourceSettings = { hookTemplate,
     primarySource: primarySource.kind === "url" ? null : primarySource,
     splitScreen: splitScreen.enabled ? splitScreen : null,
   }
@@ -240,6 +243,7 @@ function Dashboard() {
       form.setFieldValue("customMinutes", sourceLimit !== null && !SOURCE_PRESET_SECS.includes(sourceLimit) ? String(sourceLimit / 60) : "10")
     }
     setCaptions(job.captions)
+    setHookTemplate(parseHookTemplate(job.hookTemplate))
     setHookBanner(Boolean(job.hookBanner))
     setNormalizeAudio(job.normalizeAudio ?? true)
     setTwoSpeakers(job.aspectRatio === "9:16" && (job.twoSpeakers ?? false))
@@ -478,7 +482,7 @@ function Dashboard() {
       mode,
       reframe,
       captions,
-      hookBanner,
+      hookBanner, hookTemplate,
       normalizeAudio,
       twoSpeakers,
       facecam,
@@ -499,7 +503,7 @@ function Dashboard() {
       selectedCueStart,
       selectedCueEnd,
     })
-  }, [primarySource,splitScreen,formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, captionLanguage, transcriptSource, captionStyle, customHashtagsInput, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
+  }, [hookTemplate,primarySource,splitScreen,formValues.url, formValues.customMinutes, formValues.clipCount, formValues.duration, formValues.ranges, mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, maxSourceChoice, description, captionLanguage, transcriptSource, captionStyle, customHashtagsInput, reviewFirst, previewId, selectedCandidates, cueRanges, selectedCueStart, selectedCueEnd])
   const hasTerminalJob = jobs.data?.some((job) => ["done", "failed", "cancelled"].includes(job.status)) ?? false
   const activeJobs = jobs.data?.filter((job) => ["queued", "running"].includes(job.status)) ?? []
   const failedJobs = jobs.data?.filter((job) => job.status === "failed").slice(0, 2) ?? []
@@ -774,7 +778,7 @@ function Dashboard() {
                 onCaptionStyleChange={setCaptionStyle}
                 showSafeZone={showSafeZone && aspectRatio === "9:16"}
                 showHookPreview={showHookPreview && hookBanner}
-                hookPreviewText={effectiveHookPreviewText}
+                hookTemplate={hookTemplate} hookPreviewText={effectiveHookPreviewText}
                 frame={{ imageUrl: activeFrame.imageUrl, width: activeFrame.width, height: activeFrame.height, alt: t.frameImageAlt.replace("{time}", formatFrameTime(activeFrame.atSec)), caption: `${activeFrame.width}×${activeFrame.height} · ${formatFrameTime(activeFrame.atSec)}`, busy: framePreview.running, onImageError: () => framePreview.markImageBroken(activeFrame.id) }}
               />
             </> : <>
@@ -792,7 +796,7 @@ function Dashboard() {
                   onCaptionStyleChange={setCaptionStyle}
                   showSafeZone={showSafeZone && aspectRatio === "9:16"}
                   showHookPreview={showHookPreview && hookBanner}
-                  hookPreviewText={effectiveHookPreviewText}
+                  hookTemplate={hookTemplate} hookPreviewText={effectiveHookPreviewText}
                 />
               )}
             </>}
@@ -802,7 +806,7 @@ function Dashboard() {
         <div className="max-h-64 shrink-0 space-y-2 overflow-y-auto border-t p-4"><h3 className="text-sm font-medium">{st.source}</h3><MediaSourcePicker value={primarySource.kind==='url'?{kind:'url',url:formValues.url}:primarySource} onChange={src=>{setPrimary(src);form.setFieldValue('url',src.kind==='url'?src.url??'':src.mediaId?'media://'+src.mediaId:src.clipId?'clip://'+src.clipId:'')}}/></div>
       </section>
       <aside className="relative min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-start-2 lg:row-start-1 lg:flex lg:h-full lg:max-h-full lg:flex-col"><div className="shrink-0 border-b border-border px-4 py-3"><h3 className="font-display text-lg font-medium">{t.settings}</h3></div><div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4"><div className="relative space-y-4">
-          {aspectRatio==='9:16'&&<SplitScreenPanel value={splitScreen} summaries={preview.data?.brollSummaries} onChange={next=>{if(next.enabled){setFacecam(false);setTwoSpeakers(false)}setSplit(next)}}/>}
+          {aspectRatio==='9:16'&&<SplitScreenPanel targetDurationSec={formValues.duration} value={splitScreen} summaries={preview.data?.brollSummaries} onChange={next=>{if(next.enabled){setFacecam(false);setTwoSpeakers(false)}setSplit(next)}}/>}
           <Field><FieldLabel>{t.creationMode}</FieldLabel><div className="grid grid-cols-2 gap-1 rounded-md bg-secondary p-1" role="group" aria-label={t.creationMode}><button type="button" className={`inline-flex h-10 items-center justify-center rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${mode === "auto" ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-background/60"}`} aria-pressed={mode === "auto"} onClick={() => setMode("auto")}>{t.autoMode}</button><button type="button" className={`inline-flex h-10 items-center justify-center rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${mode === "manual" ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-background/60"}`} aria-pressed={mode === "manual"} onClick={() => setMode("manual")}>{t.manualMode}</button></div></Field>
           {mode === "auto" && <Field><FieldLabel htmlFor="source-duration-select">{t.videoDurationScan}</FieldLabel><Select value={maxSourceChoice} onValueChange={setMaxSourceChoice}><SelectTrigger id="source-duration-select" className="h-11 w-full rounded-md"><SelectValue /></SelectTrigger><SelectContent>{!isDemo && <SelectItem value="full">{t.fullVideo}</SelectItem>}<SelectItem value="600">{t.tenMinutes}</SelectItem><SelectItem value="1200">{t.twentyMinutes}</SelectItem><SelectItem value="1800">{t.thirtyMinutes}</SelectItem><SelectItem value="3600">{t.sixtyMinutes}</SelectItem><SelectItem value="5400">{t.ninetyMinutes}</SelectItem><SelectItem value="7200">{t.twoHours}</SelectItem><SelectItem value="custom">{t.customDuration}</SelectItem></SelectContent></Select><FieldDescription>{isDemo ? t.demoScanHint : t.scanDurationHint}</FieldDescription>{maxSourceChoice === "custom" && <Field className="mt-3"><FieldLabel htmlFor="custom-source-minutes">{t.customMinutesLabel}</FieldLabel><Input id="custom-source-minutes" type="number" min={1} max={maxCustomMinutes} step={1} inputMode="numeric" value={formValues.customMinutes} aria-invalid={!validCustomMinutes} onChange={(event) => form.setFieldValue("customMinutes", event.target.value)} required className="h-11 rounded-md tabular-nums" />{!validCustomMinutes && <FieldDescription className="text-destructive">{isDemo ? t.demoScanHint : t.customMinutesInvalid}</FieldDescription>}</Field>}</Field>}
           <Field>
@@ -968,7 +972,8 @@ function Dashboard() {
                       />
                     </label>
                     {key === "hook-banner" && hookBanner && (
-                      <div className="relative mb-3 space-y-1.5 rounded-lg border border-border/70 bg-secondary/30 p-2.5">
+                      <div className="relative mb-3 space-y-2 rounded-lg border border-border/70 bg-secondary/30 p-2.5">
+                        <fieldset><legend className="mb-1 text-xs font-medium">{st.hookStyle}</legend><div className="grid grid-cols-2 gap-1 sm:grid-cols-3">{hookTemplates.map(key => <SplitChoice key={key} selected={key===hookTemplate} onClick={()=>{setHookTemplate(key);setShowHookPreview(true)}}>{st[key]}</SplitChoice>)}</div></fieldset>
                         <div className="flex items-center justify-between gap-2">
                           <label htmlFor="hook-preview-text" className="text-[11px] font-medium text-foreground">
                             {t.hookPreviewInputLabel}

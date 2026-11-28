@@ -573,7 +573,11 @@ impl Pipeline {
                     if split_screen::extract_split_cover_frame(
                         &self.config.tools.ffmpeg,
                         (&video, moment.start),
-                        (&clip.path, segment.source_start_sec.unwrap_or(0.)),
+                        (
+                            &clip.path,
+                            segment.source_start_sec.unwrap_or(0.),
+                            clip.is_image,
+                        ),
                         &split.config,
                         None,
                         dest,
@@ -1093,6 +1097,330 @@ impl Pipeline {
         self.download_source(url, dir, prefix, None, Duration::from_secs(900), cancel)
             .await
             .map(|path| (path, false))
+    }
+
+    pub(crate) async fn download_broll_image(
+        &self,
+        url: &str,
+        dir: &Path,
+        prefix: &str,
+        cancel: &CancellationToken,
+    ) -> Result<PathBuf> {
+        validate_url(url)?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()?;
+        let resp = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => bail!("job cancelled"),
+            r = client.get(url).send() => r.map_err(|e| anyhow!("{}", e.without_url()))?,
+        };
+        if !resp.status().is_success() {
+            bail!("Gagal mengunduh gambar B-roll (HTTP {})", resp.status());
+        }
+        let bytes = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => bail!("job cancelled"),
+            b = resp.bytes() => b.map_err(|e| anyhow!("{}", e.without_url()))?,
+        };
+        if bytes.is_empty() || bytes.len() > 15 * 1024 * 1024 {
+            bail!("Ukuran gambar B-roll tidak valid (maksimal 15 MB)");
+        }
+        let ext = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+            "png"
+        } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            "webp"
+        } else {
+            "jpg"
+        };
+        let path = dir.join(format!("{prefix}.{ext}"));
+        fs::write(&path, &bytes)?;
+        Ok(path)
+    }
+
+    pub async fn run_generate_image(
+        &self,
+        request: &GenerateImageRequest,
+        cancel: &CancellationToken,
+    ) -> Result<GenerateImageResult> {
+        check_cancel(cancel)?;
+        let llm = self
+            .llm
+            .as_ref()
+            .ok_or_else(|| anyhow!("LLM belum dikonfigurasi"))?;
+        let normalized = request.out_path.replace('\\', "/");
+        let relative = relative_output(&normalized)?;
+        fs::create_dir_all(&self.config.clips_dir)?;
+        let root = self.config.clips_dir.canonicalize()?;
+        let dest = destination_in(&root, &relative)?;
+        let (bytes, mime_type) = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => bail!("job cancelled"),
+            res = llm.generate_image(&request.prompt, request.aspect_ratio.as_deref()) => res?,
+        };
+        let decoded = image::load_from_memory(&bytes)
+            .context("Gambar AI tidak dapat dibaca")?;
+        let width = decoded.width();
+        let height = decoded.height();
+        let ext = if mime_type == "image/png" {
+            ".png"
+        } else if mime_type == "image/webp" {
+            ".webp"
+        } else {
+            ".jpg"
+        };
+        let tmp = tempfile::Builder::new()
+            .suffix(ext)
+            .tempfile_in(dest.parent().unwrap())?;
+        fs::write(tmp.path(), &bytes)?;
+        let size_bytes = bytes.len() as u64;
+        tmp.persist(&dest)?;
+        Ok(GenerateImageResult {
+            file: relative.to_string_lossy().replace('\\', "/"),
+            mime_type,
+            width,
+            height,
+            size_bytes,
+        })
+    }
+
+    pub async fn run_capture_frame(
+        &self,
+        request: &CaptureFrameRequest,
+        cancel: &CancellationToken,
+    ) -> Result<CaptureFrameResult> {
+        check_cancel(cancel)?;
+        if !request.at_sec.is_finite() || request.at_sec < 0. {
+            bail!("Timestamp frame tidak valid");
+        }
+        let normalized = request.out_path.replace('\\', "/");
+        let relative = relative_output(&normalized)?;
+        fs::create_dir_all(&self.config.clips_dir)?;
+        let root = self.config.clips_dir.canonicalize()?;
+        let dest = destination_in(&root, &relative)?;
+        let dir = self.workdir("capture-")?;
+        let (source, offset) = if request.kind == MediaSourceKind::Url {
+            let url = request
+                .url
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("URL video wajib diisi"))?;
+            let off = (request.at_sec - 1.).max(0.);
+            let path = match self
+                .section(
+                    url,
+                    dir.path(),
+                    "capture-src",
+                    (off, request.at_sec + 3.),
+                    Duration::from_secs(120),
+                    cancel,
+                )
+                .await
+            {
+                Ok(p) => (p, off),
+                Err(_) => {
+                    let p = self
+                        .download_source(
+                            url,
+                            dir.path(),
+                            "capture-src",
+                            None,
+                            Duration::from_secs(300),
+                            cancel,
+                        )
+                        .await?;
+                    (p, 0.)
+                }
+            };
+            path
+        } else {
+            let rel = request
+                .file_path
+                .as_deref()
+                .ok_or_else(|| anyhow!("filePath lokal wajib diisi"))?;
+            (
+                split_screen::resolve_local_media_path(&self.config.clips_dir, rel)?,
+                0.,
+            )
+        };
+        let info = tools::probe_media_cancel(&self.config.tools.ffprobe, &source, cancel).await?;
+        let seek = (request.at_sec - offset)
+            .max(0.)
+            .min((info.duration - 1. / info.fps.max(1.)).max(0.));
+        let is_png = dest
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+        let tmp = tempfile::Builder::new()
+            .suffix(if is_png { ".png" } else { ".jpg" })
+            .tempfile_in(dest.parent().unwrap())?;
+        let mut cmd = tools::ffmpeg(&self.config.tools.ffmpeg);
+        cmd.args(["-ss", &format!("{seek:.6}"), "-i"])
+            .arg(&source)
+            .args(["-map", "0:v:0", "-frames:v", "1", "-update", "1"]);
+        if !is_png {
+            cmd.args(["-q:v", "2"]);
+        }
+        tools::run(cmd.arg(tmp.path()), Duration::from_secs(30), cancel).await?;
+        let meta = fs::metadata(tmp.path())?;
+        if meta.len() == 0 {
+            bail!("Gagal mengekstrak frame dari video");
+        }
+        let (width, height) = image::image_dimensions(tmp.path())
+            .context("Frame hasil ekstrak tidak valid")?;
+        let size_bytes = meta.len();
+        tmp.persist(&dest)?;
+        Ok(CaptureFrameResult {
+            file: relative.to_string_lossy().replace('\\', "/"),
+            mime_type: if is_png {
+                "image/png".into()
+            } else {
+                "image/jpeg".into()
+            },
+            width,
+            height,
+            size_bytes,
+        })
+    }
+
+    pub async fn run_find_moment(
+        &self,
+        request: &FindMomentRequest,
+        cancel: &CancellationToken,
+    ) -> Result<FindMomentResult> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        check_cancel(cancel)?;
+        let llm = self
+            .llm
+            .as_ref()
+            .ok_or_else(|| anyhow!("LLM belum dikonfigurasi"))?;
+        let prompt = request.prompt.trim();
+        if prompt.is_empty() {
+            bail!("Prompt pencarian momen wajib diisi");
+        }
+        let target = request
+            .target_duration_sec
+            .filter(|v| v.is_finite() && *v >= 2.)
+            .unwrap_or(15.0);
+        let dir = self.workdir("find-moment-")?;
+        let local_path = if request.kind == MediaSourceKind::Url {
+            let url = request
+                .url
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("URL video wajib diisi"))?;
+            validate_url(url)?;
+            // Fast path: try YouTube/platform subtitles first without downloading the video.
+            let meta_dur = self
+                .video_metadata(url, cancel)
+                .await
+                .ok()
+                .and_then(|m| number(&m["duration"]));
+            if let Ok(cues) = self.fetch_cues(url, dir.path(), cancel).await {
+                if !cues.is_empty() {
+                    let total = meta_dur
+                        .filter(|d| *d > 0.)
+                        .or_else(|| cues.last().map(|c| c.end))
+                        .unwrap_or(0.);
+                    if total > 0. {
+                        let res = tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => bail!("job cancelled"),
+                            r = llm.find_moment_from_transcript(&cues, prompt, target, total) => r,
+                        };
+                        if let Ok(found) = res {
+                            return Ok(found);
+                        }
+                    }
+                }
+            }
+            check_cancel(cancel)?;
+            self.download_source(
+                url,
+                dir.path(),
+                "moment-src",
+                None,
+                Duration::from_secs(600),
+                cancel,
+            )
+            .await?
+        } else {
+            let rel = request
+                .file_path
+                .as_deref()
+                .ok_or_else(|| anyhow!("filePath lokal wajib diisi"))?;
+            split_screen::resolve_local_media_path(&self.config.clips_dir, rel)?
+        };
+        let info = tools::probe_media_cancel(&self.config.tools.ffprobe, &local_path, cancel).await?;
+        if !info.duration.is_finite() || info.duration <= 0. {
+            bail!("Durasi video tidak valid");
+        }
+        // Try local audio transcription first if available.
+        if info.has_audio && self.transcriber().is_ok() {
+            if let Ok(cues) = self
+                .local_cues(
+                    &local_path,
+                    info,
+                    Some((0., info.duration.min(1800.))),
+                    "auto",
+                    dir.path(),
+                    cancel,
+                )
+                .await
+            {
+                if !cues.is_empty() {
+                    let res = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => bail!("job cancelled"),
+                        r = llm.find_moment_from_transcript(&cues, prompt, target, info.duration) => r,
+                    };
+                    if let Ok(found) = res {
+                        return Ok(found);
+                    }
+                }
+            }
+        }
+        check_cancel(cancel)?;
+        // Fallback: sample visual frames across the video and ask the vision model.
+        let sample_count = if info.duration < 10. { 5 } else { 10 };
+        let mut frames = Vec::with_capacity(sample_count);
+        for i in 0..sample_count {
+            check_cancel(cancel)?;
+            let frac = (i as f64 + 0.5) / sample_count as f64;
+            let ts = (info.duration * frac).clamp(0., (info.duration - 0.1).max(0.));
+            if let Ok(out) = tools::run(
+                tools::ffmpeg(&self.config.tools.ffmpeg)
+                    .args(["-ss", &format!("{ts:.3}"), "-i"])
+                    .arg(&local_path)
+                    .args([
+                        "-map",
+                        "0:v:0",
+                        "-vf",
+                        "scale='min(512,iw)':-2",
+                        "-frames:v",
+                        "1",
+                        "-c:v",
+                        "mjpeg",
+                        "-q:v",
+                        "5",
+                        "-f",
+                        "image2pipe",
+                        "pipe:1",
+                    ]),
+                Duration::from_secs(20),
+                cancel,
+            )
+            .await
+            {
+                if !out.stdout.is_empty() {
+                    frames.push((ts, BASE64.encode(&out.stdout)));
+                }
+            }
+        }
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => bail!("job cancelled"),
+            r = llm.find_moment_from_frames(&frames, prompt, target, info.duration) => r,
+        }
     }
 
     fn ytdlp(&self) -> Command {
@@ -1668,7 +1996,7 @@ impl Pipeline {
                 split_screen::extract_split_cover_frame(
                     &self.config.tools.ffmpeg,
                     (&source, seek),
-                    (&first.path, 0.),
+                    (&first.path, 0., first.is_image),
                     &split.config,
                     subtitle.as_deref(),
                     tmp.path(),
@@ -1744,6 +2072,7 @@ impl Pipeline {
         moment: &Moment,
         clip: &Path,
         pre_reframed_cover: Option<&Path>,
+        template: HookTemplate,
         cancel: &CancellationToken,
     ) -> Result<()> {
         let Some(text) = moment
@@ -1787,13 +2116,14 @@ impl Pipeline {
             } else {
                 None
             };
-            hook_thumbnail::render_hook_thumbnail(
+            hook_thumbnail::render_hook_thumbnail_with_template(
                 &cover,
                 &text,
                 meta.width,
                 meta.height,
                 focus,
                 fonts,
+                template,
                 &thumb2,
             )?;
             Ok::<_, anyhow::Error>(dir)
@@ -2259,7 +2589,7 @@ impl Pipeline {
             }
             if let Some(cover) = cover_path {
                 let _ = self
-                    .add_hook(video, &window, &clip, Some(&cover), cancel)
+                    .add_hook(video, &window, &clip, Some(&cover), job.hook_template, cancel)
                     .await;
                 let _ = fs::remove_file(cover);
                 check_cancel(cancel)?;

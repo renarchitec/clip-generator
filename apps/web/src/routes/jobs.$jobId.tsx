@@ -267,7 +267,7 @@ function JobDetail() {
                       ...(snapshot.twoSpeakers ? [{ key: "two-speakers", icon: Users, label: t.twoSpeakers, hint: t.twoSpeakersHint }] : []),
                       ...(snapshot.facecam ? [{ key: "facecam", icon: Video, label: t.facecam, hint: t.facecamHint }] : []),
                       ...(snapshot.captions ? [{ key: "burn-captions", icon: Captions, label: t.burnCaptions, hint: t.burnCaptionsHint }] : []),
-                      ...(snapshot.hookBanner ? [{ key: "hook-banner", icon: PanelTop, label: t.hookBannerSummary, hint: t.hookBannerHint }] : []),
+                      ...(snapshot.hookBanner ? [{ key: "hook-banner", icon: PanelTop, label: `${t.hookBannerSummary} · ${st[snapshot.hookTemplate ?? "editorial"]}`, hint: t.hookBannerHint }] : []),
                       ...(snapshot.normalizeAudio ? [{ key: "normalize-audio", icon: AudioLines, label: t.normalizeAudioSummary, hint: t.normalizeAudioHint }] : []),
                     ].map(({ key, icon: Icon, label, hint }) => (
                       <div key={key} className="flex min-h-12 items-center gap-3 py-2.5">

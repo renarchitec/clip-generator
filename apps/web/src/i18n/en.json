@@ -45,5 +45,20 @@
   "even": "Distribute evenly",
   "select": "Choose video",
   "on": "On",
-  "off": "Off"
+  "off": "Off",
+  "hookStyle": "Hook style",
+  "editorial": "Editorial",
+  "bold_box": "Bold box",
+  "paper_cut": "Paper cut",
+  "neon_pulse": "Neon pulse",
+  "breaking": "Breaking",
+  "comic_pop": "Comic pop",
+  "capture": "Capture frame",
+  "generate": "Generate image",
+  "moment": "Find moment",
+  "imagePrompt": "Describe the image",
+  "momentPrompt": "Describe the moment",
+  "seconds": "Time (seconds)",
+  "image": "Image",
+  "working": "Working…"
 }

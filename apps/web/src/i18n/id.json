@@ -45,5 +45,20 @@
   "even": "Bagi rata",
   "select": "Pilih video",
   "on": "Aktif",
-  "off": "Nonaktif"
+  "off": "Nonaktif",
+  "hookStyle": "Gaya judul",
+  "editorial": "Editorial",
+  "bold_box": "Kotak tebal",
+  "paper_cut": "Potongan kertas",
+  "neon_pulse": "Neon",
+  "breaking": "Berita",
+  "comic_pop": "Komik",
+  "capture": "Ambil gambar",
+  "generate": "Buat gambar",
+  "moment": "Cari momen",
+  "imagePrompt": "Jelaskan gambar",
+  "momentPrompt": "Jelaskan momen",
+  "seconds": "Waktu (detik)",
+  "image": "Gambar",
+  "working": "Memproses…"
 }

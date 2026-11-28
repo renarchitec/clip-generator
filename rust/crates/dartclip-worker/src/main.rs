@@ -13,7 +13,10 @@ use ab_glyph::FontRef;
 use anyhow::{anyhow, bail, Context, Result};
 use dartclip_core::{
     llm::{LlmClient, LlmConfig},
-    models::{CaptionRequest, FrameRequest, JobData, PreviewRequest},
+    models::{
+        CaptionRequest, CaptureFrameRequest, FindMomentRequest, FrameRequest, GenerateImageRequest,
+        JobData, PreviewRequest,
+    },
     pipeline::{CancellationToken, Pipeline, PipelineConfig},
     stt::SttConfig,
     tools::ToolPaths,
@@ -22,7 +25,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 const USAGE: &str =
-    "dartclip-worker --task <job|preview|frame|caption|brief|llm-check|self-check> \
+    "dartclip-worker --task <job|preview|frame|caption|brief|generate-image|find-moment|capture-frame|llm-check|self-check> \
     [--payload-file <path> | --payload-stdin] [--clips-dir <path>] [--fonts-dir <path>] \
     [--cancel-file <path>]";
 const MONTSERRAT: &[u8] = include_bytes!("../../dartclip-core/assets/Montserrat-Bold.ttf");
@@ -34,6 +37,9 @@ enum Task {
     Frame,
     Caption,
     Brief,
+    GenerateImage,
+    FindMoment,
+    CaptureFrame,
     LlmCheck,
     SelfCheck,
 }
@@ -46,6 +52,9 @@ impl Task {
             "frame" => Self::Frame,
             "caption" => Self::Caption,
             "brief" => Self::Brief,
+            "generate-image" => Self::GenerateImage,
+            "find-moment" => Self::FindMoment,
+            "capture-frame" => Self::CaptureFrame,
             "llm-check" => Self::LlmCheck,
             "self-check" => Self::SelfCheck,
             _ => bail!("Task tidak dikenal: {task}"),
@@ -302,6 +311,33 @@ async fn run(args: &Args, cancel: &CancellationToken, llm: Option<&LlmClient>) -
                 _ = cancel.cancelled() => bail!("job dibatalkan"),
                 result = llm.expand_brief(brief) => json!({"brief": result?}),
             }
+        }
+        Task::GenerateImage => {
+            let request: GenerateImageRequest = serde_json::from_value(payload)
+                .map_err(|_| anyhow!("invalid_generate_image_payload"))?;
+            json!(
+                args.pipeline(llm.clone())?
+                    .run_generate_image(&request, cancel)
+                    .await?
+            )
+        }
+        Task::FindMoment => {
+            let request: FindMomentRequest = serde_json::from_value(payload)
+                .map_err(|_| anyhow!("invalid_find_moment_payload"))?;
+            json!(
+                args.pipeline(llm.clone())?
+                    .run_find_moment(&request, cancel)
+                    .await?
+            )
+        }
+        Task::CaptureFrame => {
+            let request: CaptureFrameRequest = serde_json::from_value(payload)
+                .map_err(|_| anyhow!("invalid_capture_frame_payload"))?;
+            json!(
+                args.pipeline(llm.clone())?
+                    .run_capture_frame(&request, cancel)
+                    .await?
+            )
         }
         Task::LlmCheck => {
             let ok = tokio::select! { biased;

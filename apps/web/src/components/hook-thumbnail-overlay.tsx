@@ -3,6 +3,7 @@ import type { AspectRatio } from "@/lib/api"
 import { useT } from "@/lib/i18n"
 
 type Props = {
+  template?: import("@/lib/hook-template").HookTemplate
   aspectRatio: AspectRatio
   text: string
   frameWidthPx: number
@@ -183,9 +184,13 @@ function layoutHookHeadline(rawText: string, spec: AspectSpec): { lines: string[
   return { lines, fontSizeRef: size }
 }
 
-export function HookThumbnailOverlay({ aspectRatio, text, frameWidthPx, frameHeightPx, hasFrame = true }: Props) {
+export function HookThumbnailOverlay({ template="editorial", aspectRatio, text, frameWidthPx, frameHeightPx, hasFrame = true }: Props) {
   const t = useT()
-  const spec = ASPECT_SPECS[aspectRatio]
+  const spec = useMemo(() => {
+    const base = ASPECT_SPECS[aspectRatio]
+    const [width,size] = { editorial:[1,1], bold_box:[.90,1.12], paper_cut:[.84,.88], neon_pulse:[.88,1.22], breaking:[.86,1.02], comic_pop:[.94,1.18] }[template]
+    return {...base, maxTextWidthPct:base.maxTextWidthPct*width, startFontRef:Math.round(base.startFontRef*size), minFontRef:48}
+  }, [aspectRatio,template])
 
   const { lines, fontSizeRef } = useMemo(() => layoutHookHeadline(text, spec), [text, spec])
 
@@ -222,6 +227,7 @@ export function HookThumbnailOverlay({ aspectRatio, text, frameWidthPx, frameHei
 
   return (
     <div
+      data-hook-style={template}
       data-testid="hook-thumbnail-overlay"
       aria-hidden="true"
       className={`pointer-events-none absolute inset-0 z-[12] select-none overflow-hidden ${hasFrame ? "" : "bg-zinc-950/60"}`}
@@ -244,7 +250,7 @@ export function HookThumbnailOverlay({ aspectRatio, text, frameWidthPx, frameHei
           style={{ top: "50%", transform: "translateY(-50%)" }}
         >
           <div
-            className="rounded-full bg-[#FACC15]"
+            className="hook-rule rounded-full bg-[#FACC15]"
             style={{
               width: "10.5%",
               height: pillHeightPx,
@@ -253,10 +259,10 @@ export function HookThumbnailOverlay({ aspectRatio, text, frameWidthPx, frameHei
             }}
           />
           <div
-            className="flex flex-col items-center"
+            className="hook-headline flex flex-col items-center"
             style={{
               maxWidth: `${spec.maxTextWidthPct}%`,
-              fontFamily: HEADLINE_FONT_FAMILY,
+              fontFamily: { editorial:HEADLINE_FONT_FAMILY,bold_box:"Anton",paper_cut:"Plus Jakarta Sans",neon_pulse:"Bebas Neue",breaking:"Oswald",comic_pop:"Bangers" }[template],
               fontWeight: 800,
               fontSize: fontSizePx,
               lineHeight: 1.13,
@@ -264,7 +270,7 @@ export function HookThumbnailOverlay({ aspectRatio, text, frameWidthPx, frameHei
               letterSpacing: "-0.01em",
             }}
           >
-            {singleLineSplit ? (
+            {singleLineSplit && template==="editorial" ? (
               <span className="block whitespace-nowrap">
                 <span style={{ color: "#FFFFFF", ...textStyle }}>{singleLineSplit.first}</span>
                 <span> </span>

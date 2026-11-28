@@ -1,3 +1,4 @@
+import { HOOK_TEMPLATES, type HookTemplate } from '@clipper/shared';
 import { MediaSourcesDto, SplitScreenSegmentDto } from '../../media/media.dto';
 import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -146,6 +147,10 @@ export class CreateJobDto extends MediaSourcesDto {
   @IsOptional()
   @IsBoolean()
   hookBanner?: boolean;
+
+  @IsOptional()
+  @IsIn(HOOK_TEMPLATES)
+  hookTemplate?: HookTemplate;
 
   @IsOptional()
   @IsBoolean()

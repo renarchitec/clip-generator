@@ -1,3 +1,4 @@
+import { normalizeHookTemplate } from '@clipper/shared';
 import {
   BadRequestException,
   Injectable,
@@ -134,6 +135,7 @@ export class JobsService {
         maxSourceSec,
         facecam,
         hookBanner,
+      hookTemplate: normalizeHookTemplate(dto.hookTemplate),
         normalizeAudio,
         captionLanguage,
         transcriptSource,
@@ -206,6 +208,7 @@ export class JobsService {
       watermarks,
       outro,
       hookBanner,
+      hookTemplate: normalizeHookTemplate(dto.hookTemplate),
       normalizeAudio,
     };
 
@@ -351,6 +354,7 @@ export class JobsService {
     dto.reframe = old.reframe as ReframeMode;
     dto.captions = old.captions;
     dto.hookBanner = old.hookBanner;
+    dto.hookTemplate = normalizeHookTemplate(old.hookTemplate);
     dto.normalizeAudio = old.normalizeAudio;
     dto.twoSpeakers = old.twoSpeakers;
     dto.facecam = old.facecam;
@@ -467,6 +471,7 @@ function toSnapshot(job: JobWithClips | JobWithClipSummaries): JobSnapshot {
     reframe: job.reframe,
     captions: job.captions,
     hookBanner: job.hookBanner,
+      hookTemplate: normalizeHookTemplate(job.hookTemplate),
     normalizeAudio: job.normalizeAudio,
     twoSpeakers: job.twoSpeakers,
     facecam: job.facecam,

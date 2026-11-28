@@ -24,8 +24,10 @@ export function useSplitText() {
 }
 export function MediaSourcePicker({
   value,
+  allowImages = false,
   onChange,
 }: {
+  allowImages?: boolean
   value: PrimaryMediaSource
   onChange: (source: PrimaryMediaSource) => void
 }) {
@@ -50,6 +52,7 @@ export function MediaSourcePicker({
       void client.invalidateQueries({ queryKey: ["media"] })
       onChange({
         kind: "upload",
+        mediaType: m.mimeType.startsWith("image/") ? "image" : "video",
         mediaId: m.id,
         label: m.name,
         durationSec: m.durationSec,
@@ -65,8 +68,9 @@ export function MediaSourcePicker({
   })
   const items =
     value.kind === "upload"
-      ? (media.data ?? []).map((m) => ({
+      ? (media.data ?? []).filter(m => allowImages || !m.mimeType.startsWith("image/")).map((m) => ({
           id: m.id,
+          image: m.mimeType.startsWith("image/"),
           title: m.name,
           seconds: m.durationSec,
           size: `${m.width}×${m.height}`,
@@ -75,6 +79,7 @@ export function MediaSourcePicker({
           .filter((c) => c.title.toLowerCase().includes(search.toLowerCase()))
           .map((c) => ({
             id: c.id,
+            image: false,
             title: c.title,
             seconds: c.endSec - c.startSec,
             size: "",
@@ -117,11 +122,11 @@ export function MediaSourcePicker({
               <Input
                 disabled={upload.isPending}
                 type="file"
-                accept=".mp4,.mov,.webm"
+                accept={allowImages ? ".mp4,.mov,.webm,.png,.jpg,.jpeg,.webp" : ".mp4,.mov,.webm"}
                 onChange={(e) => {
                   const f = e.target.files?.[0]
                   e.target.value = ""
-                  if (f) {
+                  if (f && (allowImages || !f.type.startsWith("image/"))) {
                     setLarge(f.size > MEDIA_UPLOAD_MAX_BYTES)
                     if (f.size <= MEDIA_UPLOAD_MAX_BYTES) {
                       setPct(0)
@@ -153,7 +158,7 @@ export function MediaSourcePicker({
                     onChange({
                       kind: value.kind,
                       ...(value.kind === "upload"
-                        ? { mediaId: m.id }
+                        ? { mediaId: m.id, mediaType: m.image ? "image" : "video" }
                         : { clipId: m.id }),
                       label: m.title,
                       durationSec: m.seconds,
@@ -162,7 +167,7 @@ export function MediaSourcePicker({
                 >
                   <span className="truncate">{m.title}</span>
                   <Badge variant="secondary">
-                    {Math.round(m.seconds)}s {m.size}
+                    {m.image ? t.image : `${Math.round(m.seconds)}s`} {m.size}
                   </Badge>
                 </SplitChoice>
                 {value.kind === "upload" && (

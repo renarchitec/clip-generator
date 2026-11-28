@@ -1,10 +1,73 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsNotEmpty, IsNumber, IsObject,
-  IsOptional, IsString, IsUrl, Min, ValidateIf, ValidateNested,
+  IsOptional, IsString, IsUrl, Max, MaxLength, Min, ValidateIf, ValidateNested,
 } from 'class-validator';
-import { MEDIA_SOURCE_KINDS, SPLIT_MATCH_MODES, SPLIT_PANEL_FITS, SPLIT_SCREEN_MAX_CLIPS, SPLIT_SCREEN_RATIOS } from '@clipper/shared';
-import type { MediaSourceKind, SplitMatchMode, SplitPanelFit, SplitScreenRatio, SplitScreenSegment } from '@clipper/shared';
+import { MEDIA_SOURCE_KINDS, MEDIA_TYPES, MEDIA_UPLOAD_MAX_DURATION_SEC, SPLIT_MATCH_MODES, SPLIT_PANEL_FITS, SPLIT_SCREEN_MAX_CLIPS, SPLIT_SCREEN_RATIOS } from '@clipper/shared';
+import type { GenerateImageJobData, MediaSourceKind, MediaType, SplitMatchMode, SplitPanelFit, SplitScreenRatio, SplitScreenSegment } from '@clipper/shared';
+
+const trim = ({ value }: { value: unknown }) => typeof value === 'string' ? value.trim() : value;
+const imageAspectRatios = ['1:1', '16:9', '4:3'] as const;
+const promptMaxLength = 2000;
+
+export class MediaActionSourceDto {
+  @IsIn(MEDIA_SOURCE_KINDS)
+  kind: MediaSourceKind;
+
+  @ValidateIf((source: MediaActionSourceDto) => source.kind === 'url' || source.url !== undefined)
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2048)
+  url?: string;
+
+  @ValidateIf((source: MediaActionSourceDto) => source.kind === 'upload' || source.mediaId !== undefined)
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  mediaId?: string;
+
+  @ValidateIf((source: MediaActionSourceDto) => source.kind === 'clip' || source.clipId !== undefined)
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  clipId?: string;
+}
+
+export class CaptureMediaFrameDto extends MediaActionSourceDto {
+  @IsNumber()
+  @Min(0)
+  @Max(MEDIA_UPLOAD_MAX_DURATION_SEC)
+  atSec: number;
+}
+
+export class FindMediaMomentDto extends MediaActionSourceDto {
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(promptMaxLength)
+  prompt: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(2)
+  @Max(MEDIA_UPLOAD_MAX_DURATION_SEC)
+  targetDurationSec?: number;
+}
+
+export class GenerateMediaImageDto {
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(promptMaxLength)
+  prompt: string;
+
+  @IsOptional()
+  @IsIn(imageAspectRatios)
+  aspectRatio?: GenerateImageJobData['aspectRatio'];
+}
 
 export class PrimaryMediaSourceDto {
   @IsIn(MEDIA_SOURCE_KINDS)
@@ -30,6 +93,16 @@ export class PrimaryMediaSourceDto {
 }
 
 export class SplitScreenClipDto extends PrimaryMediaSourceDto {
+  @IsOptional()
+  @IsIn(MEDIA_TYPES)
+  mediaType?: MediaType;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(promptMaxLength)
+  momentPrompt?: string | null;
+
   @IsOptional()
   @IsString()
   id?: string;

@@ -14,6 +14,7 @@ export interface JobSnapshot {
   reframe: string;
   captions: boolean;
   hookBanner: boolean;
+  hookTemplate?: import('@clipper/shared').HookTemplate;
   normalizeAudio: boolean;
   twoSpeakers: boolean;
   facecam: boolean;

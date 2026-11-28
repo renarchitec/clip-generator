@@ -1,3 +1,4 @@
+import { BrollTools } from "./broll-tools"
 import { SplitChoice } from "./split-choice"
 import { useState } from "react"
 import { Button } from "./ui/button"
@@ -39,15 +40,17 @@ function Options<K extends string>({
 export function SplitScreenPanel({
   value: v,
   onChange,
+  targetDurationSec,
   summaries,
 }: {
   value: SplitScreenConfig
   onChange: (v: SplitScreenConfig) => void
+  targetDurationSec:number
   summaries?: Record<string, string> | null
 }) {
   const t = useSplitText(),
     [adding, setAdding] = useState(false),
-    [source, setSource] = useState<PrimaryMediaSource>({ kind: "url" })
+    [source, setSource] = useState<PrimaryMediaSource & Pick<SplitScreenClipSource,"startSec"|"endSec">>({ kind: "url" })
   const patch = (p: Partial<SplitScreenConfig>) => onChange({ ...v, ...p }),
     clips = v.clips
   const update = (id: string, p: Partial<SplitScreenClipSource>) =>
@@ -92,7 +95,9 @@ export function SplitScreenPanel({
           </div>
           {adding && clips.length < 10 && (
             <div className="space-y-2 rounded-md border p-2">
-              <MediaSourcePicker value={source} onChange={setSource} />
+              <MediaSourcePicker allowImages value={source} onChange={setSource} />
+              <BrollTools source={source} duration={targetDurationSec} select={setSource}/>
+              {source.startSec != null && <p className="text-xs tabular-nums">{source.startSec}s – {source.endSec}s</p>}
               <Button
                 type="button"
                 size="sm"
@@ -168,7 +173,8 @@ export function SplitScreenPanel({
                   onChange={(e) => update(c.id, { label: e.target.value })}
                 />
               </label>
-              {c.kind === "url" && (
+              {c.mediaType === "image" && c.mediaId && <img className="h-16 max-w-full rounded object-contain" src={`/api/media/${encodeURIComponent(c.mediaId)}/file`} alt={c.label || t.image}/> }
+              {c.mediaType !== "image" && (
                 <div className="grid grid-cols-2 gap-2">
                   {(["startSec", "endSec"] as const).map((k) => (
                     <label key={k} className="text-xs">

@@ -17,6 +17,7 @@ export interface MediaAssetResponse {
 }
 
 export interface PrimaryMediaSource {
+  mediaType?: "image" | "video"
   kind: MediaSourceKind
   url?: string
   mediaId?: string
@@ -42,6 +43,7 @@ export const SPLIT_SCREEN_MAX_CLIPS = 10
 
 export interface SplitScreenClipSource {
   id: string
+  mediaType?: "image" | "video"
   kind: MediaSourceKind
   url?: string
   mediaId?: string

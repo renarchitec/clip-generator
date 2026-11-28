@@ -95,6 +95,7 @@ model Job {
   reframe           String    @default("center_crop")
   captions          Boolean   @default(true)
   hookBanner        Boolean   @default(false)
+  hookTemplate      String    @default("editorial")
   normalizeAudio    Boolean   @default(true)
   twoSpeakers       Boolean   @default(false)
   facecam           Boolean   @default(false)

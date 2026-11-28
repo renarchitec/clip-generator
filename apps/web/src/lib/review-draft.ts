@@ -1,6 +1,7 @@
 import type { AspectRatio, CaptionLanguage, MaxSourceSec, Reframe, TranscriptSource } from "@/lib/api"
 import type { CaptionStyle } from "@/lib/caption-style"
 
+import {parseHookTemplate} from "./hook-template.ts"
 export type ReviewDraft = import("./api").SourceSettings & {
   url: string
   mode: "auto" | "manual"
@@ -44,6 +45,7 @@ export function loadReviewDraft(): ReviewDraft | null {
     if (!["center_crop", "face_tracking", "blurred_fill", "black_bars"].includes(d.reframe)) return null
     return {
       ...d,
+      ...(d.hookTemplate ? {hookTemplate:parseHookTemplate(d.hookTemplate)} : {}),
       ...(typeof d.hookBanner === "boolean" ? { hookBanner: d.hookBanner } : {}),
       ...(typeof d.normalizeAudio === "boolean" ? { normalizeAudio: d.normalizeAudio } : {}),
       twoSpeakers: typeof d.twoSpeakers === "boolean" ? d.twoSpeakers : false,

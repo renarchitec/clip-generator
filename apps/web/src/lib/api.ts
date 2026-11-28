@@ -1,5 +1,5 @@
 import { MEDIA_UPLOAD_MAX_BYTES, type MediaAssetResponse, type PrimaryMediaSource, type SplitScreenConfig, type SplitScreenSegment } from "./split-screen"
-export type SourceSettings = { primarySource?: PrimaryMediaSource | null; splitScreen?: SplitScreenConfig | null }
+export type SourceSettings = { hookTemplate?: import("./hook-template").HookTemplate; primarySource?: PrimaryMediaSource | null; splitScreen?: SplitScreenConfig | null }
 import type { CaptionStyle } from "@/lib/caption-style"
 import type { JobWatermarkValue, WatermarkChromaKey } from "@/lib/watermark"
 

@@ -162,10 +162,35 @@ export function normalizeCaptionStyle(raw: unknown): CaptionStyle | null {
   return result;
 }
 
+export const HOOK_TEMPLATES = [
+  'editorial',
+  'bold_box',
+  'paper_cut',
+  'neon_pulse',
+  'breaking',
+  'comic_pop',
+] as const;
+export type HookTemplate = (typeof HOOK_TEMPLATES)[number];
+export const DEFAULT_HOOK_TEMPLATE: HookTemplate = 'editorial';
+
+export function normalizeHookTemplate(raw: unknown): HookTemplate {
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if ((HOOK_TEMPLATES as readonly string[]).includes(normalized)) {
+      return normalized as HookTemplate;
+    }
+  }
+  return DEFAULT_HOOK_TEMPLATE;
+}
+
 export const MEDIA_SOURCE_KINDS = ['url', 'upload', 'clip'] as const;
 export type MediaSourceKind = (typeof MEDIA_SOURCE_KINDS)[number];
 
+export const MEDIA_TYPES = ['video', 'image'] as const;
+export type MediaType = (typeof MEDIA_TYPES)[number];
+
 export const MEDIA_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+export const MEDIA_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
 export const MEDIA_UPLOAD_MAX_DURATION_SEC = 60 * 60;
 export const MEDIA_MAX_PER_USER = 50;
 
@@ -173,6 +198,7 @@ export interface MediaAssetResponse {
   id: string;
   name: string;
   mimeType: string;
+  mediaType?: MediaType;
   durationSec: number;
   width: number;
   height: number;
@@ -207,15 +233,64 @@ export const SPLIT_SCREEN_MAX_CLIPS = 10;
 export interface SplitScreenClipSource {
   id: string;
   kind: MediaSourceKind;
+  /** 'video' (default) atau 'image' untuk gambar di panel split screen. */
+  mediaType?: MediaType;
   url?: string;
   mediaId?: string;
   clipId?: string;
   filePath?: string;
   label: string;
   description?: string | null;
+  /** Prompt opsional untuk memilih momen spesifik dari video B-roll lewat AI. */
+  momentPrompt?: string | null;
   startSec?: number | null;
   endSec?: number | null;
   durationSec?: number | null;
+}
+
+export interface GenerateImageJobData {
+  prompt: string;
+  aspectRatio?: '1:1' | '16:9' | '4:3';
+  outPath: string;
+}
+
+export interface GenerateImageJobResult {
+  file: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+}
+
+export interface FindMomentJobData {
+  kind: MediaSourceKind;
+  url?: string;
+  filePath?: string;
+  prompt: string;
+  targetDurationSec?: number;
+}
+
+export interface FindMomentJobResult {
+  startSec: number;
+  endSec: number;
+  reason?: string;
+  durationSec?: number;
+}
+
+export interface CaptureFrameJobData {
+  kind: MediaSourceKind;
+  url?: string;
+  filePath?: string;
+  atSec: number;
+  outPath: string;
+}
+
+export interface CaptureFrameJobResult {
+  file: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
 }
 
 export interface SplitScreenSegment {
@@ -274,6 +349,7 @@ export interface JobData {
   /** apakah subtitle dibakar ke clip; default true */
   captions: boolean;
   hookBanner: boolean;
+  hookTemplate?: HookTemplate;
   normalizeAudio: boolean;
   /** tata letak dua pembicara (panel atas/bawah 1080x960 vstack); default false; hanya berlaku untuk 9:16 */
   twoSpeakers: boolean;

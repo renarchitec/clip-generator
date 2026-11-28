@@ -12,6 +12,45 @@ pub enum MediaSourceKind {
     Clip,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaType {
+    #[default]
+    Video,
+    Image,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookTemplate {
+    #[default]
+    Editorial,
+    BoldBox,
+    PaperCut,
+    NeonPulse,
+    Breaking,
+    ComicPop,
+}
+
+impl HookTemplate {
+    pub fn from_value(value: &Value) -> Self {
+        match value
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "bold_box" => Self::BoldBox,
+            "paper_cut" => Self::PaperCut,
+            "neon_pulse" => Self::NeonPulse,
+            "breaking" => Self::Breaking,
+            "comic_pop" => Self::ComicPop,
+            _ => Self::Editorial,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PrimaryMediaSource {
@@ -64,6 +103,7 @@ pub enum SplitMatchMode {
 pub struct SplitScreenClipSource {
     pub id: String,
     pub kind: MediaSourceKind,
+    pub media_type: MediaType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,11 +116,31 @@ pub struct SplitScreenClipSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub moment_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub start_sec: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_sec: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_sec: Option<f64>,
+}
+
+impl SplitScreenClipSource {
+    pub fn is_image(&self) -> bool {
+        if self.media_type == MediaType::Image {
+            return true;
+        }
+        self.file_path
+            .as_deref()
+            .is_some_and(is_image_filename)
+    }
+}
+
+pub fn is_image_filename(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -679,6 +739,7 @@ pub struct JobData {
     pub watermarks: Vec<Watermark>,
     pub outro: Option<Outro>,
     pub hook_banner: bool,
+    pub hook_template: HookTemplate,
     pub normalize_audio: bool,
 }
 impl Default for JobData {
@@ -706,6 +767,7 @@ impl Default for JobData {
             watermarks: vec![],
             outro: None,
             hook_banner: false,
+            hook_template: HookTemplate::default(),
             normalize_audio: true,
         }
     }
@@ -800,6 +862,7 @@ impl JobData {
             watermarks,
             outro: Outro::from_value(&v["outro"]),
             hook_banner: boolean(get(&["hookBanner", "hook_banner"]), false),
+            hook_template: HookTemplate::from_value(get(&["hookTemplate", "hook_template"])),
             normalize_audio: boolean(get(&["normalizeAudio", "normalize_audio"]), true),
         })
     }
@@ -1049,6 +1112,73 @@ pub struct CaptionResult {
     pub platform_captions: Option<PlatformCaptions>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateImageRequest {
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+    pub out_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateImageResult {
+    pub file: String,
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindMomentRequest {
+    #[serde(default)]
+    pub kind: MediaSourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_duration_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindMomentResult {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureFrameRequest {
+    #[serde(default)]
+    pub kind: MediaSourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    pub at_sec: f64,
+    pub out_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureFrameResult {
+    pub file: String,
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1155,6 +1285,7 @@ mod tests {
 #[cfg(test)]
 mod transcript_source_tests {
     use super::*;
+    use serde_json::json;
     #[test]
     fn payloads_accept_both_keys_default_and_serialize_camel_case() {
         for (key, value, expected) in [
@@ -1192,5 +1323,33 @@ mod transcript_source_tests {
             serde_json::to_value(TranscriptSource::LiveChatStt).unwrap(),
             "live_chat_stt"
         );
+    }
+
+    #[test]
+    fn hook_template_and_image_broll_payloads_round_trip() {
+        let raw = json!({
+            "jobId": "h1",
+            "url": "https://example.com",
+            "hookBanner": true,
+            "hookTemplate": "neon_pulse",
+            "splitScreen": {
+                "enabled": true,
+                "clips": [
+                    {"id": "img1", "kind": "upload", "mediaType": "image", "filePath": "media/photo.png", "label": "Diagram"},
+                    {"id": "vid1", "kind": "url", "url": "https://example.com/v", "label": "Demo", "momentPrompt": "goal celebration"}
+                ]
+            }
+        });
+        let job = JobData::from_json(raw).unwrap();
+        assert_eq!(job.hook_template, HookTemplate::NeonPulse);
+        let split = job.split_screen.as_ref().unwrap();
+        assert!(split.clips[0].is_image());
+        assert!(!split.clips[1].is_image());
+        assert_eq!(split.clips[1].moment_prompt.as_deref(), Some("goal celebration"));
+        let wire = serde_json::to_value(&job).unwrap();
+        assert_eq!(wire["hookTemplate"], "neon_pulse");
+        assert_eq!(wire["splitScreen"]["clips"][0]["mediaType"], "image");
+        assert_eq!(wire["splitScreen"]["clips"][1]["momentPrompt"], "goal celebration");
+        assert_eq!(HookTemplate::from_value(&json!("unknown")), HookTemplate::Editorial);
     }
 }

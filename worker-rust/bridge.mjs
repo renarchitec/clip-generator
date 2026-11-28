@@ -244,7 +244,13 @@ try {
       for (const [queue, concurrency, task] of [
         ['clip-jobs', 1, () => 'job'],
         ['previews', 2, () => 'preview'],
-        ['captions', 2, (job) => job.name === 'brief' ? 'brief' : 'caption'],
+        ['captions', 2, (job) => {
+          if (job.name === 'brief') return 'brief';
+          if (job.name === 'generate-image') return 'generate-image';
+          if (job.name === 'find-moment') return 'find-moment';
+          if (job.name === 'capture-frame') return 'capture-frame';
+          return 'caption';
+        }],
         ['clip-frames', frameConcurrency, () => 'frame'],
       ]) {
         const worker = new Worker(queue, processor(task), { connection: queueRedis, concurrency });

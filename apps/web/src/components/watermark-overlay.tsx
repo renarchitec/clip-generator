@@ -38,6 +38,7 @@ type Props = {
   onCaptionStyleChange?: (next: CaptionStyle) => void
   showSafeZone?: boolean
   showHookPreview?: boolean
+  hookTemplate?: import("@/lib/hook-template").HookTemplate
   hookPreviewText?: string
 }
 
@@ -58,6 +59,7 @@ export function WatermarkOverlay({
   onCaptionStyleChange,
   showSafeZone = false,
   showHookPreview = false,
+  hookTemplate,
   hookPreviewText = "",
 }: Props) {
   const t = useT()
@@ -195,7 +197,7 @@ export function WatermarkOverlay({
         {showHookPreview && (
           <HookThumbnailOverlay
             aspectRatio={aspectRatio}
-            text={hookPreviewText}
+            template={hookTemplate} text={hookPreviewText}
             frameWidthPx={frameWidthPx}
             frameHeightPx={frameHeightPx}
             hasFrame={Boolean(frame)}

@@ -99,6 +99,7 @@ pub struct PreparedBrollClip {
     pub description: Option<String>,
     pub path: PathBuf,
     pub duration_sec: f64,
+    pub is_image: bool,
 }
 
 impl From<&PreparedBrollClip> for BrollCatalogItem {
@@ -108,6 +109,7 @@ impl From<&PreparedBrollClip> for BrollCatalogItem {
             label: clip.label.clone(),
             description: clip.description.clone(),
             duration_sec: clip.duration_sec,
+            is_image: clip.is_image,
         }
     }
 }
@@ -122,7 +124,7 @@ pub fn needs_visual_summary(label: &str) -> bool {
         .filter(|(_, ext)| {
             matches!(
                 ext.to_ascii_lowercase().as_str(),
-                "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v"
+                "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" | "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
             )
         })
         .map_or(label, |(s, _)| s);
@@ -150,6 +152,13 @@ pub fn needs_visual_summary(label: &str) -> bool {
         "footage",
         "untitled",
         "img",
+        "image",
+        "photo",
+        "picture",
+        "frame",
+        "capture",
+        "screenshot",
+        "generated",
         "vid",
         "mov",
         "dsc",
@@ -158,6 +167,10 @@ pub fn needs_visual_summary(label: &str) -> bool {
         "screen",
         "recording",
         "mp4",
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
         "final",
         "edit",
         "trim",
@@ -181,14 +194,12 @@ async fn summarize(
     cancel: &CancellationToken,
 ) -> Option<String> {
     let mut frames = Vec::new();
-    for fraction in [0.2, 0.5, 0.8] {
+    if clip.is_image {
         if let Ok(out) = tools::run(
             tools::ffmpeg(&tools.ffmpeg)
-                .args(["-ss", &format!("{:.6}", clip.duration_sec * fraction), "-i"])
+                .arg("-i")
                 .arg(&clip.path)
                 .args([
-                    "-map",
-                    "0:v:0",
                     "-vf",
                     "scale='min(512,iw)':-2",
                     "-frames:v",
@@ -210,6 +221,37 @@ async fn summarize(
                 frames.push(STANDARD.encode(out.stdout));
             }
         }
+    } else {
+        for fraction in [0.2, 0.5, 0.8] {
+            if let Ok(out) = tools::run(
+                tools::ffmpeg(&tools.ffmpeg)
+                    .args(["-ss", &format!("{:.6}", clip.duration_sec * fraction), "-i"])
+                    .arg(&clip.path)
+                    .args([
+                        "-map",
+                        "0:v:0",
+                        "-vf",
+                        "scale='min(512,iw)':-2",
+                        "-frames:v",
+                        "1",
+                        "-c:v",
+                        "mjpeg",
+                        "-q:v",
+                        "4",
+                        "-f",
+                        "image2pipe",
+                        "pipe:1",
+                    ]),
+                Duration::from_secs(20),
+                cancel,
+            )
+            .await
+            {
+                if !out.stdout.is_empty() {
+                    frames.push(STANDARD.encode(out.stdout));
+                }
+            }
+        }
     }
     tokio::select! { biased; _ = cancel.cancelled() => None, result = llm.describe_broll_frames(&clip.label, &frames) => result }
 }
@@ -229,12 +271,63 @@ pub async fn prepare_broll_sources(
         if source.id.is_empty() || !ids.insert(&source.id) {
             bail!("missing or duplicate B-roll clip ID");
         }
-        let start = source
-            .start_sec
-            .filter(|v| v.is_finite())
-            .unwrap_or(0.)
-            .max(0.);
-        let end = source.end_sec.filter(|v| v.is_finite());
+        let is_image = source.is_image();
+        if is_image {
+            let path = if source.kind == MediaSourceKind::Url {
+                let url = source.url.as_deref().context("missing B-roll image URL")?;
+                pipeline
+                    .download_broll_image(url, work_dir, &format!("broll_img_{i}"), cancel)
+                    .await?
+            } else {
+                resolve_local_media_path(
+                    &pipeline.config.clips_dir,
+                    source
+                        .file_path
+                        .as_deref()
+                        .context("missing local B-roll image path")?,
+                )?
+            };
+            image::image_dimensions(&path).context("invalid B-roll image file")?;
+            prepared.push(PreparedBrollClip {
+                id: source.id.clone(),
+                label: source.label.clone(),
+                description: source
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
+                path,
+                duration_sec: 0.,
+                is_image: true,
+            });
+            continue;
+        }
+        let mut start_opt = source.start_sec.filter(|v| v.is_finite());
+        let mut end = source.end_sec.filter(|v| v.is_finite());
+        if start_opt.is_none() && end.is_none() {
+            if let Some(prompt) = source
+                .moment_prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                if llm.is_some() {
+                    let req = crate::models::FindMomentRequest {
+                        kind: source.kind,
+                        url: source.url.clone(),
+                        file_path: source.file_path.clone(),
+                        prompt: prompt.to_owned(),
+                        target_duration_sec: None,
+                    };
+                    if let Ok(found) = pipeline.run_find_moment(&req, cancel).await {
+                        start_opt = Some(found.start_sec);
+                        end = Some(found.end_sec);
+                    }
+                }
+            }
+        }
+        let start = start_opt.unwrap_or(0.).max(0.);
         let (mut path, downloaded_section) = if source.kind == MediaSourceKind::Url {
             let url = source.url.as_deref().context("missing B-roll URL")?;
             let prefix = format!("broll_{i}");
@@ -243,7 +336,7 @@ pub async fn prepare_broll_sources(
                     url,
                     work_dir,
                     &prefix,
-                    source.start_sec.map(|_| start),
+                    start_opt.map(|_| start),
                     end,
                     cancel,
                 )
@@ -262,7 +355,7 @@ pub async fn prepare_broll_sources(
         };
         let info = tools::probe_media_cancel(&tools.ffprobe, &path, cancel).await?;
         let mut duration_sec = info.duration;
-        if !downloaded_section && (source.start_sec.is_some() || end.is_some()) {
+        if !downloaded_section && (start_opt.is_some() || end.is_some()) {
             let end = end.unwrap_or(info.duration).min(info.duration);
             if end <= start {
                 bail!("invalid trim for B-roll {}", source.id);
@@ -301,6 +394,7 @@ pub async fn prepare_broll_sources(
                 .map(str::to_owned),
             path,
             duration_sec,
+            is_image: false,
         });
     }
     if let Some(llm) = llm.filter(|_| run_vision) {
@@ -374,32 +468,45 @@ pub async fn render_broll_track(
         let clip = prepared_map
             .get(&segment.clip_id)
             .ok_or_else(|| anyhow!("unknown B-roll clip {}", segment.clip_id))?;
-        let start = segment
-            .source_start_sec
-            .unwrap_or(0.)
-            .clamp(0., (clip.duration_sec - 0.5).max(0.));
-        let meta = if need_audio {
-            Some(tools::probe_media_cancel(&tools.ffprobe, &clip.path, cancel).await?)
-        } else {
-            None
-        };
         let mut cmd = tools::ffmpeg(&tools.ffmpeg);
-        if duration > clip.duration_sec - start + 0.000_001 {
-            cmd.args(["-stream_loop", "-1"]);
-        }
-        cmd.args(["-ss", &format!("{start:.6}"), "-i"])
-            .arg(&clip.path);
         let mut graph = fit_panel_filter("[0:v:0]", w, h, fit, "[fit]");
-        graph.push_str(&format!(";[fit]fps=30,tpad=stop_mode=clone:stop_duration={duration:.6},trim=end_frame={frames},setpts=PTS-STARTPTS[v]"));
-        if let Some(meta) = meta {
-            let audio = if meta.has_audio {
-                "0:a:0"
-            } else {
+        if clip.is_image {
+            cmd.args(["-loop", "1", "-framerate", "30", "-i"])
+                .arg(&clip.path);
+            graph.push_str(&format!(
+                ";[fit]fps=30,trim=end_frame={frames},setpts=PTS-STARTPTS[v]"
+            ));
+            if need_audio {
                 tools::silence(&mut cmd, duration);
-                "1:a:0"
+                graph.push(';');
+                graph.push_str(&tools::audio_filter("1:a:0", "a", duration, ""));
+            }
+        } else {
+            let start = segment
+                .source_start_sec
+                .unwrap_or(0.)
+                .clamp(0., (clip.duration_sec - 0.5).max(0.));
+            let meta = if need_audio {
+                Some(tools::probe_media_cancel(&tools.ffprobe, &clip.path, cancel).await?)
+            } else {
+                None
             };
-            graph.push(';');
-            graph.push_str(&tools::audio_filter(audio, "a", duration, ""));
+            if duration > clip.duration_sec - start + 0.000_001 {
+                cmd.args(["-stream_loop", "-1"]);
+            }
+            cmd.args(["-ss", &format!("{start:.6}"), "-i"])
+                .arg(&clip.path);
+            graph.push_str(&format!(";[fit]fps=30,tpad=stop_mode=clone:stop_duration={duration:.6},trim=end_frame={frames},setpts=PTS-STARTPTS[v]"));
+            if let Some(meta) = meta {
+                let audio = if meta.has_audio {
+                    "0:a:0"
+                } else {
+                    tools::silence(&mut cmd, duration);
+                    "1:a:0"
+                };
+                graph.push(';');
+                graph.push_str(&tools::audio_filter(audio, "a", duration, ""));
+            }
         }
         cmd.args(["-filter_complex", &graph, "-map", "[v]"]);
         tools::video_encoder(&mut cmd, encoder, "23");
@@ -446,7 +553,7 @@ pub async fn render_broll_track(
 pub async fn extract_split_cover_frame(
     ffmpeg: &Path,
     primary: (&Path, f64),
-    secondary: (&Path, f64),
+    secondary: (&Path, f64, bool),
     config: &SplitScreenConfig,
     subtitle_filter: Option<&str>,
     out_path: &Path,
@@ -478,8 +585,13 @@ pub async fn extract_split_cover_frame(
         label = "[subtitled]";
     }
     let mut cmd = tools::ffmpeg(ffmpeg);
-    for (path, seek) in [primary, secondary] {
-        cmd.args(["-ss", &format!("{seek:.6}"), "-i"]).arg(path);
+    cmd.args(["-ss", &format!("{:.6}", primary.1), "-i"])
+        .arg(primary.0);
+    if secondary.2 {
+        cmd.arg("-i").arg(secondary.0);
+    } else {
+        cmd.args(["-ss", &format!("{:.6}", secondary.1), "-i"])
+            .arg(secondary.0);
     }
     tools::run(
         cmd.args([
@@ -674,5 +786,92 @@ mod tests {
             .unwrap();
             assert_colors(&image::open(&screenshot).unwrap(), green);
         }
+    }
+
+    #[tokio::test]
+    async fn synthetic_mixed_image_and_video_split_screen_renders() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = ToolPaths {
+            ffmpeg: "ffmpeg".into(),
+            ffprobe: "ffprobe".into(),
+            ytdlp: "should-not-be-called".into(),
+        };
+        if [&tools.ffmpeg, &tools.ffprobe].into_iter().any(|program| {
+            !std::process::Command::new(program)
+                .arg("-version")
+                .output()
+                .is_ok_and(|out| out.status.success())
+        }) {
+            return;
+        }
+        let cancel = CancellationToken::new();
+        let timeout = Duration::from_secs(60);
+        let mut cmd = tools::ffmpeg(&tools.ffmpeg);
+        cmd.args([
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=160x90:r=30",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=44100",
+            "-c:a",
+            "aac",
+        ]);
+        tools::video_encoder(&mut cmd, "libx264", "23");
+        tools::run(
+            cmd.args(["-t", "3.0"]).arg(dir.path().join("primary.mp4")),
+            timeout,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        // Create a solid blue PNG image as secondary split-screen asset.
+        let blue_img = image::RgbImage::from_pixel(320, 180, image::Rgb([10, 40, 230]));
+        blue_img.save(dir.path().join("photo.png")).unwrap();
+
+        let payload = json!({
+            "jobId": "split-img-test",
+            "primarySource": {"kind": "upload", "filePath": "primary.mp4"},
+            "splitScreen": {
+                "enabled": true,
+                "ratio": "50:50",
+                "swap": false,
+                "primaryFit": "cover",
+                "secondaryFit": "cover",
+                "secondaryVolume": 0.5,
+                "matchMode": "sequential",
+                "clips": [
+                    {"id": "img1", "kind": "upload", "mediaType": "image", "filePath": "photo.png", "label": "Blue photo"}
+                ]
+            },
+            "mode": "manual",
+            "aspectRatio": "9:16",
+            "captions": false,
+            "ranges": [{"start": 0., "end": 3.0}],
+            "atSec": 0.5,
+            "outPath": ".frames/split-img.jpg"
+        });
+        let pipeline = Pipeline::new(PipelineConfig::new(tools.clone(), dir.path()));
+        let frame: FrameRequest = serde_json::from_value(payload.clone()).unwrap();
+        let f_res = pipeline.run_frame(&frame, &cancel).await.unwrap();
+        let f_img = image::open(dir.path().join(f_res.file)).unwrap();
+        assert_eq!(f_img.dimensions(), (1080, 1920));
+        let top = f_img.get_pixel(540, 400).0;
+        let bot = f_img.get_pixel(540, 1400).0;
+        assert!(top[0] > 145 && top[2] < 50, "top={top:?}");
+        assert!(bot[2] > 145 && bot[0] < 50, "bot={bot:?}");
+
+        let job = JobData::from_json(payload).unwrap();
+        let result = pipeline
+            .run_job(&job, &cancel, |_| std::future::ready(()))
+            .await
+            .unwrap();
+        let clip_path = dir.path().join("split-img-test").join(&result.clips[0].file);
+        let info = tools::probe_media(&tools.ffprobe, &clip_path).await.unwrap();
+        assert_eq!((info.width, info.height), (1080, 1920));
+        assert!((info.duration - 3.0).abs() < 0.1);
+        assert!(info.has_audio);
     }
 }

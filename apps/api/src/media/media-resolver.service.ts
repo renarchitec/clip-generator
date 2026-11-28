@@ -3,7 +3,8 @@ import { SPLIT_MATCH_MODES, SPLIT_PANEL_FITS, SPLIT_SCREEN_MAX_CLIPS, SPLIT_SCRE
 import type { AspectRatio, PrimaryMediaSource, SplitScreenClipSource, SplitScreenConfig } from '@clipper/shared';
 import { assertAllowedUrl } from '../jobs/validation';
 import { PrismaService } from '../prisma/prisma.service';
-import type { SplitScreenDto, SplitScreenClipDto } from './media.dto';
+import type { MediaActionSourceDto, SplitScreenDto, SplitScreenClipDto } from './media.dto';
+import { isImageMime } from './media-helpers';
 import { MediaService } from './media.service';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class MediaResolverService {
     if (!source || source.kind === 'url') return { url: assertAllowedUrl(url || source?.url || ''), primarySource: null };
     if (source.kind === 'upload') {
       const asset = await this.media.findOwned(requiredId(source.mediaId), userId);
+      if (isImageMime(asset.mimeType)) throw new BadRequestException('Sumber utama harus berupa video.');
       return { url: `media://${asset.id}`, primarySource: {
         kind: 'upload', mediaId: asset.id, filePath: asset.filePath, label: source.label?.trim() || asset.name, durationSec: asset.durationSec,
       } };
@@ -28,6 +30,19 @@ export class MediaResolverService {
       } };
     }
     throw new BadRequestException('Jenis sumber video tidak valid.');
+  }
+
+  async resolveVideoActionSource(userId: string, source: MediaActionSourceDto): Promise<
+    { kind: 'url'; url: string } | { kind: 'upload' | 'clip'; filePath: string; durationSec: number }
+  > {
+    if ([source.url, source.mediaId, source.clipId].filter((value) => value !== undefined).length !== 1) {
+      throw new BadRequestException('Gunakan hanya satu sumber video.');
+    }
+    const { url, primarySource } = await this.resolvePrimarySource(userId, undefined, source);
+    if (!primarySource) return { kind: 'url', url };
+    const { kind, filePath, durationSec } = primarySource;
+    if (kind === 'url' || !filePath || durationSec == null) throw new NotFoundException('File sumber video tidak tersedia.');
+    return { kind, filePath, durationSec };
   }
 
   async resolveSplitScreen(
@@ -65,13 +80,18 @@ export class MediaResolverService {
     }
     const label = source.label?.trim();
     const description = source.description?.trim() || null;
-    const timing = { ...(startSec != null ? { startSec } : {}), ...(endSec != null ? { endSec } : {}) };
+    const momentPrompt = source.momentPrompt?.trim();
+    const timing = { ...(startSec != null ? { startSec } : {}), ...(endSec != null ? { endSec } : {}),
+      ...(momentPrompt ? { momentPrompt } : {}) };
     if (kind === 'url') {
       const url = assertAllowedUrl(source.url || '');
-      return { id, kind, url, label: label || source.url!, description, ...timing };
+      if (source.mediaType === 'image') return { id, kind, mediaType: 'image', url, label: label || url, description };
+      return { id, kind, url, label: label || url, description, ...timing };
     }
     if (kind === 'upload') {
       const asset = await this.media.findOwned(requiredId(source.mediaId), userId);
+      if (isImageMime(asset.mimeType)) return { id, kind, mediaType: 'image', mediaId: asset.id, filePath: asset.filePath,
+        durationSec: 0, label: label || asset.name, description };
       return { id, kind, mediaId: asset.id, filePath: asset.filePath, durationSec: asset.durationSec,
         label: label || asset.name, description, ...timing };
     }
