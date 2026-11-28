@@ -17,7 +17,7 @@ test('rute publish owner-scoped terdaftar', async () => {
   assert.match(controller, /@Post\('publications\/:id\/retry'\)/);
   assert.match(controller, /@Post\('publications\/:id\/cancel'\)\s*@HttpCode\(200\)/);
   assert.match(controller, /@Post\('jobs\/:id\/schedule-publish'\)\s*@HttpCode\(201\)/);
-  assert.match(controller, /@CurrentUser\(\) user: \{ id: string \}/);
+  assert.match(controller, /@CurrentUser\(\) user: (?:\{ id: string \}|AuthUser)/);
   const service = await read('apps/api/src/publish/publish.service.ts');
   assert.match(service, /job: \{ userId \}/);
   assert.match(service, /platform_unavailable/);

@@ -1,11 +1,12 @@
-import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Clock, Copy, ExternalLink, Eye, Flame, Heart, Info, LoaderCircle, MessageCircle, MoreVertical, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
+import { ArrowDownToLine, Check, ChevronDown, ChevronUp, CircleCheck, Clock, Copy, ExternalLink, Eye, Flame, Heart, Info, LoaderCircle, Lock, MessageCircle, MoreVertical, Play, RefreshCw, Send, Trash2, Volume2, VolumeX, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 import { Children, createContext, isValidElement, useContext, useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { api, type PlatformCaptions } from "@/lib/api"
+import { api, trackUserEvent, type PlatformCaptions } from "@/lib/api"
+import { useWorkspaceUser } from "@/lib/demo-context"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer"
@@ -70,12 +71,21 @@ export function ClipCardGrid({ aspectRatio, children, className = "", ...props }
 
 export function ClipCard({ clip, meta, downloaded = false, index, frame }: { clip: ClipCardData; meta: string; downloaded?: boolean; index?: number; /** Force one media frame (e.g. mixed-ratio library) */ frame?: "uniform" }) {
   const t = useT()
+  const { isDemo } = useWorkspaceUser()
   const isMobile = useIsMobile()
   const { language } = useLanguage()
   const [playerOpen, setPlayerOpen] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
+  const handlePublishClick = (source: string) => {
+    if (isDemo) {
+      trackUserEvent("locked_feature_clicked", { feature: "publish", source })
+      toast.info(t.demoPublishLocked)
+      return
+    }
+    setPublishOpen(true)
+  }
   const client = useQueryClient()
   const remove = useMutation({
     mutationFn: () => api(`/clips/${clip.id}`, { method: "DELETE" }),
@@ -169,7 +179,7 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
     {/* Desktop hover 3-icon bar */}
     <div className="clip-card-actions absolute right-2 top-2 z-[3] hidden -translate-y-1 items-center gap-1 rounded-md border border-white/20 bg-black/65 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-sm transition duration-150 focus-within:translate-y-0 focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 sm:flex">
       <a href={`/api/clips/${clip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ArrowDownToLine className="size-3.5"/></a>
-      <button type="button" onClick={() => setPublishOpen(true)} aria-label={`${t.publish}: ${title}`} title={t.publish} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Send className="size-3.5"/></button>
+      <button type="button" onClick={() => handlePublishClick("clip_card_hover")} aria-label={`${t.publish}: ${title}`} title={isDemo ? t.demoLockedBadge : t.publish} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{isDemo ? <Lock className="size-3.5"/> : <Send className="size-3.5"/>}</button>
       <button type="button" onClick={() => setConfirmOpen(true)} disabled={remove.isPending} aria-label={`${t.deleteClip}: ${title}`} title={t.deleteClip} className="grid size-7 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-destructive/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive disabled:opacity-50"><Trash2 className="size-3.5"/></button>
     </div>
 
@@ -267,11 +277,12 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
               className="min-h-11 w-full justify-start gap-3 px-4 text-sm"
               onClick={() => {
                 setActionsOpen(false)
-                setPublishOpen(true)
+                handlePublishClick("clip_drawer")
               }}
             >
-              <Send aria-hidden="true" className="size-4"/>
+              {isDemo ? <Lock aria-hidden="true" className="size-4"/> : <Send aria-hidden="true" className="size-4"/>}
               {t.publish}
+              {isDemo && <Badge variant="outline" className="ml-auto font-mono text-[10px]">{t.demoLockedBadge}</Badge>}
             </Button>
             <Button asChild variant="outline" className="min-h-11 w-full justify-start gap-3 px-4 text-sm">
               <a href={`/api/clips/${clip.id}/download`} download onClick={() => setActionsOpen(false)}>
@@ -319,6 +330,7 @@ export function ClipCard({ clip, meta, downloaded = false, index, frame }: { cli
 
 export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onPublish }: { clip: ClipCardData | null; open: boolean; onOpenChange: (open: boolean) => void; meta?: string; onDelete?: () => void; onPublish?: () => void }) {
   const t = useT()
+  const { isDemo } = useWorkspaceUser()
   const isMobile = useIsMobile()
   const { language } = useLanguage()
   const client = useQueryClient()
@@ -492,6 +504,11 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
       setPlaying(false)
     }
     if (onPublish && !canNavigate && activeClip.id === clip?.id) { onOpenChange(false); onPublish(); return }
+    if (isDemo) {
+      trackUserEvent("locked_feature_clicked", { feature: "publish", source: "clip_player" })
+      toast.info(t.demoPublishLocked)
+      return
+    }
     setPublishClip(activeClip)
   }
 
@@ -679,8 +696,8 @@ export function ClipPlayerDialog({ clip, onOpenChange, open, meta, onDelete, onP
           </div>}
 
           <div className="absolute bottom-[calc(4rem+env(safe-area-inset-bottom))] right-2 z-30 flex w-14 flex-col items-center gap-2 sm:bottom-16 sm:gap-3">
-            <button type="button" onClick={openPublish} aria-label={`${t.publish}: ${title}`} title={t.publish} className="group/rail flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
-              <span className="grid size-11 place-items-center rounded-full border border-accent/50 bg-accent text-accent-foreground shadow-lg backdrop-blur-md transition-transform group-hover/rail:scale-105"><Send className="size-[18px]"/></span>
+            <button type="button" onClick={openPublish} aria-label={`${t.publish}: ${title}`} title={isDemo ? t.demoLockedBadge : t.publish} className="group/rail flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+              <span className={`grid size-11 place-items-center rounded-full border shadow-lg backdrop-blur-md transition-transform group-hover/rail:scale-105 ${isDemo ? "border-white/15 bg-black/55 text-white/80" : "border-accent/50 bg-accent text-accent-foreground"}`}>{isDemo ? <Lock className="size-[18px]"/> : <Send className="size-[18px]"/>}</span>
               <span className="line-clamp-1 max-w-full text-center text-[10px] font-medium leading-tight text-white/90 drop-shadow">{t.publish}</span>
             </button>
             <a href={`/api/clips/${activeClip.id}/download`} download aria-label={`${t.download}: ${title}`} title={t.download} className="flex w-full flex-col items-center gap-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">

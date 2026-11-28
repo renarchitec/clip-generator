@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus, RefreshCw, TriangleAlert, Unplug } from "lucide-react"
+import { ArrowUpRight, Lock, Plus, RefreshCw, TriangleAlert, Unplug } from "lucide-react"
 import { useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { api } from "@/lib/api"
+import { api, trackUserEvent } from "@/lib/api"
+import { DESKTOP_DOWNLOAD_URL, useWorkspaceUser } from "@/lib/demo-context"
 import { useLanguage, useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
@@ -32,44 +33,84 @@ const MARKS: Record<SocialPlatform, (props: { className?: string }) => ReactNode
 
 export function SocialAccounts() {
   const t = useT()
+  const { isDemo } = useWorkspaceUser()
   const providers = useQuery({ queryKey: ["social", "providers"], queryFn: () => api<SocialProvider[]>("/social/providers") })
   const accounts = useQuery({ queryKey: ["social", "accounts"], queryFn: () => api<SocialAccount[]>("/social/accounts") })
   const pending = providers.isPending || accounts.isPending
   const failed = providers.isError || accounts.isError
 
   return <section aria-labelledby="connected-accounts-heading">
-    <div className="mb-4">
-      <h3 id="connected-accounts-heading" className="font-display text-lg font-medium tracking-[-.02em]">{t.connectedAccounts}</h3>
-      <p className="mt-1 text-sm text-muted-foreground">{t.connectedAccountsIntro}</p>
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <div className="flex items-center gap-2">
+          <h3 id="connected-accounts-heading" className="font-display text-lg font-medium tracking-[-.02em]">{t.connectedAccounts}</h3>
+          {isDemo && <Badge variant="secondary" className="gap-1 font-mono text-[10px]"><Lock className="size-3" aria-hidden="true"/>{t.demoLockedBadge}</Badge>}
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">{t.connectedAccountsIntro}</p>
+      </div>
     </div>
+    {isDemo && (
+      <Alert className="mb-4 border-accent/30 bg-accent/5">
+        <AlertDescription className="flex flex-wrap items-center justify-between gap-3 text-xs">
+          <span>{t.demoSocialLockedDesc}</span>
+          <a
+            href={DESKTOP_DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => trackUserEvent("desktop_cta_clicked", { source: "settings_social" })}
+            className="inline-flex shrink-0 items-center gap-1 font-medium text-accent underline-offset-4 hover:underline"
+          >
+            {t.demoDesktopCta}
+            <ArrowUpRight className="size-3.5" aria-hidden="true" />
+          </a>
+        </AlertDescription>
+      </Alert>
+    )}
     {pending ? <div role="status" aria-label={t.loading} className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
       {ORDER.map((platform) => <div key={platform} className="flex items-center gap-4 p-4 sm:p-5"><Skeleton className="size-10 rounded-lg"/><div className="flex-1 space-y-2"><Skeleton className="h-4 w-24"/><Skeleton className="h-3 w-48 max-w-full"/></div><Skeleton className="h-9 w-24 rounded-lg"/></div>)}
     </div> : failed ? <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{t.socialLoadError}</span><Button variant="outline" onClick={() => { void providers.refetch(); void accounts.refetch() }}>{t.retry}</Button></AlertDescription></Alert> : <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
       {ORDER.map((platform) => {
         const provider = providers.data?.find((item) => item.platform === platform) ?? { platform, configured: false, available: false }
-        return <PlatformBlock key={platform} provider={provider} accounts={accounts.data?.filter((item) => item.platform === platform) ?? []}/>
+        return <PlatformBlock key={platform} provider={provider} accounts={accounts.data?.filter((item) => item.platform === platform) ?? []} lockedForDemo={isDemo}/>
       })}
     </ul>}
   </section>
 }
 
-function PlatformBlock({ provider, accounts }: { provider: SocialProvider; accounts: SocialAccount[] }) {
+function PlatformBlock({ provider, accounts, lockedForDemo = false }: { provider: SocialProvider; accounts: SocialAccount[]; lockedForDemo?: boolean }) {
   const t = useT()
   const Mark = MARKS[provider.platform]
   const name = t.socialPlatforms[provider.platform]
   const comingSoon = !provider.available
   const unconfigured = provider.available && !provider.configured
-  const hint = comingSoon ? t.socialComingSoonHint : unconfigured ? t.socialNotConfiguredHint : accounts.length ? null : t.socialNoAccounts
+  const hint = lockedForDemo ? t.demoSocialLocked : comingSoon ? t.socialComingSoonHint : unconfigured ? t.socialNotConfiguredHint : accounts.length ? null : t.socialNoAccounts
   const hintId = `social-${provider.platform}-hint`
 
-  return <li className={cn("p-4 sm:p-5", comingSoon && "bg-muted/30")}>
+  return <li className={cn("p-4 sm:p-5", (comingSoon || lockedForDemo) && "bg-muted/30")}>
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-      <span className={cn("grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-background", comingSoon && "opacity-50 grayscale")}><Mark/></span>
+      <span className={cn("grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-background", (comingSoon || lockedForDemo) && "opacity-60")}><Mark/></span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2"><h4 className={cn("font-medium", comingSoon && "text-muted-foreground")}>{name}</h4>{comingSoon && <Badge variant="secondary" className="font-normal">{t.comingSoon}</Badge>}{!comingSoon && accounts.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{accounts.length}</span>}</div>
+        <div className="flex items-center gap-2"><h4 className={cn("font-medium", (comingSoon || lockedForDemo) && "text-muted-foreground")}>{name}</h4>{lockedForDemo ? <Badge variant="secondary" className="gap-1 font-normal"><Lock className="size-3" aria-hidden="true"/>{t.demoLockedBadge}</Badge> : comingSoon && <Badge variant="secondary" className="font-normal">{t.comingSoon}</Badge>}{!comingSoon && !lockedForDemo && accounts.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{accounts.length}</span>}</div>
         {hint && <p id={hintId} className="mt-0.5 text-sm text-muted-foreground">{hint}</p>}
       </div>
-      {!comingSoon && <Button variant={accounts.length ? "outline" : "default"} size="lg" className="ml-auto min-h-10 px-3" disabled={unconfigured} aria-describedby={hint ? hintId : undefined} onClick={() => connect(provider.platform)}><Plus aria-hidden="true"/>{accounts.length ? t.socialAddAccount : t.socialConnect}<span className="sr-only"> {name}</span></Button>}
+      {!comingSoon && (lockedForDemo ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="lg"
+          className="ml-auto min-h-10 gap-1.5 px-3 text-muted-foreground"
+          onClick={() => {
+            trackUserEvent("locked_feature_clicked", { feature: "social", source: provider.platform })
+            toast.info(t.demoSocialLockedDesc)
+          }}
+        >
+          <Lock aria-hidden="true" className="size-3.5" />
+          {t.socialConnect}
+          <span className="sr-only"> {name}</span>
+        </Button>
+      ) : (
+        <Button variant={accounts.length ? "outline" : "default"} size="lg" className="ml-auto min-h-10 px-3" disabled={unconfigured} aria-describedby={hint ? hintId : undefined} onClick={() => connect(provider.platform)}><Plus aria-hidden="true"/>{accounts.length ? t.socialAddAccount : t.socialConnect}<span className="sr-only"> {name}</span></Button>
+      ))}
     </div>
     {!comingSoon && provider.platform === "instagram" && <p className="mt-3 text-xs text-muted-foreground sm:ml-14">{t.instagramAccountNote}</p>}
     {accounts.length > 0 && <>

@@ -10,6 +10,7 @@ import {
   Sse,
 } from '@nestjs/common';
 import { Observable, concat, map, of } from 'rxjs';
+import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JobEventsService } from '../queue/job-events.service';
 import { CreateJobDto } from './dto/create-job.dto';
@@ -23,8 +24,8 @@ export class JobsController {
   ) {}
 
   @Post()
-  create(@Body() dto: CreateJobDto, @CurrentUser() user: { id: string }) {
-    return this.jobs.create(dto, user.id);
+  create(@Body() dto: CreateJobDto, @CurrentUser() user: AuthUser) {
+    return this.jobs.create(dto, user.id, user.role);
   }
 
   @Get()
@@ -45,8 +46,8 @@ export class JobsController {
 
   /** Buat job baru dari konfigurasi job lama; hanya job failed/cancelled. */
   @Post(':id/retry')
-  retry(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.jobs.retry(id, user.id);
+  retry(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.jobs.retry(id, user.id, user.role);
   }
 
   @Delete(':id')

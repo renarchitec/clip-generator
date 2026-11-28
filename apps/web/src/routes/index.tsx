@@ -4,8 +4,9 @@ import {MediaSourcePicker,useSplitText} from '@/components/media-source-picker'
 import { createFileRoute, Link, redirect, useNavigate, useSearch } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useForm } from "@tanstack/react-form"
-import { ArrowDown, ArrowUp, ArrowUpRight, AudioLines, CalendarClock, Captions, CircleAlert, Image as ImageIcon, ListChecks, LoaderCircle, PanelTop, Play, Plus, Radio, Scan, Sparkles, Subtitles, Users, Video, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpRight, AudioLines, CalendarClock, Captions, CircleAlert, Image as ImageIcon, ListChecks, LoaderCircle, Lock, PanelTop, Play, Plus, Radio, Scan, Sparkles, Subtitles, Users, Video, X } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,7 +17,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { api, CAPTION_LANGUAGES, CUSTOM_HASHTAGS_MAX, DEFAULT_TRANSCRIPT_SOURCE, formatCustomHashtagsInput, isCaptionLanguage, isTranscriptSource, parseCustomHashtags, TRANSCRIPT_SOURCES, type CaptionLanguage, type Job, type JobPreview, type JobSnapshot, type TranscriptSource, type User } from "@/lib/api"
+import { api, CAPTION_LANGUAGES, CUSTOM_HASHTAGS_MAX, DEFAULT_TRANSCRIPT_SOURCE, formatCustomHashtagsInput, isCaptionLanguage, isTranscriptSource, parseCustomHashtags, trackUserEvent, TRANSCRIPT_SOURCES, type ApiError, type CaptionLanguage, type Job, type JobPreview, type JobSnapshot, type MeResponse, type TranscriptSource, type User } from "@/lib/api"
 import { DEFAULT_CAPTION_STYLE, detectCaptionPreset, normalizeCaptionStyle, type CaptionStyle } from "@/lib/caption-style"
 import { CaptionStyleEditor } from "@/components/caption-style-editor"
 import { WorkspaceShell } from "@/components/chrome"
@@ -79,6 +80,7 @@ type RangePayload = { start: number; end: number; title?: string; reason?: strin
 type JobInput = import("@/lib/api").SourceSettings & { url: string; mode: "auto" | "manual"; reframe: Job["reframe"]; captions: boolean; hookBanner: boolean; normalizeAudio: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: Job["aspectRatio"]; captionLanguage: CaptionLanguage; transcriptSource: TranscriptSource; captionStyle?: CaptionStyle | null; customHashtags?: string[]; maxSourceSec?: number | null; clipCount?: number; targetDurationSec: number; description?: string; ranges?: RangePayload[]; watermark?: WatermarkDefaultValue; outro: { outroId: string } | null }
 
 const REVIEW_MAX_SELECTABLE = 10
+const SOURCE_PRESET_SECS = [600, 1200, 1800, 3600, 5400, 7200]
 
 const transcriptSourceIcons: Record<TranscriptSource, typeof Subtitles> = {
   youtube: Subtitles,
@@ -88,9 +90,20 @@ const transcriptSourceIcons: Record<TranscriptSource, typeof Subtitles> = {
 
 function Dashboard() {
   const { user } = Route.useRouteContext() as { user: User }
+  const isDemo = user.role === "demo"
+  const maxTargetDurationSec = isDemo ? 60 : 180
+  const maxCustomMinutes = isDemo ? 120 : 600
   const t = useT()
   const client = useQueryClient()
   const navigate = useNavigate()
+  const demoMe = useQuery({
+    queryKey: ["auth", "me"],
+    queryFn: () => api<MeResponse>("/auth/me"),
+    staleTime: 30_000,
+    enabled: isDemo,
+  })
+  const demoQuota = demoMe.data?.demoQuota ?? null
+  const demoRemainingClips = isDemo ? Math.max(0, (demoQuota?.clipsLimit ?? 3) - (demoQuota?.clipsUsed ?? 0)) : null
   const [draft] = useState(loadReviewDraft)
   const [mode, setMode] = useState<"auto" | "manual">(draft?.mode ?? "auto")
   const [reframe, setReframe] = useState<Job["reframe"]>(draft?.reframe ?? "center_crop")
@@ -114,8 +127,16 @@ function Dashboard() {
   const [twoSpeakers, setTwoSpeakers] = useState(draft?.twoSpeakers ?? false)
   const [facecam, setFacecam] = useState(draft?.facecam ?? false)
   const [aspectRatio, setAspectRatio] = useState<Job["aspectRatio"]>(draft?.aspectRatio ?? "9:16")
-  const [maxSourceChoice, setMaxSourceChoice] = useState(draft?.maxSourceSec === null || draft?.maxSourceSec === undefined ? "full" : [600, 1200, 1800, 3600, 5400].includes(draft.maxSourceSec) ? String(draft.maxSourceSec) : "custom")
-  const [reviewFirst, setReviewFirst] = useState(draft?.reviewFirst ?? true)
+  const [maxSourceChoice, setMaxSourceChoice] = useState(() => {
+    const raw = draft?.maxSourceSec
+    if (isDemo) {
+      if (raw === null || raw === undefined || raw > 7200) return "7200"
+      return SOURCE_PRESET_SECS.includes(raw) ? String(raw) : "custom"
+    }
+    return raw === null || raw === undefined ? "full" : SOURCE_PRESET_SECS.includes(raw) ? String(raw) : "custom"
+  })
+  const [reviewFirstState, setReviewFirst] = useState(draft?.reviewFirst ?? true)
+  const reviewFirst = isDemo ? true : reviewFirstState
   const [previewId, setPreviewId] = useState<string | null>(draft?.previewId ?? null)
   const [previewExpired, setPreviewExpired] = useState(false)
   const [selectedCandidates, setSelectedCandidates] = useState<number[]>(draft?.selectedCandidates ?? [])
@@ -126,7 +147,8 @@ function Dashboard() {
   const [previousBrief, setPreviousBrief] = useState<string | null>(null)
   const [enhanceError, setEnhanceError] = useState("")
   const [captionLanguage, setCaptionLanguage] = useState<CaptionLanguage>(draft?.captionLanguage ?? "auto")
-  const [transcriptSource, setTranscriptSource] = useState<TranscriptSource>(draft?.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE)
+  const [transcriptSourceState, setTranscriptSource] = useState<TranscriptSource>(isDemo ? "youtube" : (draft?.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE))
+  const transcriptSource: TranscriptSource = isDemo ? "youtube" : transcriptSourceState
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(() => normalizeCaptionStyle(draft?.captionStyle))
   const [customHashtagsInput, setCustomHashtagsInput] = useState(() => draft?.customHashtags ?? "")
   const parsedCustomHashtags = parseCustomHashtags(customHashtagsInput)
@@ -141,22 +163,35 @@ function Dashboard() {
   const [error, setError] = useState("")
   /** True while a new job must not be started (see `blockingJob` below). Read inside submit handlers. */
   const generationLocked = useRef(false)
+  const initialDuration = isDemo ? Math.min(60, Math.max(15, draft?.duration ?? 45)) : (draft?.duration ?? 45)
+  const initialCustomMinutes = draft?.maxSourceSec && !SOURCE_PRESET_SECS.includes(draft.maxSourceSec)
+    ? String(Math.min(maxCustomMinutes, Math.max(1, Math.round(draft.maxSourceSec / 60))))
+    : "10"
   const form = useForm({
-    defaultValues: { url: draft?.url ?? "", clipCount: draft?.clipCount ?? 3, duration: draft?.duration ?? 45, customMinutes: draft?.maxSourceSec && ![600, 1200, 1800, 3600, 5400].includes(draft.maxSourceSec) ? String(draft.maxSourceSec / 60) : "10", ranges: draft?.ranges ?? [{ start: "", end: "" }] },
+    defaultValues: { url: draft?.url ?? "", clipCount: isDemo ? Math.min(3, draft?.clipCount ?? 3) : (draft?.clipCount ?? 3), duration: initialDuration, customMinutes: initialCustomMinutes, ranges: draft?.ranges ?? [{ start: "", end: "" }] },
     validators: { onSubmit: ({ value }) => {
       const invalidSource = sourceError(value.url)
       if (invalidSource) return invalidSource
       if (mode === "auto" && !reviewFirst && (!Number.isInteger(value.clipCount) || value.clipCount < 1 || value.clipCount > 10)) return t.clipCountInvalid
-      if (!Number.isInteger(value.duration) || value.duration < 15 || value.duration > 180) return t.durationInvalid
-      if (mode === "auto" && maxSourceChoice === "custom" && (!/^\d+$/.test(value.customMinutes) || Number(value.customMinutes) < 1 || Number(value.customMinutes) > 600)) return t.customMinutesInvalid
-      if (mode === "manual" && (!value.ranges.length || value.ranges.length > 10 || value.ranges.some(({ start, end }) => !start.trim() || !end.trim() || !Number.isFinite(Number(start)) || !Number.isFinite(Number(end)) || Number(start) < 0 || Number(end) <= Number(start)))) return t.rangesInvalid
+      if (!Number.isInteger(value.duration) || value.duration < 15 || value.duration > maxTargetDurationSec) return isDemo ? t.demoDurationHint : t.durationInvalid
+      if (mode === "auto" && maxSourceChoice === "custom" && (!/^\d+$/.test(value.customMinutes) || Number(value.customMinutes) < 1 || Number(value.customMinutes) > maxCustomMinutes)) return isDemo ? t.demoScanHint : t.customMinutesInvalid
+      if (mode === "manual") {
+        const manualLimit = isDemo ? (demoRemainingClips ?? 3) : 10
+        if (isDemo && manualLimit <= 0) return t.demoClipsExhausted
+        if (!value.ranges.length || value.ranges.length > manualLimit || value.ranges.some(({ start, end }) => !start.trim() || !end.trim() || !Number.isFinite(Number(start)) || !Number.isFinite(Number(end)) || Number(start) < 0 || Number(end) <= Number(start))) return t.rangesInvalid
+      }
       return undefined
     } },
     onSubmit: ({ value }) => {
       if (generationLocked.current) return
       setError("")
+      const resolvedMaxSource = maxSourceChoice === "full"
+        ? (isDemo ? 7200 : null)
+        : maxSourceChoice === "custom"
+          ? Math.min(maxCustomMinutes, Number(value.customMinutes)) * 60
+          : Number(maxSourceChoice)
       if (mode === "auto" && reviewFirst) {
-        createPreview.mutate({ ...sourceSettings, url: value.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: value.duration, maxSourceSec: maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(value.customMinutes) * 60 : Number(maxSourceChoice), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) })
+        createPreview.mutate({ ...sourceSettings, url: value.url.trim(), clipCount: isDemo ? 3 : REVIEW_MAX_SELECTABLE, targetDurationSec: value.duration, maxSourceSec: resolvedMaxSource, transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) })
         return
       }
       const body: JobInput = { ...sourceSettings, url: value.url.trim(), mode, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, captionLanguage, transcriptSource, captionStyle: captions ? captionStyle : null, customHashtags: parsedCustomHashtags, targetDurationSec: value.duration, watermark: watermarkRef.current, outro: outroRef.current, ...(mode === "auto" ? { maxSourceSec: selectedMaxSourceSec(), clipCount: value.clipCount, ...(description.trim() ? { description: description.trim() } : {}) } : { ranges: value.ranges.map(({ start, end, title, reason, hookText }) => ({ start: Number(start), end: Number(end), ...(title ? { title } : {}), ...(reason ? { reason } : {}), ...(hookText ? { hookText } : {}) })) }) }
@@ -164,11 +199,12 @@ function Dashboard() {
     },
   })
   const formValues = useSyncExternalStore((onChange) => { const subscription = form.store.subscribe(onChange); return () => subscription.unsubscribe() }, () => form.state.values, () => form.state.values)
-  const maxSelectable = mode === "auto" && reviewFirst
+  const baseMaxSelectable = mode === "auto" && reviewFirst
     ? REVIEW_MAX_SELECTABLE
     : Number.isInteger(formValues.clipCount)
       ? Math.max(1, Math.min(10, formValues.clipCount))
       : 3
+  const maxSelectable = isDemo ? Math.min(baseMaxSelectable, demoRemainingClips ?? 3) : baseMaxSelectable
   const reviewRef = useRef<HTMLDivElement>(null)
   const preview = useQuery({
     queryKey: ["previews", previewId],
@@ -195,21 +231,27 @@ function Dashboard() {
     setReframe(job.reframe)
     setAspectRatio(job.aspectRatio ?? "9:16")
     const sourceLimit = job.maxSourceSec ?? null
-    setMaxSourceChoice(sourceLimit === null ? "full" : [600, 1200, 1800, 3600, 5400].includes(sourceLimit) ? String(sourceLimit) : "custom")
-    form.setFieldValue("customMinutes", sourceLimit !== null && ![600, 1200, 1800, 3600, 5400].includes(sourceLimit) ? String(sourceLimit / 60) : "10")
+    if (isDemo) {
+      const clamped = sourceLimit === null || sourceLimit > 7200 ? 7200 : sourceLimit
+      setMaxSourceChoice(SOURCE_PRESET_SECS.includes(clamped) ? String(clamped) : "custom")
+      form.setFieldValue("customMinutes", !SOURCE_PRESET_SECS.includes(clamped) ? String(Math.min(120, Math.max(1, Math.round(clamped / 60)))) : "10")
+    } else {
+      setMaxSourceChoice(sourceLimit === null ? "full" : SOURCE_PRESET_SECS.includes(sourceLimit) ? String(sourceLimit) : "custom")
+      form.setFieldValue("customMinutes", sourceLimit !== null && !SOURCE_PRESET_SECS.includes(sourceLimit) ? String(sourceLimit / 60) : "10")
+    }
     setCaptions(job.captions)
     setHookBanner(Boolean(job.hookBanner))
     setNormalizeAudio(job.normalizeAudio ?? true)
     setTwoSpeakers(job.aspectRatio === "9:16" && (job.twoSpeakers ?? false))
     setFacecam(job.aspectRatio === "9:16" && (job.facecam ?? false))
-    if (job.clipCount) form.setFieldValue("clipCount", job.clipCount)
-    if (job.targetDurationSec) form.setFieldValue("duration", job.targetDurationSec)
+    if (job.clipCount) form.setFieldValue("clipCount", isDemo ? Math.min(3, job.clipCount) : job.clipCount)
+    if (job.targetDurationSec) form.setFieldValue("duration", isDemo ? Math.min(60, Math.max(15, job.targetDurationSec)) : job.targetDurationSec)
     else form.setFieldValue("duration", 45)
     setDescription(job.description ?? "")
     setPreviousBrief(null)
     setEnhanceError("")
     setCaptionLanguage(isCaptionLanguage(job.captionLanguage) ? job.captionLanguage : "auto")
-    setTranscriptSource(isTranscriptSource(job.transcriptSource) ? job.transcriptSource : DEFAULT_TRANSCRIPT_SOURCE)
+    setTranscriptSource(isDemo ? "youtube" : (isTranscriptSource(job.transcriptSource) ? job.transcriptSource : DEFAULT_TRANSCRIPT_SOURCE))
     setCaptionStyle(job.captionStyle ? normalizeCaptionStyle(job.captionStyle) : { ...DEFAULT_CAPTION_STYLE })
     setCustomHashtagsInput(formatCustomHashtagsInput(job.customHashtags))
     watermarkPrefilled.current = true
@@ -464,18 +506,35 @@ function Dashboard() {
   useEffect(() => { if (hasTerminalJob) { void client.invalidateQueries({ queryKey: ["system", "llm-status"] }); void client.invalidateQueries({ queryKey: ["clips", "recent"] }) } }, [hasTerminalJob, client])
   const createPreview = useMutation({
     mutationFn: (body: import("@/lib/api").SourceSettings & { url: string; description?: string; clipCount?: number; targetDurationSec?: number; maxSourceSec?: number | null; transcriptSource?: TranscriptSource }) => api<{ id: string }>("/previews", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: ({ id }) => { setPreviewExpired(false); setSelectedCandidates([]); setCueRanges([]); setSelectedCueStart(null); setSelectedCueEnd(null); initializedPreview.current = null; setPreviewId(id) },
-    onError: () => { setPreviewId(null); setError(t.apiError) },
+    onSuccess: ({ id }) => {
+      setPreviewExpired(false)
+      setSelectedCandidates([])
+      setCueRanges([])
+      setSelectedCueStart(null)
+      setSelectedCueEnd(null)
+      initializedPreview.current = null
+      setPreviewId(id)
+      void client.invalidateQueries({ queryKey: ["auth", "me"] })
+    },
+    onError: (e: Error) => {
+      const err = e as Partial<ApiError>
+      setPreviewId(null)
+      setError(err.serverMessage || t.apiError)
+    },
   })
   const create = useMutation({
     mutationFn: (body: JobInput) => api<Job>("/jobs", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: (job) => {
       clearReviewDraft()
       void client.invalidateQueries({ queryKey: ["jobs"] })
+      void client.invalidateQueries({ queryKey: ["auth", "me"] })
       void client.invalidateQueries({ queryKey: briefHistoryKey })
       void navigate({ to: "/", search: (previous) => ({ ...previous, job: job.id }) })
     },
-    onError: (e: Error) => setError((e as Error & { status?: number }).status === 401 ? t.error : t.apiError),
+    onError: (e: Error) => {
+      const err = e as Partial<ApiError>
+      setError(err.status === 401 ? t.error : (err.serverMessage || t.apiError))
+    },
   })
   const updateRange = (index: number, field: keyof ClipRange, value: string) => form.setFieldValue("ranges", formValues.ranges.map((item, i) => i === index ? { start: item.start, end: item.end, [field]: value } : item))
   const changeAspectRatio = (value: string) => {
@@ -483,16 +542,20 @@ function Dashboard() {
     setAspectRatio(next)
     if (next !== "9:16") { setSplit(v=>({...v,enabled:false})); setTwoSpeakers(false); setFacecam(false) }
   }
-  const selectedMaxSourceSec = () => maxSourceChoice === "full" ? null : maxSourceChoice === "custom" ? Number(formValues.customMinutes) * 60 : Number(maxSourceChoice)
-  const validCustomMinutes = maxSourceChoice !== "custom" || (/^\d+$/.test(formValues.customMinutes) && Number(formValues.customMinutes) >= 1 && Number(formValues.customMinutes) <= 600)
+  const selectedMaxSourceSec = () => maxSourceChoice === "full" ? (isDemo ? 7200 : null) : maxSourceChoice === "custom" ? Math.min(maxCustomMinutes, Number(formValues.customMinutes)) * 60 : Number(maxSourceChoice)
+  const validCustomMinutes = maxSourceChoice !== "custom" || (/^\d+$/.test(formValues.customMinutes) && Number(formValues.customMinutes) >= 1 && Number(formValues.customMinutes) <= maxCustomMinutes)
   const renderSelected = (selectedRanges: RangePayload[]) => {
     if (generationLocked.current) return
+    if (isDemo && maxSelectable <= 0) {
+      setError(t.demoClipsExhausted)
+      return
+    }
     if (!selectedRanges.length || selectedRanges.length > maxSelectable || selectedRanges.some(({ start, end }) => !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start)) {
       setError(selectedRanges.length > maxSelectable ? t.selectedMomentsOverLimit.replace("{max}", String(maxSelectable)) : t.rangesInvalid)
       return
     }
     const invalidSource = sourceError(formValues.url); if (invalidSource) { setError(invalidSource); return }
-    if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return }
+    if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > maxTargetDurationSec) { setError(isDemo ? t.demoDurationHint : t.durationInvalid); return }
     create.mutate({ ...sourceSettings, url: formValues.url.trim(), mode: "manual", ranges: selectedRanges, clipCount: selectedRanges.length, targetDurationSec: formValues.duration, reframe, captions, hookBanner, normalizeAudio, twoSpeakers, facecam, aspectRatio, captionLanguage, transcriptSource, captionStyle: captions ? captionStyle : null, customHashtags: parsedCustomHashtags, watermark: watermarkRef.current, outro: outroRef.current, ...(description.trim() ? { description: description.trim() } : {}) })
   }
   useEffect(() => {
@@ -741,41 +804,60 @@ function Dashboard() {
       <aside className="relative min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-start-2 lg:row-start-1 lg:flex lg:h-full lg:max-h-full lg:flex-col"><div className="shrink-0 border-b border-border px-4 py-3"><h3 className="font-display text-lg font-medium">{t.settings}</h3></div><div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4"><div className="relative space-y-4">
           {aspectRatio==='9:16'&&<SplitScreenPanel value={splitScreen} summaries={preview.data?.brollSummaries} onChange={next=>{if(next.enabled){setFacecam(false);setTwoSpeakers(false)}setSplit(next)}}/>}
           <Field><FieldLabel>{t.creationMode}</FieldLabel><div className="grid grid-cols-2 gap-1 rounded-md bg-secondary p-1" role="group" aria-label={t.creationMode}><button type="button" className={`inline-flex h-10 items-center justify-center rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${mode === "auto" ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-background/60"}`} aria-pressed={mode === "auto"} onClick={() => setMode("auto")}>{t.autoMode}</button><button type="button" className={`inline-flex h-10 items-center justify-center rounded-sm text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${mode === "manual" ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-background/60"}`} aria-pressed={mode === "manual"} onClick={() => setMode("manual")}>{t.manualMode}</button></div></Field>
-          {mode === "auto" && <Field><FieldLabel htmlFor="source-duration-select">{t.videoDurationScan}</FieldLabel><Select value={maxSourceChoice} onValueChange={setMaxSourceChoice}><SelectTrigger id="source-duration-select" className="h-11 w-full rounded-md"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="full">{t.fullVideo}</SelectItem><SelectItem value="600">{t.tenMinutes}</SelectItem><SelectItem value="1200">{t.twentyMinutes}</SelectItem><SelectItem value="1800">{t.thirtyMinutes}</SelectItem><SelectItem value="3600">{t.sixtyMinutes}</SelectItem><SelectItem value="5400">{t.ninetyMinutes}</SelectItem><SelectItem value="custom">{t.customDuration}</SelectItem></SelectContent></Select><FieldDescription>{t.scanDurationHint}</FieldDescription>{maxSourceChoice === "custom" && <Field className="mt-3"><FieldLabel htmlFor="custom-source-minutes">{t.customMinutesLabel}</FieldLabel><Input id="custom-source-minutes" type="number" min={1} max={600} step={1} inputMode="numeric" value={formValues.customMinutes} aria-invalid={!validCustomMinutes} onChange={(event) => form.setFieldValue("customMinutes", event.target.value)} required className="h-11 rounded-md tabular-nums" />{!validCustomMinutes && <FieldDescription className="text-destructive">{t.customMinutesInvalid}</FieldDescription>}</Field>}</Field>}
+          {mode === "auto" && <Field><FieldLabel htmlFor="source-duration-select">{t.videoDurationScan}</FieldLabel><Select value={maxSourceChoice} onValueChange={setMaxSourceChoice}><SelectTrigger id="source-duration-select" className="h-11 w-full rounded-md"><SelectValue /></SelectTrigger><SelectContent>{!isDemo && <SelectItem value="full">{t.fullVideo}</SelectItem>}<SelectItem value="600">{t.tenMinutes}</SelectItem><SelectItem value="1200">{t.twentyMinutes}</SelectItem><SelectItem value="1800">{t.thirtyMinutes}</SelectItem><SelectItem value="3600">{t.sixtyMinutes}</SelectItem><SelectItem value="5400">{t.ninetyMinutes}</SelectItem><SelectItem value="7200">{t.twoHours}</SelectItem><SelectItem value="custom">{t.customDuration}</SelectItem></SelectContent></Select><FieldDescription>{isDemo ? t.demoScanHint : t.scanDurationHint}</FieldDescription>{maxSourceChoice === "custom" && <Field className="mt-3"><FieldLabel htmlFor="custom-source-minutes">{t.customMinutesLabel}</FieldLabel><Input id="custom-source-minutes" type="number" min={1} max={maxCustomMinutes} step={1} inputMode="numeric" value={formValues.customMinutes} aria-invalid={!validCustomMinutes} onChange={(event) => form.setFieldValue("customMinutes", event.target.value)} required className="h-11 rounded-md tabular-nums" />{!validCustomMinutes && <FieldDescription className="text-destructive">{isDemo ? t.demoScanHint : t.customMinutesInvalid}</FieldDescription>}</Field>}</Field>}
           <Field>
             <FieldLabel id="transcript-source-label">{t.transcriptSource}</FieldLabel>
             <RadioGroup
               aria-labelledby="transcript-source-label"
               aria-describedby="transcript-source-hint"
               value={transcriptSource}
-              onValueChange={(value) => { if (isTranscriptSource(value)) setTranscriptSource(value) }}
+              onValueChange={(value) => {
+                if (!isTranscriptSource(value)) return
+                if (isDemo && value !== "youtube") {
+                  trackUserEvent("locked_feature_clicked", { feature: "live_chat_stt", source: `transcript_${value}` })
+                  toast.info(t.demoSttLocked)
+                  return
+                }
+                setTranscriptSource(value)
+              }}
               className="grid grid-cols-1 gap-1.5 rounded-lg bg-secondary p-1 sm:grid-cols-3"
             >
               {TRANSCRIPT_SOURCES.map((value) => {
                 const Icon = transcriptSourceIcons[value]
+                const lockedOption = isDemo && value !== "youtube"
                 return (
                   <label
                     key={value}
                     htmlFor={`transcript-source-${value}`}
-                    className="group relative flex min-w-0 cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-2 transition-colors sm:flex-col sm:justify-center sm:gap-0.5 sm:px-1.5 sm:text-center has-[:checked]:border-accent/50 has-[:checked]:bg-accent/15 has-[:checked]:shadow-sm has-[[data-state=checked]]:border-accent/50 has-[[data-state=checked]]:bg-accent/15 has-[[data-state=checked]]:shadow-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring hover:bg-card/60"
+                    onClick={lockedOption ? (event) => {
+                      event.preventDefault()
+                      trackUserEvent("locked_feature_clicked", { feature: "live_chat_stt", source: `transcript_${value}` })
+                      toast.info(t.demoSttLocked)
+                    } : undefined}
+                    className={`group relative flex min-w-0 items-center gap-2 rounded-md border border-transparent px-2 py-2 transition-colors sm:flex-col sm:justify-center sm:gap-0.5 sm:px-1.5 sm:text-center has-[:checked]:border-accent/50 has-[:checked]:bg-accent/15 has-[:checked]:shadow-sm has-[[data-state=checked]]:border-accent/50 has-[[data-state=checked]]:bg-accent/15 has-[[data-state=checked]]:shadow-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${lockedOption ? "cursor-not-allowed opacity-55 hover:bg-card/40" : "cursor-pointer hover:bg-card/60"}`}
                   >
                     <RadioGroupItem
                       id={`transcript-source-${value}`}
                       value={value}
+                      disabled={lockedOption}
                       aria-label={t.transcriptSourceOptions[value]}
                       className="sr-only"
                     />
-                    <Icon
-                      aria-hidden="true"
-                      className="mb-0.5 size-4 shrink-0 text-muted-foreground transition-colors group-has-[:checked]:text-accent group-has-[[data-state=checked]]:text-accent"
-                    />
+                    {lockedOption ? (
+                      <Lock aria-hidden="true" className="mb-0.5 size-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <Icon
+                        aria-hidden="true"
+                        className="mb-0.5 size-4 shrink-0 text-muted-foreground transition-colors group-has-[:checked]:text-accent group-has-[[data-state=checked]]:text-accent"
+                      />
+                    )}
                     <span className="min-w-0 space-y-0.5">
                       <span className="block text-xs font-medium leading-tight text-foreground">
                         <span className="sm:hidden">{t.transcriptSourceOptions[value]}</span>
                         <span className="hidden sm:inline">{t.transcriptSourceShort[value]}</span>
                       </span>
                       <span className="block text-[10px] leading-tight text-muted-foreground group-has-[:checked]:text-foreground/80 group-has-[[data-state=checked]]:text-foreground/80">
-                        {t.transcriptSourceSub[value]}
+                        {lockedOption ? t.demoLockedBadge : t.transcriptSourceSub[value]}
                       </span>
                     </span>
                   </label>
@@ -785,7 +867,7 @@ function Dashboard() {
             <FieldDescription id="transcript-source-hint" aria-live="polite" className="text-xs leading-relaxed">
               <span className="font-medium text-foreground">{t.transcriptSourceOptions[transcriptSource]}</span>
               {" — "}
-              {t.transcriptSourceHints[transcriptSource]}
+              {isDemo ? t.demoSttLocked : t.transcriptSourceHints[transcriptSource]}
             </FieldDescription>
           </Field>
            <Field><FieldLabel id="aspect-ratio-label">{t.outputFormat}</FieldLabel><RadioGroup aria-labelledby="aspect-ratio-label" value={aspectRatio} onValueChange={changeAspectRatio} className="grid grid-cols-3 gap-1.5 rounded-lg bg-secondary p-1">{([{ value: "9:16", shape: "h-5 w-3" }, { value: "1:1", shape: "size-4" }, { value: "16:9", shape: "w-6 h-3.5" }] as const).map(({ value, shape }) => <label key={value} htmlFor={`aspect-${value}`} className="group relative flex min-w-0 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-transparent px-1 py-2.5 !transition-none has-[:checked]:border-accent/50 has-[:checked]:bg-accent/15 has-[:checked]:shadow-sm hover:bg-card/60"><RadioGroupItem id={`aspect-${value}`} value={value} className="sr-only"/><span aria-hidden="true" className={`block ${shape} rounded-[3px] border-2 border-muted-foreground group-has-[:checked]:border-accent`}/><span className="font-mono text-xs font-semibold tabular-nums text-foreground">{value}</span></label>)}</RadioGroup><p className="mt-2 truncate text-xs text-muted-foreground">{{ "9:16": t.aspectPortrait, "1:1": t.aspectSquare, "16:9": t.aspectLandscape }[aspectRatio]}</p></Field>
@@ -851,10 +933,11 @@ function Dashboard() {
                         key: "review-first",
                         icon: ListChecks,
                         label: t.reviewMoments,
-                        hint: t.reviewMomentsHint,
+                        hint: isDemo ? t.demoReviewRequired : t.reviewMomentsHint,
                         checked: reviewFirst,
-                        unavailable: false,
+                        unavailable: isDemo,
                         onChange: (checked: boolean) => {
+                          if (isDemo) return
                           setReviewFirst(checked)
                           if (!checked) {
                             setPreviewId(null)
@@ -1253,15 +1336,15 @@ function Dashboard() {
              )}
              <FieldDescription id="custom-hashtags-hint">{parsedCustomHashtags.length > 0 ? t.customHashtagsActiveHint.replace("{count}", String(parsedCustomHashtags.length)) : t.customHashtagsHint}</FieldDescription>
            </Field>
-           {mode === "auto" ? <div className="grid gap-4 sm:grid-cols-2">{!reviewFirst && <Field><FieldLabel htmlFor="clip-count">{t.clipCount}</FieldLabel><Input id="clip-count" type="number" min={1} max={10} step={1} required value={Number.isNaN(formValues.clipCount) ? "" : formValues.clipCount} onChange={(e) => form.setFieldValue("clipCount", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md tabular-nums" /></Field>}<Field className={reviewFirst ? "sm:col-span-2" : undefined}><FieldLabel htmlFor="target-duration">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field><Field className="sm:col-span-2"><div className="flex flex-wrap items-center justify-between gap-2"><FieldLabel htmlFor="clip-description">{t.description}</FieldLabel><div className="flex flex-wrap items-center gap-1.5 sm:gap-2"><span className="text-xs tabular-nums text-muted-foreground">{description.length}/500</span><BriefHistoryMenu brief={description} disabled={locked} onPick={(text) => { setDescription(text.slice(0, 500)); setPreviousBrief(null); setEnhanceError("") }}/><Button type="button" variant="outline" size="sm" className="min-h-9 gap-1 rounded-md px-2 text-xs sm:min-h-7" aria-label={t.enhanceBrief} disabled={description.trim().length < 2 || enhanceBrief.isPending || locked} onClick={() => { setEnhanceError(""); setPreviousBrief(null); enhanceBrief.mutate(description.trim()) }}>{enhanceBrief.isPending ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" /> : <Sparkles aria-hidden="true" className="size-3" />}{enhanceBrief.isPending ? t.enhancingBrief : t.enhanceBrief}</Button></div></div><textarea id="clip-description" maxLength={500} rows={3} value={description} onChange={(e) => { setDescription(e.target.value); setPreviousBrief(null); setEnhanceError("") }} readOnly={enhanceBrief.isPending} placeholder={t.descriptionHint} className="w-full resize-y rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none transition read-only:opacity-70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" />{previousBrief !== null && <div className="mt-1 flex justify-end"><Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setDescription(previousBrief); setPreviousBrief(null) }}>{t.undoEnhance}</Button></div>}{enhanceError && <FieldDescription role="alert" className="text-destructive">{enhanceError}</FieldDescription>}</Field></div> : <div className="space-y-3 rounded-lg border border-border/80 bg-secondary/25 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{t.manualRanges}</p><p className="mt-1 text-xs text-muted-foreground">{t.rangeHint}</p></div><Badge variant="secondary" className="rounded-full font-normal">{formValues.ranges.length}/10</Badge></div><div className="space-y-2">{formValues.ranges.map((_, index) => <div key={index} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-end gap-2 rounded-lg border border-border/70 bg-card p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto]"><span className="pb-3 text-xs font-medium tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><Field className="col-start-2 sm:col-start-auto"><FieldLabel htmlFor={`range-start-${index}`}>{t.startSec}</FieldLabel><Input id={`range-start-${index}`} type="number" min="0" step="any" required aria-label={`${t.startSec} ${index + 1}`} placeholder="0" value={formValues.ranges[index]?.start ?? ""} onChange={(e) => updateRange(index, "start", e.target.value)} className="h-10 rounded-lg" /></Field><Field className="col-start-2 sm:col-start-auto"><FieldLabel htmlFor={`range-end-${index}`}>{t.endSec}</FieldLabel><Input id={`range-end-${index}`} type="number" min="0" step="any" required aria-label={`${t.endSec} ${index + 1}`} placeholder="30" value={formValues.ranges[index]?.end ?? ""} onChange={(e) => updateRange(index, "end", e.target.value)} className="h-10 rounded-lg" /></Field><Button type="button" variant="ghost" size="icon" aria-label={`${t.removeRange} ${index + 1}`} disabled={formValues.ranges.length === 1} onClick={() => form.setFieldValue("ranges", formValues.ranges.filter((_, i) => i !== index))} className="mb-0.5 text-muted-foreground hover:text-destructive col-start-3 row-span-2 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto"><X className="size-4" /></Button></div>)}</div><Button type="button" variant="outline" size="sm" disabled={formValues.ranges.length >= 10} onClick={() => form.setFieldValue("ranges", [...formValues.ranges, { start: "", end: "" }])} className="rounded-lg"><Plus className="size-4" />{t.addRange}</Button></div>}
+           {mode === "auto" ? <div className="grid gap-4 sm:grid-cols-2">{!reviewFirst && <Field><FieldLabel htmlFor="clip-count">{t.clipCount}</FieldLabel><Input id="clip-count" type="number" min={1} max={10} step={1} required value={Number.isNaN(formValues.clipCount) ? "" : formValues.clipCount} onChange={(e) => form.setFieldValue("clipCount", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md tabular-nums" /></Field>}<Field className={reviewFirst ? "sm:col-span-2" : undefined}><FieldLabel htmlFor="target-duration">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration" type="number" min={15} max={maxTargetDurationSec} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div>{isDemo && <FieldDescription>{t.demoDurationHint}</FieldDescription>}</Field><Field className="sm:col-span-2"><div className="flex flex-wrap items-center justify-between gap-2"><FieldLabel htmlFor="clip-description">{t.description}</FieldLabel><div className="flex flex-wrap items-center gap-1.5 sm:gap-2"><span className="text-xs tabular-nums text-muted-foreground">{description.length}/500</span><BriefHistoryMenu brief={description} disabled={locked} onPick={(text) => { setDescription(text.slice(0, 500)); setPreviousBrief(null); setEnhanceError("") }}/><Button type="button" variant="outline" size="sm" className="min-h-9 gap-1 rounded-md px-2 text-xs sm:min-h-7" aria-label={t.enhanceBrief} disabled={description.trim().length < 2 || enhanceBrief.isPending || locked} onClick={() => { setEnhanceError(""); setPreviousBrief(null); enhanceBrief.mutate(description.trim()) }}>{enhanceBrief.isPending ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" /> : <Sparkles aria-hidden="true" className="size-3" />}{enhanceBrief.isPending ? t.enhancingBrief : t.enhanceBrief}</Button></div></div><textarea id="clip-description" maxLength={500} rows={3} value={description} onChange={(e) => { setDescription(e.target.value); setPreviousBrief(null); setEnhanceError("") }} readOnly={enhanceBrief.isPending} placeholder={t.descriptionHint} className="w-full resize-y rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none transition read-only:opacity-70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" />{previousBrief !== null && <div className="mt-1 flex justify-end"><Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setDescription(previousBrief); setPreviousBrief(null) }}>{t.undoEnhance}</Button></div>}{enhanceError && <FieldDescription role="alert" className="text-destructive">{enhanceError}</FieldDescription>}</Field></div> : <div className="space-y-3 rounded-lg border border-border/80 bg-secondary/25 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{t.manualRanges}</p><p className="mt-1 text-xs text-muted-foreground">{t.rangeHint}</p></div><Badge variant="secondary" className="rounded-full font-normal">{formValues.ranges.length}/10</Badge></div><div className="space-y-2">{formValues.ranges.map((_, index) => <div key={index} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-end gap-2 rounded-lg border border-border/70 bg-card p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto]"><span className="pb-3 text-xs font-medium tabular-nums text-muted-foreground">{String(index + 1).padStart(2, "0")}</span><Field className="col-start-2 sm:col-start-auto"><FieldLabel htmlFor={`range-start-${index}`}>{t.startSec}</FieldLabel><Input id={`range-start-${index}`} type="number" min="0" step="any" required aria-label={`${t.startSec} ${index + 1}`} placeholder="0" value={formValues.ranges[index]?.start ?? ""} onChange={(e) => updateRange(index, "start", e.target.value)} className="h-10 rounded-lg" /></Field><Field className="col-start-2 sm:col-start-auto"><FieldLabel htmlFor={`range-end-${index}`}>{t.endSec}</FieldLabel><Input id={`range-end-${index}`} type="number" min="0" step="any" required aria-label={`${t.endSec} ${index + 1}`} placeholder="30" value={formValues.ranges[index]?.end ?? ""} onChange={(e) => updateRange(index, "end", e.target.value)} className="h-10 rounded-lg" /></Field><Button type="button" variant="ghost" size="icon" aria-label={`${t.removeRange} ${index + 1}`} disabled={formValues.ranges.length === 1} onClick={() => form.setFieldValue("ranges", formValues.ranges.filter((_, i) => i !== index))} className="mb-0.5 text-muted-foreground hover:text-destructive col-start-3 row-span-2 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto"><X className="size-4" /></Button></div>)}</div><Button type="button" variant="outline" size="sm" disabled={formValues.ranges.length >= 10} onClick={() => form.setFieldValue("ranges", [...formValues.ranges, { start: "", end: "" }])} className="rounded-lg"><Plus className="size-4" />{t.addRange}</Button></div>}
 
-          {mode === "manual" && <Field><FieldLabel htmlFor="target-duration-manual">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration-manual" type="number" min={15} max={180} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div></Field>}
+          {mode === "manual" && <Field><FieldLabel htmlFor="target-duration-manual">{t.duration}</FieldLabel><div className="relative"><Input id="target-duration-manual" type="number" min={15} max={maxTargetDurationSec} step={1} required value={Number.isNaN(formValues.duration) ? "" : formValues.duration} onChange={(e) => form.setFieldValue("duration", e.target.value === "" ? Number.NaN : Number(e.target.value))} className="h-11 rounded-md pr-14 tabular-nums" /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{t.seconds}</span></div>{isDemo && <FieldDescription>{t.demoDurationHint}</FieldDescription>}</Field>}
       </div></div>
         <div className="shrink-0 border-t border-border bg-card/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur lg:sticky lg:bottom-0 lg:pb-3 supports-[backdrop-filter]:bg-card/80">{error && <Alert variant="destructive" className="mb-3"><AlertDescription>{error}</AlertDescription></Alert>}<div className="flex flex-col items-stretch gap-3"><div className="min-w-0"><p className="text-xs leading-5 text-muted-foreground">{mode === "auto" ? (reviewFirst ? t.reviewSummary.replace("{duration}", Number.isFinite(formValues.duration) ? String(formValues.duration) : "—").replace("{max}", String(REVIEW_MAX_SELECTABLE)) : t.autoSummary.replace("{count}", String(formValues.clipCount)).replace("{duration}", String(formValues.duration))) : t.manualSummary.replace("{count}", String(formValues.ranges.length))}</p>{mode === "auto" && <LlmStatus compact prominent jobStatus={jobs.data?.find((job) => ["done", "failed", "cancelled"].includes(job.status))?.status}/>}</div>{blockingJob && <div role="status" className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-xs leading-5 text-foreground"><LoaderCircle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent motion-reduce:animate-none"/><span className="min-w-0">{blockingHint}{blockingJob.id !== selectedJobId && <> <Link to="/" search={(previous) => ({ ...previous, job: blockingJob.id })} className="font-medium text-accent underline-offset-2 hover:underline">{t.viewProgress}</Link></>}</span></div>}{splitScreen.enabled && !splitScreen.clips.length && <p role="status" className="text-xs text-muted-foreground">{st.need}</p>}<Button type="submit" className="h-11 w-full shrink-0 rounded-md px-4" aria-busy={submitting} disabled={locked}>{submitting || blockingJob ? <LoaderCircle aria-hidden="true" className="mr-2 size-4 animate-spin motion-reduce:animate-none"/> : <ArrowUpRight className="mr-2 size-4"/>}{create.isPending || blockingJob ? t.generatingClips : reviewFirst && mode === "auto" ? t.startReview : mode === "auto" ? t.generateClips.replace("{count}", String(formValues.clipCount)) : t.generateManualClips.replace("{count}", String(formValues.ranges.length))}</Button></div></div>
       </aside>
     </form>
-    <section aria-labelledby="results-heading" className="mt-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-span-2 lg:row-start-2"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3"><div><h3 id="results-heading" className="font-display text-lg font-medium">{t.results}</h3></div>{resultJob && <div className="flex flex-wrap items-center gap-2">{resultActiveClips.length > 0 && <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => setBatchScheduleOpen(true)}><CalendarClock aria-hidden="true" className="size-3.5" />{t.scheduleBatch}</Button>}<Link to="/jobs/$jobId" params={{ jobId: resultJob.id }} className="inline-flex min-h-10 items-center gap-2 text-xs text-muted-foreground hover:text-foreground">{t.openFullJob}<ArrowUpRight className="size-4"/></Link></div>}</div><div className="space-y-4 p-4">
-      {reviewFirst && mode === "auto" && <ReviewPanel key={previewId} splitScreen={splitScreen} preview={preview.data} loading={createPreview.isPending || (!!previewId && preview.isPending) || preview.data?.status === "queued" || preview.data?.status === "running"} error={previewExpired ? t.previewExpired : createPreview.isError || preview.isError || preview.data?.status === "failed" ? preview.data?.error || t.previewFailed : ""} t={t} maxSelectable={maxSelectable} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} selectedCueStart={selectedCueStart} setSelectedCueStart={setSelectedCueStart} selectedCueEnd={selectedCueEnd} setSelectedCueEnd={setSelectedCueEnd} cueRanges={cueRanges} setCueRanges={setCueRanges} createPending={locked} renderSelected={renderSelected} retry={() => { setError(""); const invalidSource = sourceError(formValues.url); if (invalidSource) { setError(invalidSource); return } if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > 180) { setError(t.durationInvalid); return } if (!validCustomMinutes) { setError(t.customMinutesInvalid); return } createPreview.mutate({ ...sourceSettings, url: formValues.url.trim(), clipCount: REVIEW_MAX_SELECTABLE, targetDurationSec: formValues.duration, maxSourceSec: selectedMaxSourceSec(), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) }) }} reviewRef={reviewRef} />}
+    <section aria-labelledby="results-heading" className="mt-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card lg:col-span-2 lg:row-start-2"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3"><div><h3 id="results-heading" className="font-display text-lg font-medium">{t.results}</h3></div>{resultJob && <div className="flex flex-wrap items-center gap-2">{resultActiveClips.length > 0 && <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => { if (isDemo) { trackUserEvent("locked_feature_clicked", { feature: "batch_schedule", source: "studio_results" }); toast.info(t.demoPublishLocked); return } setBatchScheduleOpen(true) }}>{isDemo ? <Lock aria-hidden="true" className="size-3.5" /> : <CalendarClock aria-hidden="true" className="size-3.5" />}{t.scheduleBatch}</Button>}<Link to="/jobs/$jobId" params={{ jobId: resultJob.id }} className="inline-flex min-h-10 items-center gap-2 text-xs text-muted-foreground hover:text-foreground">{t.openFullJob}<ArrowUpRight className="size-4"/></Link></div>}</div><div className="space-y-4 p-4">
+      {reviewFirst && mode === "auto" && <ReviewPanel key={previewId} splitScreen={splitScreen} preview={preview.data} loading={createPreview.isPending || (!!previewId && preview.isPending) || preview.data?.status === "queued" || preview.data?.status === "running"} error={previewExpired ? t.previewExpired : createPreview.isError || preview.isError || preview.data?.status === "failed" ? preview.data?.error || t.previewFailed : ""} t={t} maxSelectable={maxSelectable} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} selectedCueStart={selectedCueStart} setSelectedCueStart={setSelectedCueStart} selectedCueEnd={selectedCueEnd} setSelectedCueEnd={setSelectedCueEnd} cueRanges={cueRanges} setCueRanges={setCueRanges} createPending={locked} renderSelected={renderSelected} retry={() => { setError(""); const invalidSource = sourceError(formValues.url); if (invalidSource) { setError(invalidSource); return } if (!Number.isInteger(formValues.duration) || formValues.duration < 15 || formValues.duration > maxTargetDurationSec) { setError(isDemo ? t.demoDurationHint : t.durationInvalid); return } if (!validCustomMinutes) { setError(isDemo ? t.demoScanHint : t.customMinutesInvalid); return } createPreview.mutate({ ...sourceSettings, url: formValues.url.trim(), clipCount: isDemo ? 3 : REVIEW_MAX_SELECTABLE, targetDurationSec: formValues.duration, maxSourceSec: selectedMaxSourceSec(), transcriptSource, ...(description.trim() ? { description: description.trim() } : {}) }) }} reviewRef={reviewRef} />}
       {selectedJobId && selectedJob.isPending ? <div role="status" className="flex items-center gap-3 py-5 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin text-primary"/>{t.loading}</div> : selectedJob.isError ? <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center justify-between gap-3"><span>{t.apiError}</span><Button variant="outline" onClick={() => selectedJob.refetch()}>{t.retry}</Button></AlertDescription></Alert> : resultJob ? resultJob.status === "failed" || resultJob.status === "cancelled" ? <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-destructive/25 bg-destructive/5 p-4"><div className="flex min-w-0 gap-3"><CircleAlert className="mt-0.5 size-5 shrink-0 text-destructive"/><div><p className="font-medium">{t.status[resultJob.status]}</p><p className="mt-1 break-words text-sm text-muted-foreground">{resultJob.error || t.jobFailedFallback}</p></div></div><Button className="min-h-11" disabled={retryJob.isPending} onClick={() => retryJob.mutate()}>{retryJob.isPending && <LoaderCircle className="mr-2 size-4 animate-spin"/>}{t.retryJobInline}</Button></div> : <JobAssembly job={resultJob} t={t} layout="carousel"/>
       : activeJobs.length || failedJobs.length ? <div className="grid gap-3 md:grid-cols-2">{[...activeJobs, ...failedJobs].map((job) => <Link key={job.id} to="/" search={(previous) => ({ ...previous, job: job.id })} className="min-w-0 rounded-lg border border-border p-3 transition-colors hover:bg-secondary/40"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{job.primarySource?.label || sourceLabel(job.url)}</span><span className="text-xs text-muted-foreground">{job.status === "running" && job.stage ? t.stages[job.stage] : t.status[job.status]}</span></div><div className="mt-3 h-1 overflow-hidden rounded-full bg-secondary"><span className="block h-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }}/></div></Link>)}</div> : <div className="grid min-h-28 place-items-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">{t.generatedAppear}</div>}
       </div></section>

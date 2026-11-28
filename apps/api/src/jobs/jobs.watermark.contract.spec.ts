@@ -76,7 +76,7 @@ test('job response & SSE menyertakan watermark; retry membawa watermark lama', a
   assert.match(settings, /watermarkId, x, y, scale, opacity, chromaKey/);
   assert.match(settings, /chromaKey !== undefined \? \{ chromaKey \}/);
   assert.doesNotMatch(settings, /filePath|mimeType/);
-  assert.match(retry, /return this\.create\(dto, userId\);/);
+  assert.match(retry, /return this\.create\(dto, userId(?:, role)?\);/);
 });
 
 test('spec watermark terdaftar di script test api', async () => {

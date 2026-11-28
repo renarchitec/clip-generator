@@ -58,7 +58,7 @@ function SettingsPage() {
         <section aria-labelledby="watermark-library-heading">
           <div className="mb-4">
             <h3 id="watermark-library-heading" className="font-display text-lg font-medium tracking-[-.02em]">{t.watermarkLibrary}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{t.watermarkLibraryIntro}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{t.watermarkLibraryIntro}{user.role === "demo" ? ` ${t.demoAssetHint.replace("{watermarks}", "2").replace("{outros}", "1")}` : ""}</p>
           </div>
           <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
             <WatermarkManager selectedId={null} onSelect={() => {}} />
@@ -67,7 +67,7 @@ function SettingsPage() {
         <section aria-labelledby="outro-library-heading">
           <div className="mb-4">
             <h3 id="outro-library-heading" className="font-display text-lg font-medium tracking-[-.02em]">{t.outroLibrary}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{t.outroLibraryIntro}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{t.outroLibraryIntro}{user.role === "demo" ? ` ${t.demoAssetHint.replace("{watermarks}", "2").replace("{outros}", "1")}` : ""}</p>
           </div>
           <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
             <OutroManager />

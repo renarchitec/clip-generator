@@ -9,6 +9,8 @@ const envSchema = z.object({
   PUBLIC_WEB_URL: z.string().url().default('https://clipper.rencraft.site'),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_AUTH_CLIENT_ID: z.string().optional(),
+  GOOGLE_AUTH_CLIENT_SECRET: z.string().optional(),
   TIKTOK_CLIENT_KEY: z.string().optional(),
   TIKTOK_CLIENT_SECRET: z.string().optional(),
   TIKTOK_ENABLE_VIDEO_LIST: z.string().optional(),
@@ -20,6 +22,9 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((val) => val === 'true'),
+  REGISTRATION_DEFAULT_ROLE: z.enum(['demo', 'member']).default('demo'),
+  DEMO_DAILY_JOB_LIMIT: z.coerce.number().int().min(1).max(10000).default(30),
+  REGISTER_IP_DAILY_LIMIT: z.coerce.number().int().min(1).max(1000).default(5),
 });
 
 export type Env = z.infer<typeof envSchema>;

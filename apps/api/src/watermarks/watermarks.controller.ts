@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { WATERMARK_VIDEO_MAX_BYTES } from './watermark-helpers';
 import { WatermarksService } from './watermarks.service';
@@ -40,9 +41,9 @@ export class WatermarksController {
   upload(
     @UploadedFile() file: UploadedImage | undefined,
     @Body() body: { name?: string },
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.watermarks.upload(file, body?.name, user.id);
+    return this.watermarks.upload(file, body?.name, user.id, user.role);
   }
 
   @Get()

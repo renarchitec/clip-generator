@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { OUTRO_MAX_BYTES } from './outro-helpers';
 import { OutrosService } from './outros.service';
@@ -40,9 +41,9 @@ export class OutrosController {
   upload(
     @UploadedFile() file: UploadedVideo | undefined,
     @Body() body: { name?: string },
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.outros.upload(file, body?.name, user.id);
+    return this.outros.upload(file, body?.name, user.id, user.role);
   }
 
   @Get()

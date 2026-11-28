@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
@@ -9,8 +9,10 @@ import type {
   PreviewJobResult,
   PreviewResponse,
   PreviewStatus,
+  UserRole,
 } from '@clipper/shared';
 import { DEFAULT_ASPECT, DEFAULT_TRANSCRIPT_SOURCE } from '@clipper/shared';
+import { DemoService } from '../demo/demo.service';
 import { PREVIEW_QUEUE_NAME } from '../queue/queue.constants';
 import { normalizeDescription } from '../jobs/validation';
 import { MediaResolverService } from '../media/media-resolver.service';
@@ -25,9 +27,19 @@ export class PreviewsService {
     @InjectQueue(PREVIEW_QUEUE_NAME)
     private readonly queue: Queue<PreviewJobData>,
     private readonly mediaResolver: MediaResolverService,
+    @Optional() private readonly demo?: DemoService,
   ) {}
 
-  async create(dto: CreatePreviewDto, userId: string) {
+  async create(dto: CreatePreviewDto, userId: string, role?: UserRole) {
+    const transcriptSource = dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE;
+    const allowed = this.demo
+      ? await this.demo.assertPreviewAllowed(userId, role, {
+          transcriptSource,
+          maxSourceSec: dto.maxSourceSec ?? null,
+          targetDurationSec: dto.targetDurationSec,
+        })
+      : { maxSourceSec: dto.maxSourceSec ?? null };
+
     const id = randomUUID();
     const aspectRatio = dto.aspectRatio ?? DEFAULT_ASPECT;
     const { url, primarySource } = await this.mediaResolver.resolvePrimarySource(userId, dto.url, dto.primarySource);
@@ -38,12 +50,12 @@ export class PreviewsService {
       url,
       primarySource,
       splitScreen,
-      transcriptSource: dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE,
+      transcriptSource,
       userId,
       description: normalizeDescription(dto.description),
       clipCount: dto.clipCount,
       targetDurationSec: dto.targetDurationSec,
-      maxSourceSec: dto.maxSourceSec ?? null,
+      maxSourceSec: allowed.maxSourceSec,
     };
 
     await this.queue.add('preview', data, {
@@ -51,6 +63,11 @@ export class PreviewsService {
       attempts: 1,
       removeOnComplete: { age: PREVIEW_TTL_SECONDS },
       removeOnFail: { age: PREVIEW_TTL_SECONDS },
+    });
+
+    await this.demo?.recordEvent(userId, 'preview_created', {
+      maxSourceSec: data.maxSourceSec,
+      transcriptSource,
     });
 
     return { id };

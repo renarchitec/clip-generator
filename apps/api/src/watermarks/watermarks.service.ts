@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { UserRole } from '@clipper/shared';
 import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { AppConfig } from '../config/app-config.service';
+import { DemoService } from '../demo/demo.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   parseWatermarkList,
@@ -32,9 +34,10 @@ export class WatermarksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
+    @Optional() private readonly demo?: DemoService,
   ) {}
 
-  async upload(file: { buffer: Buffer; originalname: string; size: number } | undefined, rawName: unknown, userId: string) {
+  async upload(file: { buffer: Buffer; originalname: string; size: number } | undefined, rawName: unknown, userId: string, role?: UserRole) {
     if (!file) throw new BadRequestException('Field file wajib diisi.');
     const mimeType = sniffWatermarkMime(file.buffer);
     if (!mimeType) throw new BadRequestException('File harus berupa gambar (PNG, JPEG, WebP) atau video (MP4, WebM, MOV) yang valid.');
@@ -50,8 +53,17 @@ export class WatermarksService {
       throw new BadRequestException('Durasi video watermark harus antara 0,2 dan 30 detik.');
     }
 
+    const maxWatermarks = this.demo
+      ? this.demo.watermarkLimitForRole(role, WATERMARK_MAX_PER_USER)
+      : WATERMARK_MAX_PER_USER;
     const count = await this.prisma.watermark.count({ where: { userId } });
-    if (count >= WATERMARK_MAX_PER_USER) throw new BadRequestException('Maksimal 20 watermark per pengguna.');
+    if (count >= maxWatermarks) {
+      throw new BadRequestException(
+        role === 'demo'
+          ? `Mode demo maksimal menyimpan ${maxWatermarks} watermark.`
+          : `Maksimal ${WATERMARK_MAX_PER_USER} watermark per pengguna.`,
+      );
+    }
 
     const id = randomUUID();
     const filePath = `watermarks/${userId}/${id}.${WATERMARK_EXT[mimeType]}`;

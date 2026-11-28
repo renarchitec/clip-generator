@@ -18,7 +18,7 @@ test('endpoint POST /api/jobs/:id/retry ada di controller', async () => {
   );
 
   assert.match(controller, /@Post\(':id\/retry'\)/);
-  assert.match(controller, /this\.jobs\.retry\(id, user\.id\)/);
+  assert.match(controller, /this\.jobs\.retry\(id, user\.id(?:, user\.role)?\)/);
 });
 
 test('retry: cek kepemilikan via findOne(id, userId)', async () => {
@@ -78,7 +78,7 @@ test('retry: job baru dibuat lewat this.create (tanpa duplikasi payload antrean)
   );
 
   const body = service.slice(service.indexOf('async retry('));
-  assert.match(body, /return this\.create\(dto, userId\)/);
+  assert.match(body, /return this\.create\(dto, userId(?:, role)?\)/);
   // Job lama tidak diubah: di dalam retry tidak boleh ada prisma.job.update.
   const retryOnly = body.slice(0, body.indexOf('async snapshot('));
   assert.doesNotMatch(retryOnly, /prisma\.job\.update/);

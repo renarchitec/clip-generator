@@ -634,3 +634,136 @@ export interface BulkRefreshMetricsResponse {
 export type PublishJobData =
   | { publicationId: string; kind: 'upload' | 'check'; checks?: number }
   | { kind: 'sync-metrics' };
+
+export const USER_ROLES = ['admin', 'member', 'demo'] as const;
+export type UserRole = (typeof USER_ROLES)[number];
+
+export const DEMO_CONTENT_TYPES = [
+  'gaming',
+  'podcast',
+  'sport',
+  'comedy',
+  'education',
+  'other',
+] as const;
+export type DemoContentType = (typeof DEMO_CONTENT_TYPES)[number];
+
+export const USER_EVENT_TYPES = [
+  'registered',
+  'preview_created',
+  'job_created',
+  'clip_downloaded',
+  'locked_feature_clicked',
+  'desktop_cta_clicked',
+] as const;
+export type UserEventType = (typeof USER_EVENT_TYPES)[number];
+
+export const LOCKED_DEMO_FEATURES = [
+  'publish',
+  'social',
+  'live_chat_stt',
+  'batch_schedule',
+] as const;
+export type LockedDemoFeature = (typeof LOCKED_DEMO_FEATURES)[number];
+
+/** Batasan terpusat untuk akun demo di platform web. */
+export const DEMO_LIMITS = {
+  maxClipsTotal: 3,
+  maxJobsTotal: 2,
+  maxActiveJobs: 1,
+  maxClipsPerJob: 3,
+  maxTargetDurationSec: 60,
+  /** Toleransi durasi satu rentang manual pada mode demo (detik). */
+  maxRangeDurationSec: 75,
+  /** Maksimal durasi video sumber yang dipindai pada mode demo (120 menit). */
+  maxSourceSec: 7200,
+  maxPreviewsTotal: 3,
+  maxWatermarks: 2,
+  maxOutros: 1,
+  allowedTranscriptSources: ['youtube'] as readonly TranscriptSource[],
+  lockedFeatures: ['publish', 'social', 'live_chat_stt'] as readonly ('publish' | 'social' | 'live_chat_stt')[],
+} as const;
+
+export interface DemoQuotaSummary {
+  clipsUsed: number;
+  clipsLimit: number;
+  jobsUsed: number;
+  jobsLimit: number;
+  activeJobs: number;
+  maxActiveJobs: number;
+  previewsUsed: number;
+  previewsLimit: number;
+  maxSourceSec: number;
+  maxTargetDurationSec: number;
+  maxWatermarks: number;
+  maxOutros: number;
+  allowedTranscriptSources: readonly TranscriptSource[];
+  lockedFeatures: readonly ('publish' | 'social' | 'live_chat_stt')[];
+}
+
+export interface AuthConfigResponse {
+  registrationOpen: boolean;
+  googleAuthEnabled: boolean;
+  defaultRole: Exclude<UserRole, 'admin'>;
+}
+
+export interface AdminOverviewResponse {
+  kpis: {
+    totalUsers: number;
+    demoUsers: number;
+    memberUsers: number;
+    adminUsers: number;
+    signupsToday: number;
+    signupsLast7d: number;
+    googleSignups: number;
+    emailSignups: number;
+    activeDemoUsers7d: number;
+    totalPreviews: number;
+    totalJobs: number;
+    totalClips: number;
+    totalDownloads: number;
+  };
+  dailyDemoCap: {
+    used: number;
+    limit: number;
+  };
+  funnel: {
+    registered: number;
+    previewed: number;
+    generatedJob: number;
+    downloadedClip: number;
+    clickedLockedFeature: number;
+  };
+  sources: { source: string; count: number }[];
+  contentTypes: { contentType: string; count: number }[];
+  lockedFeatures: { feature: string; count: number }[];
+}
+
+export interface AdminUserRow {
+  id: string;
+  email: string;
+  name: string | null;
+  role: UserRole;
+  authProvider: string;
+  avatarUrl: string | null;
+  signupSource: string | null;
+  utmSource: string | null;
+  utmCampaign: string | null;
+  contentType: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  usage: {
+    jobs: number;
+    clips: number;
+    previews: number;
+    downloads: number;
+    lockedClicks: number;
+  };
+}
+
+export interface AdminUsersResponse {
+  items: AdminUserRow[];
+  total: number;
+  page: number;
+  limit: number;
+}

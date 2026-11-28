@@ -4,6 +4,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { JobStatus, Prisma } from '@prisma/client';
@@ -20,6 +21,7 @@ import type {
   SplitScreenConfig,
   ReframeMode,
   TranscriptSource,
+  UserRole,
 } from '@clipper/shared';
 import {
   DEFAULT_ASPECT,
@@ -32,6 +34,7 @@ import {
 import { BriefHistoryService } from '../briefs/brief-history.service';
 import { resolveClipPath } from '../clips/clip-path';
 import { CLIP_PUBLICATION_SELECT } from '../clips/clip-publications';
+import { DemoService } from '../demo/demo.service';
 import { latestPerAccount } from '../publish/publish-helpers';
 import { AppConfig } from '../config/app-config.service';
 import { MediaResolverService } from '../media/media-resolver.service';
@@ -72,10 +75,22 @@ export class JobsService {
     private readonly briefHistory: BriefHistoryService,
     @InjectQueue(QUEUE_NAME) private readonly queue: Queue<JobData>,
     private readonly mediaResolver: MediaResolverService,
+    @Optional() private readonly demo?: DemoService,
   ) {}
 
-  async create(dto: CreateJobDto, userId: string) {
+  async create(dto: CreateJobDto, userId: string, role?: UserRole) {
     const ranges = normalizeRanges(dto);
+    const transcriptSource = dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE;
+
+    if (this.demo) {
+      await this.demo.assertJobAllowed(userId, role, {
+        mode: dto.mode,
+        transcriptSource,
+        targetDurationSec: dto.targetDurationSec,
+        ranges,
+      });
+    }
+
     const description =
       dto.mode === 'auto' ? normalizeDescription(dto.description) : null;
     const reframe = dto.reframe ?? DEFAULT_REFRAME;
@@ -89,7 +104,6 @@ export class JobsService {
       aspectRatio, twoSpeakers: dto.twoSpeakers, facecam: dto.facecam,
     });
     const captionLanguage = dto.captionLanguage ?? DEFAULT_CAPTION_LANGUAGE;
-    const transcriptSource = dto.transcriptSource ?? DEFAULT_TRANSCRIPT_SOURCE;
     const customHashtags = normalizeCustomHashtags(dto.customHashtags);
     // twoSpeakers hanya berlaku untuk 9:16; dinormalisasi false untuk 1:1/16:9.
     const twoSpeakers = aspectRatio === '9:16' ? (dto.twoSpeakers ?? false) : false;
@@ -216,6 +230,15 @@ export class JobsService {
       );
     }
 
+    await this.demo?.recordEvent(userId, 'job_created', {
+      jobId: job.id,
+      mode: dto.mode,
+      clipCount: dto.mode === 'manual' ? ranges.length : dto.clipCount,
+    });
+    if (role === 'demo') {
+      await this.demo?.recordDemoJobCreated();
+    }
+
     return job;
   }
 
@@ -306,7 +329,7 @@ export class JobsService {
    * create yang sama: validasi, normalisasi, dan payload antrean tidak diduplikasi.
    * Job lama tidak diubah.
    */
-  async retry(id: string, userId: string) {
+  async retry(id: string, userId: string, role?: UserRole) {
     const old = await this.findOne(id, userId);
 
     if (
@@ -348,7 +371,7 @@ export class JobsService {
     })));
     dto.outro = (old.outro as StoredOutro | null) ?? null;
 
-    return this.create(dto, userId);
+    return this.create(dto, userId, role);
   }
 
   async snapshot(id: string, userId: string): Promise<JobSnapshot> {

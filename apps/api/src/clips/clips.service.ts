@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createReadStream } from 'node:fs';
 import { rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Response } from 'express';
 import { JobStatus, type Clip } from '@prisma/client';
 import { AppConfig } from '../config/app-config.service';
+import { DemoService } from '../demo/demo.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { latestPerAccount } from '../publish/publish-helpers';
 import { sanitizePlatformCaptions } from '../queue/clip-social';
@@ -30,6 +31,7 @@ export class ClipsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
+    @Optional() private readonly demo?: DemoService,
   ) {}
 
   /**
@@ -114,6 +116,8 @@ export class ClipsService {
         data: { downloadedAt: new Date() },
       });
     }
+
+    await this.demo?.recordEvent(userId, 'clip_downloaded', { clipId: id });
 
     const filename = buildFilename(clip);
 

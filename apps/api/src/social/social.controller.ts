@@ -9,8 +9,10 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import type { SocialPlatform } from '@clipper/shared';
+import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AppConfig } from '../config/app-config.service';
+import { DemoService } from '../demo/demo.service';
 import { buildSettingsRedirect } from './oauth';
 import { SocialProviderError } from './social-provider';
 import { SocialService } from './social.service';
@@ -20,6 +22,7 @@ export class SocialController {
   constructor(
     private readonly social: SocialService,
     private readonly config: AppConfig,
+    private readonly demo: DemoService,
   ) {}
 
   @Get('providers')
@@ -28,7 +31,8 @@ export class SocialController {
   }
 
   @Get('accounts')
-  accounts(@CurrentUser() user: { id: string }) {
+  accounts(@CurrentUser() user: AuthUser) {
+    if (user.role === 'demo') return [];
     return this.social.listAccounts(user.id);
   }
 
@@ -36,53 +40,59 @@ export class SocialController {
   @HttpCode(204)
   async removeAccount(
     @Param('id') id: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
   ): Promise<void> {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     await this.social.removeAccount(id, user.id);
   }
 
   @Get('accounts/:id/tiktok/creator-info')
   tiktokCreatorInfo(
     @Param('id') id: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
   ) {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     return this.social.tiktokCreatorInfo(id, user.id);
   }
 
   @Get('youtube/connect')
   youtubeConnect(
     @Res() res: Response,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
   ): Promise<void> {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     return this.connect(res, user.id, 'youtube');
   }
 
   @Get('youtube/callback')
   youtubeCallback(
     @Res() res: Response,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
     @Query('code') code?: string,
     @Query('state') state?: string,
   ): Promise<void> {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     return this.callback(res, user.id, 'youtube', code, state);
   }
 
   @Get('tiktok/connect')
   tiktokConnect(
     @Res() res: Response,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
   ): Promise<void> {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     return this.connect(res, user.id, 'tiktok');
   }
 
   @Get('tiktok/callback')
   tiktokCallback(
     @Res() res: Response,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
     @Query('code') code?: string,
     @Query('state') state?: string,
     @Query('error') providerError?: string,
   ): Promise<void> {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     // TikTok mengirim ?error=access_denied bila pengguna menolak.
     if (providerError) {
       this.redirectError(res, new SocialProviderError('access_denied'), 'oauth_failed');
@@ -94,19 +104,21 @@ export class SocialController {
   @Get('instagram/connect')
   instagramConnect(
     @Res() res: Response,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
   ): Promise<void> {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     return this.connect(res, user.id, 'instagram');
   }
 
   @Get('instagram/callback')
   instagramCallback(
     @Res() res: Response,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthUser,
     @Query('code') code?: string,
     @Query('state') state?: string,
     @Query('error') providerError?: string,
   ): Promise<void> {
+    this.demo.assertPublishOrSocialAllowed(user.role);
     // Instagram mengirim ?error=access_denied bila pengguna menolak.
     if (providerError) {
       const code =

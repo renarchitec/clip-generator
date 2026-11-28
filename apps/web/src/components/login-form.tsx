@@ -8,17 +8,17 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input"
 import { useT } from "@/lib/i18n"
 
-type Props = Omit<React.ComponentProps<"div">, "onSubmit"> & { title: string; description: string; emailLabel: string; passwordLabel: string; submitLabel: string; footer: React.ReactNode; error?: string; pending?: boolean; onSubmit: (values: { email: string; password: string }) => void }
+type Props = Omit<React.ComponentProps<"div">, "onSubmit"> & { title: string; description: string; emailLabel: string; passwordLabel: string; submitLabel: string; footer: React.ReactNode; topSlot?: React.ReactNode; error?: string; pending?: boolean; onSubmit: (values: { email: string; password: string }) => void }
 type Values = { email: string; password: string }
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-export function LoginForm({ className, title, description, emailLabel, passwordLabel, submitLabel, footer, error, pending, onSubmit, ...props }: Props) {
+export function LoginForm({ className, title, description, emailLabel, passwordLabel, submitLabel, footer, topSlot, error, pending, onSubmit, ...props }: Props) {
   const t = useT()
   const form = useForm({
     defaultValues: { email: "", password: "" } as Values,
     onSubmit: ({ value }) => onSubmit(value),
   })
-  return <div className={cn("flex flex-col gap-6", className)} {...props}><Card className="rounded-lg border-border bg-card shadow-none"><CardHeader className="space-y-2 px-6 pt-6 sm:px-7 sm:pt-7"><CardTitle className="font-display text-2xl font-medium tracking-[-.04em]">{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader><CardContent className="px-6 pb-6 sm:px-7 sm:pb-7"><form noValidate onSubmit={(event) => { event.preventDefault(); void form.handleSubmit() }}><FieldGroup>
+  return <div className={cn("flex flex-col gap-6", className)} {...props}><Card className="rounded-lg border-border bg-card shadow-none"><CardHeader className="space-y-2 px-6 pt-6 sm:px-7 sm:pt-7"><CardTitle className="font-display text-2xl font-medium tracking-[-.04em]">{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader><CardContent className="px-6 pb-6 sm:px-7 sm:pb-7">{topSlot}<form noValidate onSubmit={(event) => { event.preventDefault(); void form.handleSubmit() }}><FieldGroup>
     <form.Field name="email" validators={{ onChange: ({ value }) => !value.trim() ? t.emailRequired : !EMAIL.test(value.trim()) ? t.emailInvalid : undefined }}>
       {(field) => <Field data-invalid={field.state.meta.isTouched && !field.state.meta.isValid}>
         <FieldLabel htmlFor="email">{emailLabel}</FieldLabel>

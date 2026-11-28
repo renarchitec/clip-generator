@@ -2,7 +2,7 @@ import { sourceVideo } from '@/lib/split-screen'
 import { useSplitText } from '@/components/media-source-picker'
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, AudioLines, CalendarClock, Captions, CircleAlert, LoaderCircle, PanelTop, Play, Radio, Sparkles, Subtitles, Trash2, Users, Video } from "lucide-react"
+import { ArrowLeft, AudioLines, CalendarClock, Captions, CircleAlert, LoaderCircle, Lock, PanelTop, Play, Radio, Sparkles, Subtitles, Trash2, Users, Video } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldTitle } from "@/components/ui/field"
 import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, isTranscriptSource, type Job, type JobSnapshot, type TranscriptSource, type User } from "@/lib/api"
+import { api, isTranscriptSource, trackUserEvent, type Job, type JobSnapshot, type TranscriptSource, type User } from "@/lib/api"
 import { DEFAULT_CAPTION_STYLE, detectCaptionPreset, normalizeCaptionStyle } from "@/lib/caption-style"
 import { WorkspaceShell } from "@/components/chrome"
 import { useT } from "@/lib/i18n"
@@ -101,6 +101,15 @@ function JobDetail() {
   })
   const [deleteJobOpen, setDeleteJobOpen] = useState(false)
   const [batchScheduleOpen, setBatchScheduleOpen] = useState(false)
+  const isDemo = user.role === "demo"
+  const openBatchSchedule = () => {
+    if (isDemo) {
+      trackUserEvent("locked_feature_clicked", { feature: "batch_schedule", source: "job_detail" })
+      toast.info(t.demoPublishLocked)
+      return
+    }
+    setBatchScheduleOpen(true)
+  }
   const deleteJob = useMutation({
     mutationFn: () => api<void>(`/jobs/${jobId}`, { method: "DELETE" }),
     onSuccess: () => {
@@ -430,8 +439,8 @@ function JobDetail() {
                     <>
                       <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
                         <p className="font-medium">{activeClips.length} {t.clipsReady}</p>
-                        <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => setBatchScheduleOpen(true)}>
-                          <CalendarClock aria-hidden="true" className="size-3.5" />
+                        <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={openBatchSchedule}>
+                          {isDemo ? <Lock aria-hidden="true" className="size-3.5" /> : <CalendarClock aria-hidden="true" className="size-3.5" />}
                           {t.scheduleBatch}
                         </Button>
                       </div>
@@ -451,8 +460,8 @@ function JobDetail() {
                       <p className="mt-1 text-sm text-muted-foreground" aria-live="polite">{t.complete}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                      <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={() => setBatchScheduleOpen(true)}>
-                        <CalendarClock aria-hidden="true" className="size-3.5" />
+                      <Button type="button" variant="outline" size="sm" className="min-h-9 gap-1.5 text-xs sm:h-8 sm:min-h-0" onClick={openBatchSchedule}>
+                        {isDemo ? <Lock aria-hidden="true" className="size-3.5" /> : <CalendarClock aria-hidden="true" className="size-3.5" />}
                         {t.scheduleBatch}
                       </Button>
                       <span className="font-mono text-sm tabular-nums text-muted-foreground">100%</span>

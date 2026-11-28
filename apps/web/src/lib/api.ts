@@ -139,20 +139,131 @@ export interface BulkRefreshMetricsResponse {
 export type Clip = { id: string; title: string; startSec: number; endSec: number; downloadedAt: string | null; deletedAt: string | null; caption?: string | null; hashtags?: string[]; platformCaptions?: PlatformCaptions | null; viralScore?: number | null; hookText?: string | null; publications?: ClipPublicationSummary[] }
 export type RecentClip = { id: string; title: string; startSec: number; endSec: number; createdAt: string; caption?: string | null; hashtags?: string[]; platformCaptions?: PlatformCaptions | null; viralScore?: number | null; hookText?: string | null; publications?: ClipPublicationSummary[]; job: { id: string; url: string; aspectRatio: AspectRatio } }
 export type JobSnapshot = SourceSettings & { id: string; url: string; mode: string; reframe: Reframe; captions: boolean; hookBanner?: boolean; normalizeAudio?: boolean; twoSpeakers: boolean; facecam: boolean; aspectRatio: AspectRatio; maxSourceSec: MaxSourceSec; clipCount?: number; targetDurationSec?: number; ranges?: { start: number; end: number; title?: string; reason?: string; hookText?: string }[] | null; description: string | null; captionLanguage?: CaptionLanguage; transcriptSource?: TranscriptSource; captionStyle?: CaptionStyle | null; customHashtags?: string[]; watermark?: JobWatermarkValue; outro?: JobOutro | null; status: JobStatus; stage: Job["stage"]; progress: number; message: string | null; error: string | null; clips: Clip[] }
-export type User = { id: string; email: string; name: string | null }
+export type UserRole = "admin" | "member" | "demo"
+export type DemoContentType = "gaming" | "podcast" | "sport" | "comedy" | "education" | "other"
+export const DEMO_CONTENT_TYPES: readonly DemoContentType[] = ["gaming", "podcast", "sport", "comedy", "education", "other"]
+export type LockedDemoFeature = "publish" | "social" | "live_chat_stt" | "batch_schedule"
+export type User = { id: string; email: string; name: string | null; role?: UserRole; authProvider?: string; avatarUrl?: string | null }
+export interface DemoQuotaSummary {
+  clipsUsed: number
+  clipsLimit: number
+  jobsUsed: number
+  jobsLimit: number
+  activeJobs: number
+  maxActiveJobs: number
+  previewsUsed: number
+  previewsLimit: number
+  maxSourceSec: number
+  maxTargetDurationSec: number
+  maxWatermarks: number
+  maxOutros: number
+  allowedTranscriptSources: readonly TranscriptSource[]
+  lockedFeatures: readonly ("publish" | "social" | "live_chat_stt")[]
+}
+export interface MeResponse {
+  user: User
+  demoQuota: DemoQuotaSummary | null
+}
+export interface AuthConfigResponse {
+  registrationOpen: boolean
+  googleAuthEnabled: boolean
+  defaultRole: "demo" | "member"
+}
+export interface AdminOverviewResponse {
+  kpis: {
+    totalUsers: number
+    demoUsers: number
+    memberUsers: number
+    adminUsers: number
+    signupsToday: number
+    signupsLast7d: number
+    googleSignups: number
+    emailSignups: number
+    activeDemoUsers7d: number
+    totalPreviews: number
+    totalJobs: number
+    totalClips: number
+    totalDownloads: number
+  }
+  dailyDemoCap: { used: number; limit: number }
+  funnel: {
+    registered: number
+    previewed: number
+    generatedJob: number
+    downloadedClip: number
+    clickedLockedFeature: number
+  }
+  sources: { source: string; count: number }[]
+  contentTypes: { contentType: string; count: number }[]
+  lockedFeatures: { feature: string; count: number }[]
+}
+export interface AdminUserRow {
+  id: string
+  email: string
+  name: string | null
+  role: UserRole
+  authProvider: string
+  avatarUrl: string | null
+  signupSource: string | null
+  utmSource: string | null
+  utmCampaign: string | null
+  contentType: string | null
+  lastSeenAt: string | null
+  createdAt: string
+  usage: {
+    jobs: number
+    clips: number
+    previews: number
+    downloads: number
+    lockedClicks: number
+  }
+}
+export interface AdminUsersResponse {
+  items: AdminUserRow[]
+  total: number
+  page: number
+  limit: number
+}
 
 export type JobOutro = { outroId: string; filePath: string | null; durationSec: number }
 export type JobWatermark = { watermarkId: string; x: number; y: number; scale: number; opacity: number; filePath: string | null; mimeType?: string; chromaKey?: WatermarkChromaKey | null }
 
+export type ApiError = Error & { status: number; serverMessage?: string }
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...init?.headers } })
   if (!response.ok) {
-    const error = new Error(response.statusText || "Request failed") as Error & { status: number }
+    let serverMessage: string | undefined
+    try {
+      const payload = (await response.json()) as { message?: string | string[] }
+      if (typeof payload?.message === "string" && payload.message.trim()) {
+        serverMessage = payload.message.trim()
+      } else if (Array.isArray(payload?.message) && payload.message.length > 0) {
+        serverMessage = payload.message.join(". ")
+      }
+    } catch {
+      // Non-JSON error body
+    }
+    const error = new Error(serverMessage || response.statusText || "Request failed") as ApiError
     error.status = response.status
+    error.serverMessage = serverMessage
     throw error
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+export function trackUserEvent(
+  event: "locked_feature_clicked" | "desktop_cta_clicked",
+  opts?: { feature?: LockedDemoFeature; source?: string },
+): void {
+  void fetch("/api/events", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ event, ...opts }),
+    credentials: "same-origin",
+    keepalive: true,
+  }).catch(() => undefined)
 }
 
 export async function uploadClipCover(clipId: string, blob: Blob): Promise<ClipCoverUploadResponse> {

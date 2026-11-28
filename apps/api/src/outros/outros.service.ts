@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { UserRole } from '@clipper/shared';
 import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { AppConfig } from '../config/app-config.service';
+import { DemoService } from '../demo/demo.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   OUTRO_EXT,
@@ -25,9 +27,10 @@ export class OutrosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
+    @Optional() private readonly demo?: DemoService,
   ) {}
 
-  async upload(file: { buffer: Buffer; originalname: string; size: number } | undefined, rawName: unknown, userId: string) {
+  async upload(file: { buffer: Buffer; originalname: string; size: number } | undefined, rawName: unknown, userId: string, role?: UserRole) {
     if (!file) throw new BadRequestException('Field file wajib diisi.');
     if (file.size > OUTRO_MAX_BYTES || file.buffer.length > OUTRO_MAX_BYTES) {
       throw new BadRequestException('File outro maksimal 50 MB.');
@@ -40,8 +43,17 @@ export class OutrosService {
       throw new BadRequestException('Durasi outro harus antara 0,5 dan 20 detik.');
     }
 
+    const maxOutros = this.demo
+      ? this.demo.outroLimitForRole(role, OUTRO_MAX_PER_USER)
+      : OUTRO_MAX_PER_USER;
     const count = await this.prisma.outro.count({ where: { userId } });
-    if (count >= OUTRO_MAX_PER_USER) throw new BadRequestException('Maksimal 20 outro per pengguna.');
+    if (count >= maxOutros) {
+      throw new BadRequestException(
+        role === 'demo'
+          ? `Mode demo maksimal menyimpan ${maxOutros} outro.`
+          : `Maksimal ${OUTRO_MAX_PER_USER} outro per pengguna.`,
+      );
+    }
 
     const id = randomUUID();
     const filePath = `outros/${userId}/${id}.${OUTRO_EXT[mimeType]}`;
