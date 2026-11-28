@@ -2,6 +2,22 @@
 
 Buat klip vertikal bersubtitel dari video panjang. Pilih instalasi desktop untuk memproses video di komputer sendiri, atau self-host untuk mengakses DartClip lewat browser. Panduan berikut memakai tag [`desktop-v0.1.0`](https://github.com/renarchitec/clip-generator/tree/desktop-v0.1.0), bukan branch `main`.
 
+## Instalasi dengan bantuan AI
+
+Salin blok berikut ke asisten AI pilihan Anda, bukan ke Terminal. Jika memakai asisten di editor, buka folder kosong untuk instalasi. Anda juga bisa memakai chat biasa dan menjalankan sendiri perintah yang dijelaskan. Panduan manual tetap tersedia di bawah.
+
+```text
+Bantu saya memasang DartClip dari kode sumber. Saya baru pertama kali memasangnya. Mulai dengan menanyakan pilihan saya: aplikasi desktop di Mac, aplikasi desktop di Windows x64, atau self-host agar DartClip bisa dibuka lewat browser. Tanyakan versi OS, jenis prosesor, dan folder tujuan jika belum diketahui. Ikuti hanya jalur yang saya pilih.
+
+Gunakan repo resmi https://github.com/renarchitec/clip-generator dan tag desktop-v0.1.0. Baca panduan instalasi di README utama, lalu cocokkan perintah dengan file pada tag tersebut. Jika kamu tidak bisa mengakses repo, minta saya menyalin bagian panduan yang relevan. Jangan menebak perintah atau menyarankan installer dari Assets.
+
+1. Periksa alat yang sudah ada sebelum meminta saya memasang sesuatu. Beri perintah yang sesuai dengan shell saya, sebutkan dari folder mana perintah dijalankan, dan jelaskan hasil yang seharusnya terlihat. Jika kamu hanya punya akses chat, tunggu hasil dari saya sebelum lanjut. Jika kamu punya akses terminal, tunjukkan rencana sebelum mengubah komputer saya. Jangan timpa folder yang sudah ada.
+2. Untuk desktop, periksa Git, Node.js 22, versi pnpm yang diminta repo, dan Rust stable. Clone tag tadi ke folder baru dan pastikan tag checkout benar. Pasang dependensi dari root dengan lockfile repo. Di Mac, periksa Xcode Command Line Tools dan ikuti apps/desktop-tauri/build-macos.sh; tunjukkan lokasi DartClip.app hasil build dan cara menyalinnya ke Applications. Di Windows x64, gunakan PowerShell, periksa Rust MSVC, Visual Studio Build Tools dengan C++ dan Windows SDK, serta WebView2. Ikuti langkah build web desktop dan bundel NSIS di README, lalu tunjukkan setup.exe yang benar-benar dihasilkan.
+3. Untuk self-host, tanyakan apakah saya ingin mencoba di localhost atau memakai domain. Periksa Docker, baca Dockerfile web, API, dan worker serta .env.example pada tag itu. Jelaskan cara menghubungkan PostgreSQL dan Redis di jaringan privat, menyimpan data saat container dimulai ulang, serta memasang volume klip yang sama ke API dan worker. Jangan menganggap repo menyediakan file Compose. Tunjukkan nama pengaturan yang perlu saya isi sendiri secara lokal. Jangan minta kata sandi, API key, atau isi file rahasia di chat. Minta izin sebelum membuka akses publik atau memakai layanan berbayar.
+4. Minta persetujuan sebelum memakai hak administrator. Jangan menonaktifkan Gatekeeper, SmartScreen, atau antivirus. Jika langkah gagal, berhenti di situ: jelaskan pesan error pertama yang relevan, usulkan satu pemeriksaan, dan minta hasilnya tanpa kredensial.
+5. Bantu saya membuka aplikasi desktop atau alamat web lokal. Untuk mengecek alur lengkap, gunakan video pendek pilihan saya, render satu klip, lalu pastikan hasilnya bisa dibuka. Minta izin sebelum mengirim video atau transkrip ke penyedia eksternal. Akhiri dengan lokasi aplikasi atau URL, cara membukanya kembali, dan catatan tentang langkah yang berhasil atau belum diuji.
+```
+
 ## Install DartClip Desktop dari source
 
 Untuk macOS dan Windows, clone tag rilis ini lalu build di komputer sendiri. Tidak perlu mengunduh installer dari bagian Assets, mematikan proteksi sistem, atau memiliki akun Apple Developer berbayar.
