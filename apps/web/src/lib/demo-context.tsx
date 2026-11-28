@@ -3,7 +3,7 @@ import type { DemoQuotaSummary, User } from "@/lib/api"
 
 export const DESKTOP_DOWNLOAD_URL =
   (import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined) ||
-  "https://github.com/renarchitec/clip-generator"
+  "https://dartclip.rencraft.site/#download"
 
 export interface WorkspaceUserContextValue {
   user: User | null
