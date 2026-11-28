@@ -224,7 +224,8 @@
 
 @layer base {
   * { @apply border-border outline-ring/50; }
-  html, body { overflow-x: clip; }
+  /* Keep overflow-x: clip off <html> so body[data-scroll-locked] propagates to the viewport and preserves position: sticky. */
+  body { overflow-x: clip; }
   body { @apply bg-background text-foreground font-sans antialiased; }
   html { @apply font-sans; font-feature-settings: "ss01" on, "cv11" on; }
   ::selection { background: color-mix(in oklab, var(--primary) 25%, transparent); }
