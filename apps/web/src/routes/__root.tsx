@@ -11,17 +11,28 @@ import { I18nProvider, useT, type Language } from "@/lib/i18n"
 import { ThemeProvider } from "@/lib/theme"
 import appCss from "../styles.css?url"
 
+const DEFAULT_UMAMI_SCRIPT_URL = "https://stats.rencraft.site/script.js"
+
 const getPreferences = createServerFn({ method: "GET" }).handler(() => {
   const cookie = getRequestHeader("cookie") ?? ""
   const read = (key: string) => cookie.match(new RegExp(`(?:^|;\\s*)${key}=([^;]+)`))?.[1]
   const language = read("clipper_language") === "id" ? "id" : "en"
   const theme = ["light", "dark", "system"].includes(read("clipper_theme") ?? "") ? read("clipper_theme")! : "system"
-  return { language, theme }
+  const websiteId = process.env.UMAMI_WEBSITE_ID?.trim() || ""
+  const scriptUrl = process.env.UMAMI_SCRIPT_URL?.trim() || DEFAULT_UMAMI_SCRIPT_URL
+  const umami = websiteId ? { websiteId, scriptUrl } : null
+  return { language, theme, umami }
 })
 
 export const Route = createRootRoute({
   beforeLoad: () => getPreferences(),
-  head: () => ({ meta: [{ charSet: "utf-8" }, { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" }, { name: "theme-color", content: "#09090b" }, { title: "DartClip — Make the moments worth sharing." }, { name: "description", content: "A calmer way to turn long videos into short clips." }], links: [{ rel: "icon", href: "/favicon.ico?v=3", sizes: "any" }, { rel: "icon", href: "/favicon.svg?v=3", type: "image/svg+xml" }, { rel: "apple-touch-icon", href: "/apple-touch-icon.png?v=3" }, { rel: "manifest", href: "/manifest.json" }, { rel: "stylesheet", href: appCss }] }),
+  head: ({ match }) => ({
+    meta: [{ charSet: "utf-8" }, { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" }, { name: "theme-color", content: "#09090b" }, { title: "DartClip — Make the moments worth sharing." }, { name: "description", content: "A calmer way to turn long videos into short clips." }],
+    links: [{ rel: "icon", href: "/favicon.ico?v=3", sizes: "any" }, { rel: "icon", href: "/favicon.svg?v=3", type: "image/svg+xml" }, { rel: "apple-touch-icon", href: "/apple-touch-icon.png?v=3" }, { rel: "manifest", href: "/manifest.json" }, { rel: "stylesheet", href: appCss }],
+    scripts: match.context.umami
+      ? [{ defer: true, src: match.context.umami.scriptUrl, "data-website-id": match.context.umami.websiteId }]
+      : [],
+  }),
   component: RootComponent,
   shellComponent: ({ children }) => <html lang="en"><head><HeadContent /><script dangerouslySetInnerHTML={{ __html: `(()=>{try{const c=document.cookie.split('; ').find(x=>x.startsWith('clipper_theme='))?.split('=')[1]||'system';const d=c==='dark'||(c==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d)}catch{}})()` }} /></head><body>{children}<Scripts /></body></html>,
   notFoundComponent: NotFound,

@@ -257,6 +257,14 @@ export function trackUserEvent(
   event: "locked_feature_clicked" | "desktop_cta_clicked",
   opts?: { feature?: LockedDemoFeature; source?: string },
 ): void {
+  if (typeof window !== "undefined") {
+    const umami = (window as Window & { umami?: { track?: (name: string, data?: Record<string, unknown>) => void } }).umami
+    try {
+      umami?.track?.(event, opts)
+    } catch {
+      // Ignore analytics errors
+    }
+  }
   void fetch("/api/events", {
     method: "POST",
     headers: { "content-type": "application/json" },
